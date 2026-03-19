@@ -6,10 +6,14 @@ license.workspace = true
 authors.workspace = true
 rust-version.workspace = true
 
+[lib]
+crate-type = ["cdylib", "rlib"]
+
 [lints.rust]
 async_fn_in_trait = "allow"
 
 [dependencies]
+boltffi = "0.2"
 opencode-gateway-core = { path = "../core" }
 
 [dev-dependencies]

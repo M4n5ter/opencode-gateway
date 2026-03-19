@@ -6,7 +6,14 @@
     "packages/*"
   ],
   "scripts": {
+    "build:binding": "cd crates/ffi && PATH=\"../../node_modules/.bin:$PATH\" boltffi pack wasm",
     "build:plugin": "bun run --cwd packages/opencode-plugin build",
-    "check:plugin": "bun run --cwd packages/opencode-plugin check"
+    "check:binding": "cd crates/ffi && PATH=\"../../node_modules/.bin:$PATH\" boltffi pack wasm",
+    "check:plugin": "bun run --cwd packages/opencode-plugin check",
+    "check:rust": "cargo test && cargo clippy --all-targets --all-features",
+    "check:all": "bun run check:binding && bun run check:plugin && bun run check:rust"
+  },
+  "devDependencies": {
+    "typescript": "5.8"
   }
 }

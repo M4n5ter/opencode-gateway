@@ -1,10 +1,14 @@
 {
-  "name": "@m4n5ter/opencode-gateway-plugin",
+  "name": "opencode-gateway",
   "private": true,
   "version": "0.1.0",
   "type": "module",
   "scripts": {
     "build": "tsc --project tsconfig.json",
     "check": "tsc --noEmit --project tsconfig.json"
+  },
+  "dependencies": {
+    "@boltffi/runtime": "0.2",
+    "@opencode-ai/plugin": "1.2"
   }
 }
