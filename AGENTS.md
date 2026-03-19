@@ -15,11 +15,12 @@ This repository is intentionally being built in layers:
 3. Keep the Rust core `wasm-safe` and move host-specific I/O into the Bun/OpenCode side.
 4. Add real integrations only after the module boundaries are stable.
 
-The current state of the repository is **contract-first scaffold plus the first
-binding-first integration slice**: the workspace, crate/package boundaries, launcher
-bootstrap, pure Rust domain model, host orchestration contracts, the first BoltFFI
-export facade, and a minimal OpenCode plugin status tool are in place, while the real
-Telegram, SQLite, and production host integrations are still to be implemented.
+The current state of the repository is **contract-first scaffold plus the first real
+binding/runtime integration slices**: the workspace, crate/package boundaries,
+launcher bootstrap, pure Rust domain model, host orchestration contracts, the first
+BoltFFI export facade, callback-capable binding handles, and an OpenCode plugin with
+debug-oriented gateway tools are in place, while Telegram, SQLite, and durable host
+integrations are still to be implemented.
 
 ## Vision
 
@@ -129,12 +130,16 @@ This crate currently:
 This crate now also contains:
 
 - the first BoltFFI-facing export surface,
-- binding-friendly status and runtime report data types,
-- and a minimal no-op host setup that proves Rust -> WASM -> TypeScript wiring.
+- binding-friendly callback traits and runtime data types,
+- a long-lived exported `GatewayBinding` handle,
+- and adapter layers that translate TypeScript callbacks into the internal host
+  runtime contracts.
 
-BoltFFI currently needs to be invoked from the crate directory while still using the
-repository-level config, so `crates/ffi/boltffi.toml` is a thin pointer to the root
-`boltffi.toml` and the workspace scripts run BoltFFI from `crates/ffi`.
+BoltFFI is currently invoked from the repository root using the root `boltffi.toml`.
+The repository keeps a root `src -> crates/ffi/src` symlink so BoltFFI can discover
+the export crate correctly, and the workspace excludes
+`target/boltffi_bindgen_type_resolution` to avoid workspace contamination during
+BoltFFI type-resolution runs.
 
 The design rule is simple: if a concern is about business logic, it belongs in
 `core`; if it is about crossing the language boundary, it belongs in `ffi`.
@@ -159,14 +164,17 @@ The Bun/OpenCode host package.
 This package now:
 
 - loads the BoltFFI-generated binding,
-- exposes a minimal `gateway_status` tool through OpenCode,
-- and serves as the host-side entrypoint for later storage, transport, and OpenCode
+- constructs a long-lived `GatewayBinding` instance with host callbacks,
+- exposes `gateway_status` plus a debug `gateway_dispatch_cron` tool through
+  OpenCode,
+- implements a real OpenCode session adapter with in-memory session reuse,
+- and serves as the host-side entrypoint for later storage, transport, and durable
   runtime wiring.
 
 This package will later also:
 
-- implement host callbacks for storage, transport, logging, and OpenCode session
-  execution,
+- replace the current in-memory/no-op host adapters with durable storage and real
+  transport integrations,
 - start the Telegram polling loop,
 - start the cron tick loop,
 - and translate host events into Rust engine calls.
@@ -238,6 +246,7 @@ The scaffold already implements these commands at a bootstrap level:
 The plugin package is planned to expose custom tools such as:
 
 - `gateway_status`
+- `gateway_dispatch_cron`
 - `cron_list`
 - `cron_upsert`
 - `cron_remove`
@@ -254,12 +263,11 @@ The FFI crate currently exports runtime-facing concepts such as:
 - `GatewayRuntime`
 - `RuntimeReport`
 - `RuntimeError`
+- `GatewayBinding`
 - `GatewayStatus`
 - `ConversationKey`
 - `CronJobSpec`
 - host callback contracts for store / transport / OpenCode execution / logging
-
-It will later grow a BoltFFI export facade on top of these contracts.
 
 ## Configuration Model
 
@@ -330,14 +338,17 @@ The current scaffold already establishes:
 - a plugin package directory,
 - split core modules for channel / conversation / message / cron / engine / status,
 - split FFI modules for host traits and runtime orchestration,
+- a BoltFFI-exported `GatewayBinding` handle with callback-capable host traits,
+- plugin-side binding loading plus one status tool and one cron-dispatch debug tool,
+- in-memory OpenCode session reuse inside the plugin host adapter,
 - and a launcher that can materialize managed config files for local development.
 
 The scaffold does **not** yet include:
 
-- real host callbacks across the Rust/TypeScript boundary,
 - SQLite schema or migrations,
 - Telegram API handling,
-- or actual cron execution logic beyond binding-level smoke behavior.
+- persistent session bindings,
+- or actual cron scheduling loops beyond manual dispatch through the debug tool.
 
 Those will be added incrementally on top of the structure introduced here.
 
@@ -345,11 +356,10 @@ Those will be added incrementally on top of the structure introduced here.
 
 The next implementation passes should happen in this order:
 
-1. Replace the no-op BoltFFI host setup with real callback-capable adapters.
-2. Add SQLite-backed host adapters.
-3. Add Telegram long polling.
-4. Add cron management and execution.
-5. Add end-to-end smoke tests against a local OpenCode server.
+1. Replace the remaining in-memory/no-op host adapters with SQLite-backed storage.
+2. Add Telegram long polling.
+3. Add cron management and execution loops.
+4. Add end-to-end smoke tests against a local OpenCode server.
 
 ## References
 

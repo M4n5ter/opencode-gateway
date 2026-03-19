@@ -13,6 +13,7 @@ crate-type = ["cdylib", "rlib"]
 async_fn_in_trait = "allow"
 
 [dependencies]
+async-trait = "0.1"
 boltffi = "0.2"
 opencode-gateway-core = { path = "../core" }
 

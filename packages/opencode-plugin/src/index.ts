@@ -1,34 +1,24 @@
-import { type Plugin, tool } from "@opencode-ai/plugin";
+import type { Plugin } from "@opencode-ai/plugin"
 
-import { type GatewayStatusSnapshot, loadGatewayBindingModule } from "./binding";
-
-function formatGatewayStatus(status: GatewayStatusSnapshot): string {
-  return [
-    `runtime_mode=${status.runtimeMode}`,
-    `supports_telegram=${status.supportsTelegram}`,
-    `supports_cron=${status.supportsCron}`,
-    `has_web_ui=${status.hasWebUi}`,
-  ].join("\n");
-}
+import { loadGatewayBindingModule } from "./binding"
+import { createGatewayBinding } from "./gateway"
+import { createGatewayDispatchCronTool } from "./tools/gateway-dispatch-cron"
+import { createGatewayStatusTool } from "./tools/gateway-status"
 
 /**
- * Minimal plugin scaffold that loads the BoltFFI-generated gateway binding and exposes a
- * single read-only debug tool.
+ * Minimal plugin scaffold that loads the BoltFFI-generated gateway binding and exposes
+ * one read-only status tool plus one execution-style debug tool.
  */
-export const OpencodeGatewayPlugin: Plugin = async (_context) => {
-  const bindingModule = await loadGatewayBindingModule();
+export const OpencodeGatewayPlugin: Plugin = async (input) => {
+    const gatewayModule = await loadGatewayBindingModule()
+    const binding = createGatewayBinding(gatewayModule, input)
 
-  return {
-    tool: {
-      gateway_status: tool({
-        description: "Return the current Rust gateway contract status",
-        args: {},
-        async execute() {
-          return formatGatewayStatus(bindingModule.gatewayStatus());
+    return {
+        tool: {
+            gateway_status: createGatewayStatusTool(binding),
+            gateway_dispatch_cron: createGatewayDispatchCronTool(binding),
         },
-      }),
-    },
-  };
-};
+    }
+}
 
-export default OpencodeGatewayPlugin;
+export default OpencodeGatewayPlugin

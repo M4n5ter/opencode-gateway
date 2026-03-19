@@ -5,8 +5,10 @@ pub mod host;
 pub mod runtime;
 
 pub use binding::{
-    BindingCronJobSpec, BindingGatewayStatus, BindingRuntimeReport, dispatch_cron_job,
-    gateway_status,
+    BindingClockHost, BindingCronJobSpec, BindingDeliveryTarget, BindingGatewayStatus,
+    BindingInboundMessage, BindingLoggerHost, BindingOpencodeHost, BindingOutboundMessage,
+    BindingPromptRequest, BindingRuntimeReport, BindingStoreHost, BindingTransportHost,
+    GatewayBinding,
 };
 pub use host::{
     HostClock, HostFailure, HostLogger, HostOpencode, HostResult, HostStore, HostSubsystem,
