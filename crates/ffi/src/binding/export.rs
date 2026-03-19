@@ -58,7 +58,7 @@ mod tests {
     use crate::binding::{
         BindingClockHost, BindingCronJobSpec, BindingGatewayStatus, BindingInboundMessage,
         BindingLoggerHost, BindingOpencodeHost, BindingOutboundMessage, BindingPromptRequest,
-        BindingStoreHost, BindingTransportHost,
+        BindingPromptResult, BindingStoreHost, BindingTransportHost,
     };
 
     #[derive(Default)]
@@ -66,6 +66,18 @@ mod tests {
 
     #[async_trait]
     impl BindingStoreHost for MockStore {
+        async fn get_session_binding(&self, _conversation_key: String) -> Option<String> {
+            None
+        }
+
+        async fn put_session_binding(
+            &self,
+            _conversation_key: String,
+            _session_id: String,
+            _recorded_at_ms: u64,
+        ) {
+        }
+
         async fn record_inbound_message(
             &self,
             _message: BindingInboundMessage,
@@ -85,12 +97,15 @@ mod tests {
 
     #[async_trait]
     impl BindingOpencodeHost for MockOpencode {
-        async fn run_prompt(&self, request: BindingPromptRequest) -> String {
+        async fn run_prompt(&self, request: BindingPromptRequest) -> BindingPromptResult {
             self.prompts
                 .lock()
                 .expect("prompt lock")
                 .push(request.prompt);
-            self.response_text.clone()
+            BindingPromptResult {
+                session_id: "session-nightly".to_owned(),
+                response_text: self.response_text.clone(),
+            }
         }
     }
 

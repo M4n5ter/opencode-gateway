@@ -7,11 +7,11 @@ pub mod runtime;
 pub use binding::{
     BindingClockHost, BindingCronJobSpec, BindingDeliveryTarget, BindingGatewayStatus,
     BindingInboundMessage, BindingLoggerHost, BindingOpencodeHost, BindingOutboundMessage,
-    BindingPromptRequest, BindingRuntimeReport, BindingStoreHost, BindingTransportHost,
-    GatewayBinding,
+    BindingPromptRequest, BindingPromptResult, BindingRuntimeReport, BindingStoreHost,
+    BindingTransportHost, GatewayBinding,
 };
 pub use host::{
     HostClock, HostFailure, HostLogger, HostOpencode, HostResult, HostStore, HostSubsystem,
-    HostTransport, LogLevel,
+    HostTransport, LogLevel, OpencodePromptRequest, OpencodePromptResult,
 };
 pub use runtime::{GatewayRuntime, RuntimeError, RuntimeReport, RuntimeResult};

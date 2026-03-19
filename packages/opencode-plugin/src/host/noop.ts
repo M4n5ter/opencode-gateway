@@ -1,20 +1,4 @@
-import type {
-    BindingClockHost,
-    BindingCronJobSpec,
-    BindingInboundMessage,
-    BindingLoggerHost,
-    BindingOutboundMessage,
-    BindingStoreHost,
-    BindingTransportHost,
-} from "../binding"
-
-export class NoopStoreHost implements BindingStoreHost {
-    async recordInboundMessage(_message: BindingInboundMessage, _recordedAtMs: bigint): Promise<void> {}
-
-    async recordCronDispatch(_job: BindingCronJobSpec, _recordedAtMs: bigint): Promise<void> {}
-
-    async recordDelivery(_message: BindingOutboundMessage, _recordedAtMs: bigint): Promise<void> {}
-}
+import type { BindingClockHost, BindingLoggerHost, BindingOutboundMessage, BindingTransportHost } from "../binding"
 
 export class NoopTransportHost implements BindingTransportHost {
     async sendMessage(_message: BindingOutboundMessage): Promise<void> {}

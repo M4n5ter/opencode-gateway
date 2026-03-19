@@ -10,6 +10,7 @@ use opencode_gateway_core::{
 
 use crate::host::{
     HostClock, HostFailure, HostLogger, HostOpencode, HostStore, HostTransport, LogLevel,
+    OpencodePromptRequest,
 };
 
 /// Runtime-level failures combining core validation and host execution failures.
@@ -143,18 +144,35 @@ where
         plan: GatewayPlan,
         recorded_at_ms: u64,
     ) -> RuntimeResult<RuntimeReport> {
-        let response_text = self.opencode.run_prompt(&plan.request).await?;
-        let delivered = if let Some(message) = plan.to_outbound_message(response_text.clone()) {
-            self.transport.send_message(&message).await?;
-            self.store.record_delivery(&message, recorded_at_ms).await?;
-            true
-        } else {
-            false
-        };
+        let session_id = self
+            .store
+            .get_session_binding(&plan.request.conversation_key)
+            .await?;
+        let prompt_result = self
+            .opencode
+            .run_prompt(&OpencodePromptRequest::new(&plan.request, session_id))
+            .await?;
+
+        self.store
+            .put_session_binding(
+                &plan.request.conversation_key,
+                &prompt_result.session_id,
+                recorded_at_ms,
+            )
+            .await?;
+
+        let delivered =
+            if let Some(message) = plan.to_outbound_message(prompt_result.response_text.clone()) {
+                self.transport.send_message(&message).await?;
+                self.store.record_delivery(&message, recorded_at_ms).await?;
+                true
+            } else {
+                false
+            };
 
         Ok(RuntimeReport {
             conversation_key: plan.request.conversation_key,
-            response_text,
+            response_text: prompt_result.response_text,
             delivered,
             recorded_at_ms,
         })
@@ -164,24 +182,57 @@ where
 #[cfg(test)]
 mod tests {
     use pollster::block_on;
+    use std::collections::HashMap;
     use std::sync::Mutex;
 
     use opencode_gateway_core::{
-        ChannelKind, CronJobSpec, GatewayEngine, InboundMessage, OutboundMessage, PromptRequest,
+        ChannelKind, ConversationKey, CronJobSpec, GatewayEngine, InboundMessage, OutboundMessage,
         TargetKey,
     };
 
     use crate::host::{
         HostClock, HostLogger, HostOpencode, HostResult, HostStore, HostTransport, LogLevel,
+        OpencodePromptRequest, OpencodePromptResult,
     };
     use crate::{GatewayRuntime, RuntimeResult};
 
     #[derive(Debug, Default)]
     struct MockStore {
         events: Mutex<Vec<String>>,
+        session_bindings: Mutex<HashMap<String, String>>,
     }
 
     impl HostStore for MockStore {
+        async fn get_session_binding(
+            &self,
+            conversation_key: &ConversationKey,
+        ) -> HostResult<Option<String>> {
+            Ok(self
+                .session_bindings
+                .lock()
+                .expect("store lock")
+                .get(conversation_key.as_str())
+                .cloned())
+        }
+
+        async fn put_session_binding(
+            &self,
+            conversation_key: &ConversationKey,
+            session_id: &str,
+            recorded_at_ms: u64,
+        ) -> HostResult<()> {
+            self.session_bindings
+                .lock()
+                .expect("store lock")
+                .insert(conversation_key.as_str().to_owned(), session_id.to_owned());
+            self.events.lock().expect("store lock").push(format!(
+                "binding:{}:{}:{recorded_at_ms}",
+                conversation_key.as_str(),
+                session_id
+            ));
+            Ok(())
+        }
+
         async fn record_inbound_message(
             &self,
             message: &InboundMessage,
@@ -223,16 +274,23 @@ mod tests {
     #[derive(Debug)]
     struct MockOpencode {
         response_text: String,
-        prompts: Mutex<Vec<String>>,
+        session_id: String,
+        prompts: Mutex<Vec<(String, Option<String>)>>,
     }
 
     impl HostOpencode for MockOpencode {
-        async fn run_prompt(&self, request: &PromptRequest) -> HostResult<String> {
+        async fn run_prompt(
+            &self,
+            request: &OpencodePromptRequest,
+        ) -> HostResult<OpencodePromptResult> {
             self.prompts
                 .lock()
                 .expect("prompt lock")
-                .push(request.prompt.clone());
-            Ok(self.response_text.clone())
+                .push((request.prompt.clone(), request.session_id.clone()));
+            Ok(OpencodePromptResult::new(
+                self.session_id.clone(),
+                self.response_text.clone(),
+            ))
         }
     }
 
@@ -278,12 +336,14 @@ mod tests {
 
     fn build_runtime(
         response_text: &str,
+        session_id: &str,
     ) -> GatewayRuntime<MockStore, MockOpencode, MockTransport, MockClock, MockLogger> {
         GatewayRuntime::new(
             GatewayEngine::new(),
             MockStore::default(),
             MockOpencode {
                 response_text: response_text.to_owned(),
+                session_id: session_id.to_owned(),
                 prompts: Mutex::default(),
             },
             MockTransport::default(),
@@ -294,7 +354,7 @@ mod tests {
 
     #[test]
     fn inbound_message_executes_and_delivers() -> RuntimeResult<()> {
-        let runtime = build_runtime("assistant reply");
+        let runtime = build_runtime("assistant reply", "session-1");
         let target = TargetKey::new("123").expect("target key");
         let inbound =
             InboundMessage::new(ChannelKind::Telegram, target, None, "alice", "hello world")
@@ -311,7 +371,7 @@ mod tests {
 
     #[test]
     fn cron_dispatch_executes_without_delivery() -> RuntimeResult<()> {
-        let runtime = build_runtime("nightly summary");
+        let runtime = build_runtime("nightly summary", "session-nightly");
         let job =
             CronJobSpec::new("nightly", "0 0 * * *", "Summarize work").expect("cron job spec");
 
@@ -320,6 +380,45 @@ mod tests {
         assert_eq!(report.conversation_key.as_str(), "cron:nightly");
         assert_eq!(report.response_text, "nightly summary");
         assert!(!report.delivered);
+
+        Ok(())
+    }
+
+    #[test]
+    fn cron_dispatch_reuses_existing_session_binding() -> RuntimeResult<()> {
+        let store = MockStore {
+            session_bindings: Mutex::new(HashMap::from([(
+                "cron:nightly".to_owned(),
+                "persisted-session".to_owned(),
+            )])),
+            ..MockStore::default()
+        };
+        let opencode = MockOpencode {
+            response_text: "nightly summary".to_owned(),
+            session_id: "persisted-session".to_owned(),
+            prompts: Mutex::default(),
+        };
+        let runtime = GatewayRuntime::new(
+            GatewayEngine::new(),
+            store,
+            opencode,
+            MockTransport::default(),
+            MockClock { now_unix_ms: 4242 },
+            MockLogger::default(),
+        );
+        let job =
+            CronJobSpec::new("nightly", "0 0 * * *", "Summarize work").expect("cron job spec");
+
+        block_on(runtime.dispatch_cron_job(&job))?;
+
+        let prompts = runtime.opencode.prompts.lock().expect("prompt lock");
+        assert_eq!(
+            prompts.as_slice(),
+            &[(
+                "Summarize work".to_owned(),
+                Some("persisted-session".to_owned())
+            )]
+        );
 
         Ok(())
     }

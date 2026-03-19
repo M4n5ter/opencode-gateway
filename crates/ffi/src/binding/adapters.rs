@@ -2,14 +2,17 @@
 
 use std::sync::Arc;
 
-use opencode_gateway_core::{CronJobSpec, InboundMessage, OutboundMessage, PromptRequest};
+use opencode_gateway_core::{ConversationKey, CronJobSpec, InboundMessage, OutboundMessage};
 
 use crate::binding::{
     BindingClockHost, BindingCronJobSpec, BindingInboundMessage, BindingLoggerHost,
     BindingOpencodeHost, BindingOutboundMessage, BindingPromptRequest, BindingStoreHost,
     BindingTransportHost,
 };
-use crate::{HostClock, HostLogger, HostOpencode, HostResult, HostStore, HostTransport, LogLevel};
+use crate::{
+    HostClock, HostLogger, HostOpencode, HostResult, HostStore, HostTransport, LogLevel,
+    OpencodePromptRequest, OpencodePromptResult,
+};
 
 pub type CallbackRuntime = crate::GatewayRuntime<
     StoreCallbackAdapter,
@@ -30,6 +33,32 @@ impl StoreCallbackAdapter {
 }
 
 impl HostStore for StoreCallbackAdapter {
+    async fn get_session_binding(
+        &self,
+        conversation_key: &ConversationKey,
+    ) -> HostResult<Option<String>> {
+        Ok(self
+            .inner
+            .get_session_binding(conversation_key.as_str().to_owned())
+            .await)
+    }
+
+    async fn put_session_binding(
+        &self,
+        conversation_key: &ConversationKey,
+        session_id: &str,
+        recorded_at_ms: u64,
+    ) -> HostResult<()> {
+        self.inner
+            .put_session_binding(
+                conversation_key.as_str().to_owned(),
+                session_id.to_owned(),
+                recorded_at_ms,
+            )
+            .await;
+        Ok(())
+    }
+
     async fn record_inbound_message(
         &self,
         message: &InboundMessage,
@@ -78,11 +107,19 @@ impl OpencodeCallbackAdapter {
 }
 
 impl HostOpencode for OpencodeCallbackAdapter {
-    async fn run_prompt(&self, request: &PromptRequest) -> HostResult<String> {
+    async fn run_prompt(
+        &self,
+        request: &OpencodePromptRequest,
+    ) -> HostResult<OpencodePromptResult> {
         Ok(self
             .inner
-            .run_prompt(BindingPromptRequest::from(request))
-            .await)
+            .run_prompt(BindingPromptRequest {
+                conversation_key: request.conversation_key.as_str().to_owned(),
+                prompt: request.prompt.clone(),
+                session_id: request.session_id.clone(),
+            })
+            .await
+            .into())
     }
 }
 

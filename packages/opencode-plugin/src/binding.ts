@@ -21,6 +21,12 @@ export type BindingRuntimeReport = {
 export type BindingPromptRequest = {
     conversationKey: string
     prompt: string
+    sessionId: string | null
+}
+
+export type BindingPromptResult = {
+    sessionId: string
+    responseText: string
 }
 
 export type BindingDeliveryTarget = {
@@ -41,13 +47,15 @@ export type BindingOutboundMessage = {
 }
 
 export type BindingStoreHost = {
+    getSessionBinding(conversationKey: string): Promise<string | null>
+    putSessionBinding(conversationKey: string, sessionId: string, recordedAtMs: bigint): Promise<void>
     recordInboundMessage(message: BindingInboundMessage, recordedAtMs: bigint): Promise<void>
     recordCronDispatch(job: BindingCronJobSpec, recordedAtMs: bigint): Promise<void>
     recordDelivery(message: BindingOutboundMessage, recordedAtMs: bigint): Promise<void>
 }
 
 export type BindingOpencodeHost = {
-    runPrompt(request: BindingPromptRequest): Promise<string>
+    runPrompt(request: BindingPromptRequest): Promise<BindingPromptResult>
 }
 
 export type BindingTransportHost = {

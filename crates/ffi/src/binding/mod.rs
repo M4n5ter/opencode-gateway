@@ -12,5 +12,5 @@ pub use traits::{
 };
 pub use types::{
     BindingCronJobSpec, BindingDeliveryTarget, BindingGatewayStatus, BindingInboundMessage,
-    BindingOutboundMessage, BindingPromptRequest, BindingRuntimeReport,
+    BindingOutboundMessage, BindingPromptRequest, BindingPromptResult, BindingRuntimeReport,
 };

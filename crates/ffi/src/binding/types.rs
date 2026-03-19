@@ -5,7 +5,7 @@ use opencode_gateway_core::{
     CronJobSpec, DeliveryTarget, GatewayStatus, InboundMessage, OutboundMessage, PromptRequest,
 };
 
-use crate::RuntimeReport;
+use crate::{OpencodePromptResult, RuntimeReport};
 
 #[data]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -84,13 +84,40 @@ impl From<&InboundMessage> for BindingInboundMessage {
 pub struct BindingPromptRequest {
     pub conversation_key: String,
     pub prompt: String,
+    pub session_id: Option<String>,
 }
 
-impl From<&PromptRequest> for BindingPromptRequest {
-    fn from(value: &PromptRequest) -> Self {
+impl BindingPromptRequest {
+    pub fn from_request_and_session(value: &PromptRequest, session_id: Option<String>) -> Self {
         Self {
             conversation_key: value.conversation_key.as_str().to_owned(),
             prompt: value.prompt.clone(),
+            session_id,
+        }
+    }
+}
+
+#[data]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BindingPromptResult {
+    pub session_id: String,
+    pub response_text: String,
+}
+
+impl From<OpencodePromptResult> for BindingPromptResult {
+    fn from(value: OpencodePromptResult) -> Self {
+        Self {
+            session_id: value.session_id,
+            response_text: value.response_text,
+        }
+    }
+}
+
+impl From<BindingPromptResult> for OpencodePromptResult {
+    fn from(value: BindingPromptResult) -> Self {
+        Self {
+            session_id: value.session_id,
+            response_text: value.response_text,
         }
     }
 }

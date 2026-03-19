@@ -4,11 +4,19 @@ use boltffi::export;
 
 use crate::binding::{
     BindingCronJobSpec, BindingInboundMessage, BindingOutboundMessage, BindingPromptRequest,
+    BindingPromptResult,
 };
 
 #[export]
 #[async_trait::async_trait]
 pub trait BindingStoreHost: Send + Sync {
+    async fn get_session_binding(&self, conversation_key: String) -> Option<String>;
+    async fn put_session_binding(
+        &self,
+        conversation_key: String,
+        session_id: String,
+        recorded_at_ms: u64,
+    );
     async fn record_inbound_message(&self, message: BindingInboundMessage, recorded_at_ms: u64);
     async fn record_cron_dispatch(&self, job: BindingCronJobSpec, recorded_at_ms: u64);
     async fn record_delivery(&self, message: BindingOutboundMessage, recorded_at_ms: u64);
@@ -17,7 +25,7 @@ pub trait BindingStoreHost: Send + Sync {
 #[export]
 #[async_trait::async_trait]
 pub trait BindingOpencodeHost: Send + Sync {
-    async fn run_prompt(&self, request: BindingPromptRequest) -> String;
+    async fn run_prompt(&self, request: BindingPromptRequest) -> BindingPromptResult;
 }
 
 #[export]

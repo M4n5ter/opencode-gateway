@@ -19,8 +19,9 @@ The current state of the repository is **contract-first scaffold plus the first 
 binding/runtime integration slices**: the workspace, crate/package boundaries,
 launcher bootstrap, pure Rust domain model, host orchestration contracts, the first
 BoltFFI export facade, callback-capable binding handles, and an OpenCode plugin with
-debug-oriented gateway tools are in place, while Telegram, SQLite, and durable host
-integrations are still to be implemented.
+debug-oriented gateway tools are in place. SQLite-backed session persistence and
+runtime journaling now exist inside the plugin host, while Telegram, cron scheduling
+loops, and richer durable gateway data models are still to be implemented.
 
 ## Vision
 
@@ -167,14 +168,16 @@ This package now:
 - constructs a long-lived `GatewayBinding` instance with host callbacks,
 - exposes `gateway_status` plus a debug `gateway_dispatch_cron` tool through
   OpenCode,
-- implements a real OpenCode session adapter with in-memory session reuse,
+- parses the gateway config to locate the managed SQLite database,
+- persists logical conversation to `OpenCode` session bindings in SQLite,
+- records a minimal runtime journal in SQLite,
+- implements a real OpenCode session adapter that reuses persisted session bindings,
 - and serves as the host-side entrypoint for later storage, transport, and durable
   runtime wiring.
 
 This package will later also:
 
-- replace the current in-memory/no-op host adapters with durable storage and real
-  transport integrations,
+- replace the remaining no-op transport integration with real channel integrations,
 - start the Telegram polling loop,
 - start the cron tick loop,
 - and translate host events into Rust engine calls.
@@ -340,14 +343,13 @@ The current scaffold already establishes:
 - split FFI modules for host traits and runtime orchestration,
 - a BoltFFI-exported `GatewayBinding` handle with callback-capable host traits,
 - plugin-side binding loading plus one status tool and one cron-dispatch debug tool,
-- in-memory OpenCode session reuse inside the plugin host adapter,
+- SQLite-backed session bindings and runtime journaling inside the plugin host,
 - and a launcher that can materialize managed config files for local development.
 
 The scaffold does **not** yet include:
 
-- SQLite schema or migrations,
 - Telegram API handling,
-- persistent session bindings,
+- cron job catalogs or persistent run-state tables,
 - or actual cron scheduling loops beyond manual dispatch through the debug tool.
 
 Those will be added incrementally on top of the structure introduced here.
@@ -356,9 +358,9 @@ Those will be added incrementally on top of the structure introduced here.
 
 The next implementation passes should happen in this order:
 
-1. Replace the remaining in-memory/no-op host adapters with SQLite-backed storage.
-2. Add Telegram long polling.
-3. Add cron management and execution loops.
+1. Add Telegram long polling and channel-side allowlist/routing.
+2. Add cron management and execution loops on top of the existing SQLite store.
+3. Promote runtime journaling into richer durable gateway tables where needed.
 4. Add end-to-end smoke tests against a local OpenCode server.
 
 ## References

@@ -11,7 +11,7 @@ import { createGatewayStatusTool } from "./tools/gateway-status"
  */
 export const OpencodeGatewayPlugin: Plugin = async (input) => {
     const gatewayModule = await loadGatewayBindingModule()
-    const binding = createGatewayBinding(gatewayModule, input)
+    const binding = await createGatewayBinding(gatewayModule, input)
 
     return {
         tool: {

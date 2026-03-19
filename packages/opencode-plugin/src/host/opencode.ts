@@ -1,6 +1,6 @@
 import type { PluginInput } from "@opencode-ai/plugin"
 
-import type { BindingOpencodeHost, BindingPromptRequest } from "../binding"
+import type { BindingOpencodeHost, BindingPromptRequest, BindingPromptResult } from "../binding"
 
 type OpencodeClient = PluginInput["client"]
 
@@ -11,15 +11,13 @@ type SessionPromptPart = {
 }
 
 export class GatewayOpencodeHost implements BindingOpencodeHost {
-    private readonly sessions = new Map<string, string>()
-
     constructor(
         private readonly client: OpencodeClient,
         private readonly directory: string,
     ) {}
 
-    async runPrompt(request: BindingPromptRequest): Promise<string> {
-        const sessionId = await this.resolveSessionID(request.conversationKey)
+    async runPrompt(request: BindingPromptRequest): Promise<BindingPromptResult> {
+        const sessionId = request.sessionId ?? (await this.createSession(request.conversationKey))
         const response = await this.client.session.prompt({
             path: { id: sessionId },
             query: { directory: this.directory },
@@ -30,15 +28,13 @@ export class GatewayOpencodeHost implements BindingOpencodeHost {
             throwOnError: true,
         })
 
-        return extractAssistantText(response.data.parts)
+        return {
+            sessionId,
+            responseText: extractAssistantText(response.data.parts),
+        }
     }
 
-    private async resolveSessionID(conversationKey: string): Promise<string> {
-        const existing = this.sessions.get(conversationKey)
-        if (existing) {
-            return existing
-        }
-
+    private async createSession(conversationKey: string): Promise<string> {
         const session = await this.client.session.create({
             body: { title: sessionTitle(conversationKey) },
             query: { directory: this.directory },
@@ -46,7 +42,6 @@ export class GatewayOpencodeHost implements BindingOpencodeHost {
             throwOnError: true,
         })
 
-        this.sessions.set(conversationKey, session.data.id)
         return session.data.id
     }
 }

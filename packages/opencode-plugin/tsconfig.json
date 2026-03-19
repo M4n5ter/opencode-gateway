@@ -4,6 +4,7 @@
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "strict": true,
+    "types": ["bun-types"],
     "declaration": true,
     "outDir": "dist",
     "rootDir": "src",
