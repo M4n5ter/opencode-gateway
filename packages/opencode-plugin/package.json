@@ -1,0 +1,10 @@
+{
+  "name": "@m4n5ter/opencode-gateway-plugin",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "tsc --project tsconfig.json",
+    "check": "tsc --noEmit --project tsconfig.json"
+  }
+}

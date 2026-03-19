@@ -1,0 +1,12 @@
+{
+  "name": "opencode-gateway-workspace",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build:plugin": "bun run --cwd packages/opencode-plugin build",
+    "check:plugin": "bun run --cwd packages/opencode-plugin check"
+  }
+}
