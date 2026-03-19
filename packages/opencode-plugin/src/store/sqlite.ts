@@ -51,6 +51,41 @@ export class SqliteStore {
             .run(entry.kind, entry.recordedAtMs, entry.conversationKey, JSON.stringify(entry.payload))
     }
 
+    getTelegramUpdateOffset(): number | null {
+        const row = this.db
+            .query<{ value: string }, [string]>("SELECT value FROM kv_state WHERE key = ?1;")
+            .get("telegram.update_offset")
+
+        if (!row) {
+            return null
+        }
+
+        const value = Number.parseInt(row.value, 10)
+        if (!Number.isSafeInteger(value) || value < 0) {
+            throw new Error(`stored telegram.update_offset is invalid: ${row.value}`)
+        }
+
+        return value
+    }
+
+    putTelegramUpdateOffset(offset: number, recordedAtMs: number): void {
+        if (!Number.isSafeInteger(offset) || offset < 0) {
+            throw new Error(`telegram update offset is out of range: ${offset}`)
+        }
+
+        this.db
+            .query(
+                `
+                    INSERT INTO kv_state (key, value, updated_at_ms)
+                    VALUES (?1, ?2, ?3)
+                    ON CONFLICT(key) DO UPDATE SET
+                        value = excluded.value,
+                        updated_at_ms = excluded.updated_at_ms;
+                `,
+            )
+            .run("telegram.update_offset", String(offset), recordedAtMs)
+    }
+
     close(): void {
         this.db.close()
     }

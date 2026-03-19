@@ -20,8 +20,10 @@ binding/runtime integration slices**: the workspace, crate/package boundaries,
 launcher bootstrap, pure Rust domain model, host orchestration contracts, the first
 BoltFFI export facade, callback-capable binding handles, and an OpenCode plugin with
 debug-oriented gateway tools are in place. SQLite-backed session persistence and
-runtime journaling now exist inside the plugin host, while Telegram, cron scheduling
-loops, and richer durable gateway data models are still to be implemented.
+runtime journaling now exist inside the plugin host, and Telegram long polling is now
+wired through the plugin with explicit allowlists, persistent update cursors, and
+Rust-driven inbound message handling. Cron scheduling loops and richer durable gateway
+data models are still to be implemented.
 
 ## Vision
 
@@ -171,16 +173,19 @@ This package now:
 - parses the gateway config to locate the managed SQLite database,
 - persists logical conversation to `OpenCode` session bindings in SQLite,
 - records a minimal runtime journal in SQLite,
+- persists the Telegram long-poll cursor in SQLite,
 - implements a real OpenCode session adapter that reuses persisted session bindings,
+- runs a Telegram long-poll worker with explicit chat/user allowlists,
+- normalizes Telegram text messages into Rust inbound gateway messages,
+- and delivers Telegram replies through a real transport host,
 - and serves as the host-side entrypoint for later storage, transport, and durable
   runtime wiring.
 
 This package will later also:
 
-- replace the remaining no-op transport integration with real channel integrations,
-- start the Telegram polling loop,
 - start the cron tick loop,
-- and translate host events into Rust engine calls.
+- add richer control-plane tools for cron and Telegram operations,
+- and translate scheduled host events into Rust engine calls.
 
 ## Runtime Model
 
@@ -344,11 +349,13 @@ The current scaffold already establishes:
 - a BoltFFI-exported `GatewayBinding` handle with callback-capable host traits,
 - plugin-side binding loading plus one status tool and one cron-dispatch debug tool,
 - SQLite-backed session bindings and runtime journaling inside the plugin host,
+- SQLite-backed Telegram update offsets,
+- Telegram long polling with explicit allowlists and text-message routing,
+- Telegram transport-backed replies driven by Rust runtime plans,
 - and a launcher that can materialize managed config files for local development.
 
 The scaffold does **not** yet include:
 
-- Telegram API handling,
 - cron job catalogs or persistent run-state tables,
 - or actual cron scheduling loops beyond manual dispatch through the debug tool.
 
@@ -358,9 +365,9 @@ Those will be added incrementally on top of the structure introduced here.
 
 The next implementation passes should happen in this order:
 
-1. Add Telegram long polling and channel-side allowlist/routing.
-2. Add cron management and execution loops on top of the existing SQLite store.
-3. Promote runtime journaling into richer durable gateway tables where needed.
+1. Add cron management and execution loops on top of the existing SQLite store.
+2. Promote runtime journaling into richer durable gateway tables where needed.
+3. Add Telegram-facing operational tools such as status and send-test where useful.
 4. Add end-to-end smoke tests against a local OpenCode server.
 
 ## References

@@ -1,20 +1,32 @@
 import type { Database } from "bun:sqlite"
 
-const LATEST_SCHEMA_VERSION = 1
+const LATEST_SCHEMA_VERSION = 2
 
 export function migrateGatewayDatabase(db: Database): void {
     db.exec("PRAGMA journal_mode = WAL;")
     db.exec("PRAGMA foreign_keys = ON;")
 
-    const currentVersion = readUserVersion(db)
-    if (currentVersion === LATEST_SCHEMA_VERSION) {
-        return
-    }
-
-    if (currentVersion !== 0) {
+    let currentVersion = readUserVersion(db)
+    if (currentVersion > LATEST_SCHEMA_VERSION) {
         throw new Error(`unsupported gateway database schema version: ${currentVersion}`)
     }
 
+    if (currentVersion === 0) {
+        migrateToV1(db)
+        currentVersion = 1
+    }
+
+    if (currentVersion === 1) {
+        migrateToV2(db)
+    }
+}
+
+function readUserVersion(db: Database): number {
+    const row = db.query<{ user_version: number }, []>("PRAGMA user_version;").get()
+    return row?.user_version ?? 0
+}
+
+function migrateToV1(db: Database): void {
     db.exec(`
         CREATE TABLE session_bindings (
             conversation_key TEXT PRIMARY KEY NOT NULL,
@@ -33,10 +45,16 @@ export function migrateGatewayDatabase(db: Database): void {
         CREATE INDEX runtime_journal_kind_recorded_at_ms_idx
             ON runtime_journal (kind, recorded_at_ms);
     `)
-    db.exec(`PRAGMA user_version = ${LATEST_SCHEMA_VERSION};`)
+    db.exec("PRAGMA user_version = 1;")
 }
 
-function readUserVersion(db: Database): number {
-    const row = db.query<{ user_version: number }, []>("PRAGMA user_version;").get()
-    return row?.user_version ?? 0
+function migrateToV2(db: Database): void {
+    db.exec(`
+        CREATE TABLE kv_state (
+            key TEXT PRIMARY KEY NOT NULL,
+            value TEXT NOT NULL,
+            updated_at_ms INTEGER NOT NULL
+        );
+    `)
+    db.exec(`PRAGMA user_version = ${LATEST_SCHEMA_VERSION};`)
 }

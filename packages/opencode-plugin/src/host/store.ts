@@ -1,62 +1,89 @@
 import type {
     BindingCronJobSpec,
     BindingDeliveryTarget,
+    BindingHostAck,
     BindingInboundMessage,
     BindingOutboundMessage,
+    BindingSessionBinding,
     BindingStoreHost,
 } from "../binding"
 import type { RuntimeJournalEntry, SqliteStore } from "../store/sqlite"
+import { failedAck, failedSessionBinding, okAck, okSessionBinding } from "./result"
 
 export class SqliteStoreHost implements BindingStoreHost {
     constructor(private readonly store: SqliteStore) {}
 
-    async getSessionBinding(conversationKey: string): Promise<string | null> {
-        return this.store.getSessionBinding(conversationKey)
+    async getSessionBinding(conversationKey: string): Promise<BindingSessionBinding> {
+        try {
+            return okSessionBinding(this.store.getSessionBinding(conversationKey))
+        } catch (error) {
+            return failedSessionBinding(error)
+        }
     }
 
-    async putSessionBinding(conversationKey: string, sessionId: string, recordedAtMs: bigint): Promise<void> {
-        this.store.putSessionBinding(conversationKey, sessionId, toRecordedAtMs(recordedAtMs))
+    async putSessionBinding(conversationKey: string, sessionId: string, recordedAtMs: bigint): Promise<BindingHostAck> {
+        try {
+            this.store.putSessionBinding(conversationKey, sessionId, toRecordedAtMs(recordedAtMs))
+            return okAck()
+        } catch (error) {
+            return failedAck(error)
+        }
     }
 
-    async recordInboundMessage(message: BindingInboundMessage, recordedAtMs: bigint): Promise<void> {
-        this.store.appendJournal(
-            createJournalEntry(
-                "inbound_message",
-                toRecordedAtMs(recordedAtMs),
-                conversationKeyForTarget(message.deliveryTarget),
-                {
-                    deliveryTarget: message.deliveryTarget,
-                    sender: message.sender,
-                    body: message.body,
-                },
-            ),
-        )
+    async recordInboundMessage(message: BindingInboundMessage, recordedAtMs: bigint): Promise<BindingHostAck> {
+        try {
+            this.store.appendJournal(
+                createJournalEntry(
+                    "inbound_message",
+                    toRecordedAtMs(recordedAtMs),
+                    conversationKeyForTarget(message.deliveryTarget),
+                    {
+                        deliveryTarget: message.deliveryTarget,
+                        sender: message.sender,
+                        body: message.body,
+                    },
+                ),
+            )
+            return okAck()
+        } catch (error) {
+            return failedAck(error)
+        }
     }
 
-    async recordCronDispatch(job: BindingCronJobSpec, recordedAtMs: bigint): Promise<void> {
+    async recordCronDispatch(job: BindingCronJobSpec, recordedAtMs: bigint): Promise<BindingHostAck> {
         const conversationKey = `cron:${job.id.trim()}`
 
-        this.store.appendJournal(
-            createJournalEntry("cron_dispatch", toRecordedAtMs(recordedAtMs), conversationKey, {
-                id: job.id,
-                schedule: job.schedule,
-                prompt: job.prompt,
-            }),
-        )
+        try {
+            this.store.appendJournal(
+                createJournalEntry("cron_dispatch", toRecordedAtMs(recordedAtMs), conversationKey, {
+                    id: job.id,
+                    schedule: job.schedule,
+                    prompt: job.prompt,
+                }),
+            )
+            return okAck()
+        } catch (error) {
+            return failedAck(error)
+        }
     }
 
-    async recordDelivery(message: BindingOutboundMessage, recordedAtMs: bigint): Promise<void> {
-        this.store.appendJournal(
-            createJournalEntry(
-                "delivery",
-                toRecordedAtMs(recordedAtMs),
-                conversationKeyForTarget(message.deliveryTarget),
-                {
-                    deliveryTarget: message.deliveryTarget,
-                    body: message.body,
-                },
-            ),
-        )
+    async recordDelivery(message: BindingOutboundMessage, recordedAtMs: bigint): Promise<BindingHostAck> {
+        try {
+            this.store.appendJournal(
+                createJournalEntry(
+                    "delivery",
+                    toRecordedAtMs(recordedAtMs),
+                    conversationKeyForTarget(message.deliveryTarget),
+                    {
+                        deliveryTarget: message.deliveryTarget,
+                        body: message.body,
+                    },
+                ),
+            )
+            return okAck()
+        } catch (error) {
+            return failedAck(error)
+        }
     }
 }
 

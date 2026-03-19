@@ -24,9 +24,19 @@ export type BindingPromptRequest = {
     sessionId: string | null
 }
 
+export type BindingHostAck = {
+    errorMessage: string | null
+}
+
+export type BindingSessionBinding = {
+    sessionId: string | null
+    errorMessage: string | null
+}
+
 export type BindingPromptResult = {
-    sessionId: string
+    sessionId: string | null
     responseText: string
+    errorMessage: string | null
 }
 
 export type BindingDeliveryTarget = {
@@ -47,11 +57,11 @@ export type BindingOutboundMessage = {
 }
 
 export type BindingStoreHost = {
-    getSessionBinding(conversationKey: string): Promise<string | null>
-    putSessionBinding(conversationKey: string, sessionId: string, recordedAtMs: bigint): Promise<void>
-    recordInboundMessage(message: BindingInboundMessage, recordedAtMs: bigint): Promise<void>
-    recordCronDispatch(job: BindingCronJobSpec, recordedAtMs: bigint): Promise<void>
-    recordDelivery(message: BindingOutboundMessage, recordedAtMs: bigint): Promise<void>
+    getSessionBinding(conversationKey: string): Promise<BindingSessionBinding>
+    putSessionBinding(conversationKey: string, sessionId: string, recordedAtMs: bigint): Promise<BindingHostAck>
+    recordInboundMessage(message: BindingInboundMessage, recordedAtMs: bigint): Promise<BindingHostAck>
+    recordCronDispatch(job: BindingCronJobSpec, recordedAtMs: bigint): Promise<BindingHostAck>
+    recordDelivery(message: BindingOutboundMessage, recordedAtMs: bigint): Promise<BindingHostAck>
 }
 
 export type BindingOpencodeHost = {
@@ -59,7 +69,7 @@ export type BindingOpencodeHost = {
 }
 
 export type BindingTransportHost = {
-    sendMessage(message: BindingOutboundMessage): Promise<void>
+    sendMessage(message: BindingOutboundMessage): Promise<BindingHostAck>
 }
 
 export type BindingClockHost = {
@@ -72,6 +82,7 @@ export type BindingLoggerHost = {
 
 export type GatewayBindingHandle = {
     status(): GatewayStatusSnapshot
+    handleInboundMessage(message: BindingInboundMessage): Promise<BindingRuntimeReport>
     dispatchCronJob(job: BindingCronJobSpec): Promise<BindingRuntimeReport>
     dispose?(): void
 }

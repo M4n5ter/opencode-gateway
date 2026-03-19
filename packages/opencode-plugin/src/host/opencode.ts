@@ -1,6 +1,7 @@
 import type { PluginInput } from "@opencode-ai/plugin"
 
 import type { BindingOpencodeHost, BindingPromptRequest, BindingPromptResult } from "../binding"
+import { failedPromptResult, okPromptResult } from "./result"
 
 type OpencodeClient = PluginInput["client"]
 
@@ -17,20 +18,21 @@ export class GatewayOpencodeHost implements BindingOpencodeHost {
     ) {}
 
     async runPrompt(request: BindingPromptRequest): Promise<BindingPromptResult> {
-        const sessionId = request.sessionId ?? (await this.createSession(request.conversationKey))
-        const response = await this.client.session.prompt({
-            path: { id: sessionId },
-            query: { directory: this.directory },
-            body: {
-                parts: [{ type: "text", text: request.prompt }],
-            },
-            responseStyle: "data",
-            throwOnError: true,
-        })
+        try {
+            const sessionId = request.sessionId ?? (await this.createSession(request.conversationKey))
+            const response = await this.client.session.prompt({
+                path: { id: sessionId },
+                query: { directory: this.directory },
+                body: {
+                    parts: [{ type: "text", text: request.prompt }],
+                },
+                responseStyle: "data",
+                throwOnError: true,
+            })
 
-        return {
-            sessionId,
-            responseText: extractAssistantText(response.data.parts),
+            return okPromptResult(sessionId, extractAssistantText(response.data.parts))
+        } catch (error) {
+            return failedPromptResult(error)
         }
     }
 

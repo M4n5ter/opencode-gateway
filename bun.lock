@@ -5,6 +5,8 @@
     "": {
       "name": "opencode-gateway-workspace",
       "devDependencies": {
+        "@boltffi/runtime": "^0.2.0",
+        "@types/node": "^25.5.0",
         "typescript": "5.8",
       },
     },

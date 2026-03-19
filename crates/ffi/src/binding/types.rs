@@ -2,7 +2,8 @@
 
 use boltffi::data;
 use opencode_gateway_core::{
-    CronJobSpec, DeliveryTarget, GatewayStatus, InboundMessage, OutboundMessage, PromptRequest,
+    ChannelKind, CronJobSpec, DeliveryTarget, GatewayStatus, InboundMessage, OutboundMessage,
+    PromptRequest, TargetKey,
 };
 
 use crate::{OpencodePromptResult, RuntimeReport};
@@ -23,6 +24,49 @@ impl From<&GatewayStatus> for BindingGatewayStatus {
             supports_telegram: value.supports_telegram,
             supports_cron: value.supports_cron,
             has_web_ui: value.has_web_ui,
+        }
+    }
+}
+
+#[data]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BindingHostAck {
+    pub error_message: Option<String>,
+}
+
+impl BindingHostAck {
+    pub fn ok() -> Self {
+        Self {
+            error_message: None,
+        }
+    }
+
+    pub fn failed(message: impl Into<String>) -> Self {
+        Self {
+            error_message: Some(message.into()),
+        }
+    }
+}
+
+#[data]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BindingSessionBinding {
+    pub session_id: Option<String>,
+    pub error_message: Option<String>,
+}
+
+impl BindingSessionBinding {
+    pub fn ok(session_id: Option<String>) -> Self {
+        Self {
+            session_id,
+            error_message: None,
+        }
+    }
+
+    pub fn failed(message: impl Into<String>) -> Self {
+        Self {
+            session_id: None,
+            error_message: Some(message.into()),
         }
     }
 }
@@ -61,6 +105,18 @@ impl From<&DeliveryTarget> for BindingDeliveryTarget {
     }
 }
 
+impl TryFrom<BindingDeliveryTarget> for DeliveryTarget {
+    type Error = String;
+
+    fn try_from(value: BindingDeliveryTarget) -> Result<Self, Self::Error> {
+        let channel = parse_channel_kind(&value.channel)?;
+        let target = TargetKey::new(value.target)
+            .ok_or_else(|| "delivery target must not be empty".to_owned())?;
+
+        Ok(DeliveryTarget::new(channel, target, value.topic))
+    }
+}
+
 #[data]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BindingInboundMessage {
@@ -76,6 +132,26 @@ impl From<&InboundMessage> for BindingInboundMessage {
             sender: value.sender.clone(),
             body: value.body.clone(),
         }
+    }
+}
+
+impl TryFrom<BindingInboundMessage> for InboundMessage {
+    type Error = String;
+
+    fn try_from(value: BindingInboundMessage) -> Result<Self, Self::Error> {
+        let delivery_target = value.delivery_target;
+        let channel = parse_channel_kind(&delivery_target.channel)?;
+        let target = TargetKey::new(delivery_target.target)
+            .ok_or_else(|| "delivery target must not be empty".to_owned())?;
+
+        InboundMessage::new(
+            channel,
+            target,
+            delivery_target.topic,
+            value.sender,
+            value.body,
+        )
+        .map_err(|error| error.to_string())
     }
 }
 
@@ -100,24 +176,17 @@ impl BindingPromptRequest {
 #[data]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BindingPromptResult {
-    pub session_id: String,
+    pub session_id: Option<String>,
     pub response_text: String,
+    pub error_message: Option<String>,
 }
 
 impl From<OpencodePromptResult> for BindingPromptResult {
     fn from(value: OpencodePromptResult) -> Self {
         Self {
-            session_id: value.session_id,
+            session_id: Some(value.session_id),
             response_text: value.response_text,
-        }
-    }
-}
-
-impl From<BindingPromptResult> for OpencodePromptResult {
-    fn from(value: BindingPromptResult) -> Self {
-        Self {
-            session_id: value.session_id,
-            response_text: value.response_text,
+            error_message: None,
         }
     }
 }
@@ -155,5 +224,12 @@ impl From<RuntimeReport> for BindingRuntimeReport {
             delivered: value.delivered,
             recorded_at_ms: value.recorded_at_ms,
         }
+    }
+}
+
+fn parse_channel_kind(value: &str) -> Result<ChannelKind, String> {
+    match value.trim() {
+        "telegram" => Ok(ChannelKind::Telegram),
+        other => Err(format!("unsupported channel kind: {other}")),
     }
 }

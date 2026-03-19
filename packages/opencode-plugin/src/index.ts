@@ -1,7 +1,7 @@
 import type { Plugin } from "@opencode-ai/plugin"
 
 import { loadGatewayBindingModule } from "./binding"
-import { createGatewayBinding } from "./gateway"
+import { createGatewayRuntime } from "./gateway"
 import { createGatewayDispatchCronTool } from "./tools/gateway-dispatch-cron"
 import { createGatewayStatusTool } from "./tools/gateway-status"
 
@@ -11,12 +11,12 @@ import { createGatewayStatusTool } from "./tools/gateway-status"
  */
 export const OpencodeGatewayPlugin: Plugin = async (input) => {
     const gatewayModule = await loadGatewayBindingModule()
-    const binding = await createGatewayBinding(gatewayModule, input)
+    const runtime = await createGatewayRuntime(gatewayModule, input)
 
     return {
         tool: {
-            gateway_status: createGatewayStatusTool(binding),
-            gateway_dispatch_cron: createGatewayDispatchCronTool(binding),
+            gateway_status: createGatewayStatusTool(runtime),
+            gateway_dispatch_cron: createGatewayDispatchCronTool(runtime.binding),
         },
     }
 }

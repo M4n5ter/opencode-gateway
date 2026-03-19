@@ -6,8 +6,9 @@ use boltffi::export;
 
 use crate::binding::adapters::{CallbackRuntime, runtime_from_callbacks};
 use crate::binding::{
-    BindingClockHost, BindingCronJobSpec, BindingGatewayStatus, BindingLoggerHost,
-    BindingOpencodeHost, BindingRuntimeReport, BindingStoreHost, BindingTransportHost,
+    BindingClockHost, BindingCronJobSpec, BindingGatewayStatus, BindingInboundMessage,
+    BindingLoggerHost, BindingOpencodeHost, BindingRuntimeReport, BindingStoreHost,
+    BindingTransportHost,
 };
 
 pub struct GatewayBinding {
@@ -30,6 +31,20 @@ impl GatewayBinding {
 
     pub fn status(&self) -> BindingGatewayStatus {
         self.runtime.status().into()
+    }
+
+    pub async fn handle_inbound_message(
+        &self,
+        message: BindingInboundMessage,
+    ) -> Result<BindingRuntimeReport, String> {
+        let message = opencode_gateway_core::InboundMessage::try_from(message)?;
+        let report = self
+            .runtime
+            .handle_inbound_message(message)
+            .await
+            .map_err(|error| error.to_string())?;
+
+        Ok(report.into())
     }
 
     pub async fn dispatch_cron_job(
@@ -56,9 +71,10 @@ mod tests {
 
     use super::GatewayBinding;
     use crate::binding::{
-        BindingClockHost, BindingCronJobSpec, BindingGatewayStatus, BindingInboundMessage,
-        BindingLoggerHost, BindingOpencodeHost, BindingOutboundMessage, BindingPromptRequest,
-        BindingPromptResult, BindingStoreHost, BindingTransportHost,
+        BindingClockHost, BindingCronJobSpec, BindingGatewayStatus, BindingHostAck,
+        BindingInboundMessage, BindingLoggerHost, BindingOpencodeHost, BindingOutboundMessage,
+        BindingPromptRequest, BindingPromptResult, BindingSessionBinding, BindingStoreHost,
+        BindingTransportHost,
     };
 
     #[derive(Default)]
@@ -66,8 +82,8 @@ mod tests {
 
     #[async_trait]
     impl BindingStoreHost for MockStore {
-        async fn get_session_binding(&self, _conversation_key: String) -> Option<String> {
-            None
+        async fn get_session_binding(&self, _conversation_key: String) -> BindingSessionBinding {
+            BindingSessionBinding::ok(None)
         }
 
         async fn put_session_binding(
@@ -75,19 +91,33 @@ mod tests {
             _conversation_key: String,
             _session_id: String,
             _recorded_at_ms: u64,
-        ) {
+        ) -> BindingHostAck {
+            BindingHostAck::ok()
         }
 
         async fn record_inbound_message(
             &self,
             _message: BindingInboundMessage,
             _recorded_at_ms: u64,
-        ) {
+        ) -> BindingHostAck {
+            BindingHostAck::ok()
         }
 
-        async fn record_cron_dispatch(&self, _job: BindingCronJobSpec, _recorded_at_ms: u64) {}
+        async fn record_cron_dispatch(
+            &self,
+            _job: BindingCronJobSpec,
+            _recorded_at_ms: u64,
+        ) -> BindingHostAck {
+            BindingHostAck::ok()
+        }
 
-        async fn record_delivery(&self, _message: BindingOutboundMessage, _recorded_at_ms: u64) {}
+        async fn record_delivery(
+            &self,
+            _message: BindingOutboundMessage,
+            _recorded_at_ms: u64,
+        ) -> BindingHostAck {
+            BindingHostAck::ok()
+        }
     }
 
     struct MockOpencode {
@@ -103,8 +133,9 @@ mod tests {
                 .expect("prompt lock")
                 .push(request.prompt);
             BindingPromptResult {
-                session_id: "session-nightly".to_owned(),
+                session_id: Some("session-nightly".to_owned()),
                 response_text: self.response_text.clone(),
+                error_message: None,
             }
         }
     }
@@ -114,7 +145,9 @@ mod tests {
 
     #[async_trait]
     impl BindingTransportHost for MockTransport {
-        async fn send_message(&self, _message: BindingOutboundMessage) {}
+        async fn send_message(&self, _message: BindingOutboundMessage) -> BindingHostAck {
+            BindingHostAck::ok()
+        }
     }
 
     struct MockClock;
@@ -171,5 +204,25 @@ mod tests {
         assert_eq!(report.conversation_key, "cron:nightly");
         assert_eq!(report.response_text, "assistant reply");
         assert!(!report.delivered);
+    }
+
+    #[test]
+    fn binding_handles_inbound_messages() {
+        let binding = build_binding("reply from agent");
+
+        let report = block_on(binding.handle_inbound_message(BindingInboundMessage {
+            delivery_target: crate::BindingDeliveryTarget {
+                channel: "telegram".to_owned(),
+                target: "123".to_owned(),
+                topic: Some("42".to_owned()),
+            },
+            sender: "telegram:7".to_owned(),
+            body: "hello there".to_owned(),
+        }))
+        .expect("inbound dispatch");
+
+        assert_eq!(report.conversation_key, "telegram:123:topic:42");
+        assert_eq!(report.response_text, "reply from agent");
+        assert!(report.delivered);
     }
 }

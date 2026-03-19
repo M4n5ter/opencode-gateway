@@ -2,18 +2,24 @@ import { existsSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, isAbsolute, join, resolve } from "node:path"
 
-type EnvSource = Record<string, string | undefined>
+import { parseTelegramConfig, type TelegramConfig } from "./telegram"
 
 type RawGatewayConfig = {
     gateway?: {
         state_db?: unknown
+    }
+    channels?: {
+        telegram?: unknown
     }
 }
 
 export type GatewayConfig = {
     configPath: string
     stateDbPath: string
+    telegram: TelegramConfig
 }
+
+type EnvSource = Record<string, string | undefined>
 
 export async function loadGatewayConfig(env: EnvSource = process.env): Promise<GatewayConfig> {
     const configPath = resolveGatewayConfigPath(env)
@@ -27,6 +33,7 @@ export async function loadGatewayConfig(env: EnvSource = process.env): Promise<G
     return {
         configPath,
         stateDbPath: resolveStateDbPath(stateDbValue, configPath, env),
+        telegram: parseTelegramConfig(rawConfig?.channels?.telegram, env),
     }
 }
 

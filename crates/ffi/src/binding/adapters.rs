@@ -5,13 +5,13 @@ use std::sync::Arc;
 use opencode_gateway_core::{ConversationKey, CronJobSpec, InboundMessage, OutboundMessage};
 
 use crate::binding::{
-    BindingClockHost, BindingCronJobSpec, BindingInboundMessage, BindingLoggerHost,
-    BindingOpencodeHost, BindingOutboundMessage, BindingPromptRequest, BindingStoreHost,
-    BindingTransportHost,
+    BindingClockHost, BindingCronJobSpec, BindingHostAck, BindingInboundMessage, BindingLoggerHost,
+    BindingOpencodeHost, BindingOutboundMessage, BindingPromptRequest, BindingSessionBinding,
+    BindingStoreHost, BindingTransportHost,
 };
 use crate::{
-    HostClock, HostLogger, HostOpencode, HostResult, HostStore, HostTransport, LogLevel,
-    OpencodePromptRequest, OpencodePromptResult,
+    HostClock, HostFailure, HostLogger, HostOpencode, HostResult, HostStore, HostSubsystem,
+    HostTransport, LogLevel, OpencodePromptRequest, OpencodePromptResult,
 };
 
 pub type CallbackRuntime = crate::GatewayRuntime<
@@ -37,10 +37,20 @@ impl HostStore for StoreCallbackAdapter {
         &self,
         conversation_key: &ConversationKey,
     ) -> HostResult<Option<String>> {
-        Ok(self
+        match self
             .inner
             .get_session_binding(conversation_key.as_str().to_owned())
-            .await)
+            .await
+        {
+            BindingSessionBinding {
+                session_id,
+                error_message: None,
+            } => Ok(session_id),
+            BindingSessionBinding {
+                error_message: Some(error_message),
+                ..
+            } => Err(HostFailure::new(HostSubsystem::Store, error_message)),
+        }
     }
 
     async fn put_session_binding(
@@ -49,14 +59,16 @@ impl HostStore for StoreCallbackAdapter {
         session_id: &str,
         recorded_at_ms: u64,
     ) -> HostResult<()> {
-        self.inner
-            .put_session_binding(
-                conversation_key.as_str().to_owned(),
-                session_id.to_owned(),
-                recorded_at_ms,
-            )
-            .await;
-        Ok(())
+        ack_result(
+            HostSubsystem::Store,
+            self.inner
+                .put_session_binding(
+                    conversation_key.as_str().to_owned(),
+                    session_id.to_owned(),
+                    recorded_at_ms,
+                )
+                .await,
+        )
     }
 
     async fn record_inbound_message(
@@ -64,24 +76,28 @@ impl HostStore for StoreCallbackAdapter {
         message: &InboundMessage,
         recorded_at_ms: u64,
     ) -> HostResult<()> {
-        self.inner
-            .record_inbound_message(BindingInboundMessage::from(message), recorded_at_ms)
-            .await;
-        Ok(())
+        ack_result(
+            HostSubsystem::Store,
+            self.inner
+                .record_inbound_message(BindingInboundMessage::from(message), recorded_at_ms)
+                .await,
+        )
     }
 
     async fn record_cron_dispatch(&self, job: &CronJobSpec, recorded_at_ms: u64) -> HostResult<()> {
-        self.inner
-            .record_cron_dispatch(
-                BindingCronJobSpec {
-                    id: job.id.as_str().to_owned(),
-                    schedule: job.schedule.clone(),
-                    prompt: job.prompt.clone(),
-                },
-                recorded_at_ms,
-            )
-            .await;
-        Ok(())
+        ack_result(
+            HostSubsystem::Store,
+            self.inner
+                .record_cron_dispatch(
+                    BindingCronJobSpec {
+                        id: job.id.as_str().to_owned(),
+                        schedule: job.schedule.clone(),
+                        prompt: job.prompt.clone(),
+                    },
+                    recorded_at_ms,
+                )
+                .await,
+        )
     }
 
     async fn record_delivery(
@@ -89,10 +105,12 @@ impl HostStore for StoreCallbackAdapter {
         message: &OutboundMessage,
         recorded_at_ms: u64,
     ) -> HostResult<()> {
-        self.inner
-            .record_delivery(BindingOutboundMessage::from(message), recorded_at_ms)
-            .await;
-        Ok(())
+        ack_result(
+            HostSubsystem::Store,
+            self.inner
+                .record_delivery(BindingOutboundMessage::from(message), recorded_at_ms)
+                .await,
+        )
     }
 }
 
@@ -111,15 +129,33 @@ impl HostOpencode for OpencodeCallbackAdapter {
         &self,
         request: &OpencodePromptRequest,
     ) -> HostResult<OpencodePromptResult> {
-        Ok(self
+        let result = self
             .inner
             .run_prompt(BindingPromptRequest {
                 conversation_key: request.conversation_key.as_str().to_owned(),
                 prompt: request.prompt.clone(),
                 session_id: request.session_id.clone(),
             })
-            .await
-            .into())
+            .await;
+
+        if let Some(error_message) = result.error_message {
+            return Err(HostFailure::new(HostSubsystem::Opencode, error_message));
+        }
+
+        let session_id = result
+            .session_id
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| {
+                HostFailure::new(
+                    HostSubsystem::Opencode,
+                    "opencode host returned an empty session id",
+                )
+            })?;
+
+        Ok(OpencodePromptResult {
+            session_id,
+            response_text: result.response_text,
+        })
     }
 }
 
@@ -135,10 +171,12 @@ impl TransportCallbackAdapter {
 
 impl HostTransport for TransportCallbackAdapter {
     async fn send_message(&self, message: &OutboundMessage) -> HostResult<()> {
-        self.inner
-            .send_message(BindingOutboundMessage::from(message))
-            .await;
-        Ok(())
+        ack_result(
+            HostSubsystem::Transport,
+            self.inner
+                .send_message(BindingOutboundMessage::from(message))
+                .await,
+        )
     }
 }
 
@@ -196,5 +234,12 @@ fn log_level_label(level: LogLevel) -> String {
         LogLevel::Info => "info".to_owned(),
         LogLevel::Warn => "warn".to_owned(),
         LogLevel::Error => "error".to_owned(),
+    }
+}
+
+fn ack_result(subsystem: HostSubsystem, ack: BindingHostAck) -> HostResult<()> {
+    match ack.error_message {
+        Some(error_message) => Err(HostFailure::new(subsystem, error_message)),
+        None => Ok(()),
     }
 }
