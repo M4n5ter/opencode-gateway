@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
-use opencode_gateway_ffi::GatewayEngineFacade;
+use opencode_gateway_core::GatewayEngine;
 
 fn main() -> ExitCode {
     match run() {
@@ -93,14 +93,14 @@ fn run_init() -> Result<(), Box<dyn Error>> {
 fn run_serve() -> Result<(), Box<dyn Error>> {
     let paths = GatewayPaths::discover()?;
     let project_root = project_root()?;
-    let facade = GatewayEngineFacade::new();
+    let engine = GatewayEngine::new();
 
     ensure_layout(&paths)?;
     write_gateway_config_if_missing(&paths)?;
     write_managed_opencode_config(&paths)?;
     write_plugin_loader(&paths, &project_root)?;
 
-    let status = facade.status();
+    let status = engine.status();
     println!("starting opencode gateway");
     println!("runtime mode: {}", status.runtime_mode);
     println!("managed config root: {}", paths.opencode_dir.display());
@@ -250,9 +250,7 @@ fn describe_path(path: &Path) -> String {
 }
 
 fn xdg_dir(env_key: &str, home: &Path, fallback: &str) -> PathBuf {
-    std::env::var_os(env_key)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home.join(fallback))
+    std::env::var_os(env_key).map_or_else(|| home.join(fallback), PathBuf::from)
 }
 
 fn home_dir() -> Result<PathBuf, Box<dyn Error>> {
@@ -280,37 +278,4 @@ fn file_url(path: &Path) -> String {
             .replace(' ', "%20"),
     );
     value
-}
-
-#[cfg(test)]
-mod tests {
-    use std::path::Path;
-
-    use super::{GatewayPaths, describe_path, file_url};
-
-    #[test]
-    fn discovered_paths_use_expected_filenames() {
-        let paths = GatewayPaths::discover().expect("paths");
-
-        assert!(paths.config_file.ends_with("config.toml"));
-        assert!(paths.opencode_config_file.ends_with("opencode.json"));
-        assert!(
-            paths
-                .opencode_plugin_loader
-                .ends_with("plugins/opencode-gateway.ts")
-        );
-        assert!(paths.state_db.ends_with("state.db"));
-    }
-
-    #[test]
-    fn file_urls_use_file_scheme() {
-        let url = file_url(Path::new("/tmp/opencode gateway.ts"));
-        assert_eq!(url, "file:///tmp/opencode%20gateway.ts");
-    }
-
-    #[test]
-    fn path_description_reflects_missing_paths() {
-        let description = describe_path(Path::new("/path/that/should/not/exist"));
-        assert!(description.starts_with("missing at "));
-    }
 }

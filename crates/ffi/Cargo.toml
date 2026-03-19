@@ -6,5 +6,11 @@ license.workspace = true
 authors.workspace = true
 rust-version.workspace = true
 
+[lints.rust]
+async_fn_in_trait = "allow"
+
 [dependencies]
 opencode-gateway-core = { path = "../core" }
+
+[dev-dependencies]
+pollster = "0.4"

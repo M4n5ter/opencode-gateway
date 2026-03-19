@@ -8,4 +8,3 @@ rust-version.workspace = true
 
 [dependencies]
 opencode-gateway-core = { path = "../core" }
-opencode-gateway-ffi = { path = "../ffi" }

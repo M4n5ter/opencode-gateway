@@ -5,6 +5,9 @@ Rust-first infrastructure for building an OpenClaw-style automation gateway on t
 [BoltFFI](https://github.com/boltffi/boltffi) generating TypeScript bindings so the
 runtime can live inside an OpenCode plugin while the product logic stays in Rust.
 
+This file is the canonical repository guide for both humans and coding agents working
+inside this repo.
+
 This repository is intentionally being built in layers:
 
 1. Write the product contract down in one place.
@@ -12,10 +15,11 @@ This repository is intentionally being built in layers:
 3. Keep the Rust core `wasm-safe` and move host-specific I/O into the Bun/OpenCode side.
 4. Add real integrations only after the module boundaries are stable.
 
-The current state of the repository is **foundational scaffold**: the workspace,
-crate/package boundaries, command surface, and architecture contracts are in place,
-while the actual Telegram, SQLite, BoltFFI, and OpenCode plugin integrations are still
-to be implemented.
+The current state of the repository is **contract-first scaffold plus Rust runtime
+contracts**: the workspace, crate/package boundaries, launcher bootstrap, pure Rust
+domain model, and host orchestration contracts are in place, while the actual
+Telegram, SQLite, BoltFFI, and OpenCode plugin integrations are still to be
+implemented.
 
 ## Vision
 
@@ -84,7 +88,7 @@ model.
 .
 ├── Cargo.toml
 ├── package.json
-├── README.md
+├── AGENTS.md
 ├── crates
 │   ├── core
 │   ├── ffi
@@ -95,14 +99,14 @@ model.
 
 ### `crates/core`
 
-Pure Rust domain logic. This crate is where the stable product model will live:
+Pure Rust domain logic. This crate already contains the first stable product contract:
 
 - channel and conversation identifiers,
-- routing rules,
-- scheduling semantics,
-- run bookkeeping,
+- inbound/outbound message shapes,
+- scheduling validation,
+- prompt planning,
 - validation logic,
-- and the eventual engine state machine.
+- and the pure gateway planning surface.
 
 This crate must remain:
 
@@ -115,12 +119,18 @@ This crate must remain:
 
 The Rust-to-TypeScript bridge crate.
 
-This crate will eventually:
+This crate currently:
 
-- wrap the core engine behind a BoltFFI-friendly facade,
-- define callback traits for host-provided capabilities,
-- expose data types that TypeScript can consume,
-- and act as the only place where FFI-specific compromises are allowed.
+- defines host callback traits for store / transport / logging / OpenCode execution,
+- provides the Rust-side runtime orchestration layer,
+- exposes host-facing result and error types,
+- and acts as the only place where FFI-specific compromises are allowed.
+
+This crate will eventually also:
+
+- wrap the runtime behind a BoltFFI-friendly export surface,
+- expose binding-friendly data types to TypeScript,
+- and adapt the callback model to whatever BoltFFI needs.
 
 The design rule is simple: if a concern is about business logic, it belongs in
 `core`; if it is about crossing the language boundary, it belongs in `ffi`.
@@ -199,7 +209,7 @@ opencode-gateway serve
 
 ### CLI
 
-The launcher crate is planned to expose:
+The launcher crate exposes:
 
 ```text
 opencode-gateway init
@@ -230,14 +240,17 @@ These tools are meant to be the operational control plane inside OpenCode itself
 
 ### Rust FFI facade
 
-The FFI crate is planned to export a facade around concepts such as:
+The FFI crate currently exports runtime-facing concepts such as:
 
-- `Engine`
+- `GatewayRuntime`
+- `RuntimeReport`
+- `RuntimeError`
 - `GatewayStatus`
 - `ConversationKey`
 - `CronJobSpec`
-- `RunOutcome`
 - host callback contracts for store / transport / OpenCode execution / logging
+
+It will later grow a BoltFFI export facade on top of these contracts.
 
 ## Configuration Model
 
@@ -306,7 +319,8 @@ The current scaffold already establishes:
 - a Bun workspace root,
 - dedicated crates for core / FFI / launcher,
 - a plugin package directory,
-- initial gateway domain placeholders that compile,
+- split core modules for channel / conversation / message / cron / engine / status,
+- split FFI modules for host traits and runtime orchestration,
 - and a launcher that can materialize managed config files for local development.
 
 The scaffold does **not** yet include:
@@ -319,18 +333,16 @@ The scaffold does **not** yet include:
 
 Those will be added incrementally on top of the structure introduced here.
 
-## Immediate Next Steps
+## Next Implementation Steps
 
 The next implementation passes should happen in this order:
 
-1. Add the first real domain objects and engine contract in `crates/core`.
-2. Shape the FFI facade and decide the exact callback surface in `crates/ffi`.
-3. Implement launcher config bootstrapping and `serve` orchestration.
-4. Wire the plugin package to the future generated BoltFFI binding.
-5. Add SQLite-backed host adapters.
-6. Add Telegram long polling.
-7. Add cron management and execution.
-8. Add end-to-end smoke tests against a local OpenCode server.
+1. Add the first real BoltFFI-facing export layer on top of `crates/ffi`.
+2. Wire the plugin package to the generated binding and host trait implementations.
+3. Add SQLite-backed host adapters.
+4. Add Telegram long polling.
+5. Add cron management and execution.
+6. Add end-to-end smoke tests against a local OpenCode server.
 
 ## References
 
