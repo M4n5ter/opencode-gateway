@@ -1,5 +1,7 @@
+use std::str::FromStr;
+
 use chrono::{TimeZone, Utc};
-use croner::parser::{CronParser, Seconds};
+use cron::Schedule;
 
 use super::job::CronValidationError;
 
@@ -8,6 +10,8 @@ pub(super) fn normalize_schedule(value: &str) -> Result<String, CronValidationEr
     if trimmed.is_empty() {
         return Err(CronValidationError::EmptySchedule);
     }
+
+    validate_field_count(trimmed)?;
 
     parse_schedule(trimmed)?;
     Ok(trimmed.to_owned())
@@ -22,18 +26,32 @@ pub(super) fn next_run_at(schedule: &str, after_unix_ms: u64) -> Result<u64, Cro
         .single()
         .ok_or(CronValidationError::NextOccurrenceOutOfRange)?;
     let next = cron
-        .find_next_occurrence(&start, false)
-        .map_err(|error| CronValidationError::InvalidSchedule(error.to_string()))?;
+        .after(&start)
+        .next()
+        .ok_or(CronValidationError::NextOccurrenceOutOfRange)?;
 
     u64::try_from(next.timestamp_millis()).map_err(|_| CronValidationError::NextOccurrenceOutOfRange)
 }
 
-fn parse_schedule(value: &str) -> Result<croner::Cron, CronValidationError> {
-    CronParser::builder()
-        .seconds(Seconds::Disallowed)
-        .build()
-        .parse(value)
-        .map_err(|error| CronValidationError::InvalidSchedule(error.to_string()))
+fn parse_schedule(value: &str) -> Result<Schedule, CronValidationError> {
+    validate_field_count(value)?;
+    let normalized = normalize_for_cron_parser(value);
+
+    Schedule::from_str(&normalized).map_err(|error| CronValidationError::InvalidSchedule(error.to_string()))
+}
+
+fn normalize_for_cron_parser(value: &str) -> String {
+    format!("0 {value}")
+}
+
+fn validate_field_count(value: &str) -> Result<(), CronValidationError> {
+    if value.split_whitespace().count() != 5 {
+        return Err(CronValidationError::InvalidSchedule(
+            "expected a 5-field recurring cron expression".to_owned(),
+        ));
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

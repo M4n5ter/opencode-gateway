@@ -1,18 +1,19 @@
 import type { ToolDefinition } from "@opencode-ai/plugin"
 import { tool } from "@opencode-ai/plugin"
 
-import type { BindingCronJobSpec, BindingRuntimeReport, GatewayBindingHandle } from "../binding"
+import type { BindingCronJobSpec, BindingRuntimeReport } from "../binding"
+import type { GatewayExecutorLike } from "../runtime/executor"
 
-export function createGatewayDispatchCronTool(binding: GatewayBindingHandle): ToolDefinition {
+export function createGatewayDispatchCronTool(executor: GatewayExecutorLike): ToolDefinition {
     return tool({
-        description: "Dispatch one gateway cron-style prompt through the Rust runtime",
+        description: "Dispatch one gateway cron-style prompt through the gateway runtime",
         args: {
             id: tool.schema.string().min(1),
             schedule: tool.schema.string().min(1),
             prompt: tool.schema.string().min(1),
         },
         async execute(args) {
-            const report = await binding.dispatchCronJob(toCronJobSpec(args))
+            const report = await executor.dispatchCronJob(toCronJobSpec(args))
             return formatRuntimeReport(report)
         },
     })

@@ -9,7 +9,7 @@
         "build:binding": "boltffi pack wasm",
         "build:plugin": "bun run --cwd packages/opencode-plugin build",
         "check:biome": "bunx @biomejs/biome check .",
-        "check:binding": "boltffi pack wasm",
+        "check:binding": "bun run build:binding && bun scripts/smoke-binding.mjs",
         "check:plugin": "bun run --cwd packages/opencode-plugin check",
         "check:rust": "cargo test && cargo clippy --all-targets --all-features",
         "check:all": "bun run check:biome && bun run check:binding && bun run check:plugin && bun run check:rust",

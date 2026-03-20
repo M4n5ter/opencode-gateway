@@ -11,6 +11,16 @@ type SessionPromptPart = {
     ignored?: boolean
 }
 
+type MaybeWrapped<T> = T | { data: T }
+
+type SessionRecord = {
+    id: string
+}
+
+type PromptResponse = {
+    parts: SessionPromptPart[]
+}
+
 export class GatewayOpencodeHost implements BindingOpencodeHost {
     constructor(
         private readonly client: OpencodeClient,
@@ -30,7 +40,7 @@ export class GatewayOpencodeHost implements BindingOpencodeHost {
                 throwOnError: true,
             })
 
-            return okPromptResult(sessionId, extractAssistantText(response.data.parts))
+            return okPromptResult(sessionId, extractAssistantText(unwrapData<PromptResponse>(response).parts))
         } catch (error) {
             return failedPromptResult(error)
         }
@@ -44,8 +54,12 @@ export class GatewayOpencodeHost implements BindingOpencodeHost {
             throwOnError: true,
         })
 
-        return session.data.id
+        return unwrapData<SessionRecord>(session).id
     }
+}
+
+function unwrapData<T>(value: MaybeWrapped<T>): T {
+    return typeof value === "object" && value !== null && "data" in value ? value.data : value
 }
 
 function extractAssistantText(parts: SessionPromptPart[]): string {

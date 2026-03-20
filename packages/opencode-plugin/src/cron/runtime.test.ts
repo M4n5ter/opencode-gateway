@@ -1,7 +1,8 @@
 import { Database } from "bun:sqlite"
 import { expect, test } from "bun:test"
 
-import type { BindingCronJobSpec, BindingInboundMessage, BindingLoggerHost, GatewayBindingHandle } from "../binding"
+import type { BindingCronJobSpec, BindingLoggerHost, GatewayBindingHandle } from "../binding"
+import type { GatewayExecutorLike } from "../runtime/executor"
 import { migrateGatewayDatabase } from "../store/migrations"
 import { SqliteStore } from "../store/sqlite"
 import { GatewayCronRuntime } from "./runtime"
@@ -25,7 +26,7 @@ test("cron reconcile skips missed runs and marks stale running rows abandoned", 
         })
         const staleRunId = store.insertCronRun("nightly", 1_735_689_600_000, 200)
 
-        const runtime = new GatewayCronRuntime(createBindingStub(), store, new MemoryLogger(), {
+        const runtime = new GatewayCronRuntime(createExecutorStub(), createBindingStub(), store, new MemoryLogger(), {
             enabled: true,
             tickSeconds: 5,
             maxConcurrentRuns: 1,
@@ -62,7 +63,7 @@ test("cron tick executes due jobs and records successful runs", async () => {
             recordedAtMs: 100,
         })
 
-        const runtime = new GatewayCronRuntime(createBindingStub(), store, new MemoryLogger(), {
+        const runtime = new GatewayCronRuntime(createExecutorStub(), createBindingStub(), store, new MemoryLogger(), {
             enabled: true,
             tickSeconds: 5,
             maxConcurrentRuns: 1,
@@ -100,7 +101,18 @@ function createBindingStub(): GatewayBindingHandle {
         nextCronRunAt(_job: BindingCronJobSpec, afterMs: bigint): bigint {
             return afterMs < 1_735_722_000_000n ? 1_735_722_000_000n : 1_735_808_400_000n
         },
-        async handleInboundMessage(_message: BindingInboundMessage) {
+        async handleInboundMessage() {
+            throw new Error("unused")
+        },
+        async dispatchCronJob() {
+            throw new Error("unused")
+        },
+    }
+}
+
+function createExecutorStub(): GatewayExecutorLike {
+    return {
+        async handleInboundMessage(_message) {
             throw new Error("unused")
         },
         async dispatchCronJob(_job: BindingCronJobSpec) {

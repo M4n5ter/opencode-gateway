@@ -1,5 +1,6 @@
 import type { BindingCronJobSpec, BindingLoggerHost, BindingRuntimeReport, GatewayBindingHandle } from "../binding"
 import type { CronConfig } from "../config/cron"
+import type { GatewayExecutorLike } from "../runtime/executor"
 import type { CronJobRecord, PersistCronJobInput, SqliteStore } from "../store/sqlite"
 
 export type UpsertCronJobInput = {
@@ -17,6 +18,7 @@ export class GatewayCronRuntime {
     private running = false
 
     constructor(
+        private readonly executor: GatewayExecutorLike,
         private readonly binding: GatewayBindingHandle,
         private readonly store: SqliteStore,
         private readonly logger: BindingLoggerHost,
@@ -153,7 +155,7 @@ export class GatewayCronRuntime {
         const runId = this.store.insertCronRun(job.id, scheduledForMs, startedAtMs)
 
         try {
-            const report = await this.binding.dispatchCronJob(toBindingCronJobSpec(job))
+            const report = await this.executor.dispatchCronJob(toBindingCronJobSpec(job))
             this.store.finishCronRun(runId, "succeeded", Date.now(), report.responseText, null)
             return report
         } catch (error) {

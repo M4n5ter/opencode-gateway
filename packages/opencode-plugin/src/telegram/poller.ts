@@ -1,5 +1,6 @@
-import type { BindingLoggerHost, GatewayBindingHandle } from "../binding"
+import type { BindingLoggerHost } from "../binding"
 import type { TelegramConfig } from "../config/telegram"
+import type { GatewayExecutorLike } from "../runtime/executor"
 import type { SqliteStore } from "../store/sqlite"
 import { TelegramApiError, type TelegramPollingClientLike } from "./client"
 import { buildTelegramAllowlist, normalizeTelegramUpdate } from "./normalize"
@@ -11,7 +12,7 @@ export class TelegramPollingService {
 
     constructor(
         private readonly client: TelegramPollingClientLike,
-        private readonly binding: GatewayBindingHandle,
+        private readonly executor: GatewayExecutorLike,
         private readonly store: SqliteStore,
         private readonly logger: BindingLoggerHost,
         private readonly config: Extract<TelegramConfig, { enabled: true }>,
@@ -53,7 +54,7 @@ export class TelegramPollingService {
                         continue
                     }
 
-                    await this.binding.handleInboundMessage(normalized.message)
+                    await this.executor.handleInboundMessage(normalized.message)
                     offset = this.advanceOffset(nextOffset)
                 }
 

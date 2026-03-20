@@ -26,7 +26,7 @@ export const OpencodeGatewayPlugin: Plugin = async (input) => {
             cron_run: createCronRunTool(runtime.cron),
             cron_upsert: createCronUpsertTool(runtime.cron),
             gateway_status: createGatewayStatusTool(runtime),
-            gateway_dispatch_cron: createGatewayDispatchCronTool(runtime.binding),
+            gateway_dispatch_cron: createGatewayDispatchCronTool(runtime.executor),
             telegram_status: createTelegramStatusTool(runtime.telegram),
             telegram_send_test: createTelegramSendTestTool(runtime.telegram),
         },

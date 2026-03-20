@@ -7,6 +7,7 @@ import { ConsoleLoggerHost, SystemClockHost } from "./host/noop"
 import { GatewayOpencodeHost } from "./host/opencode"
 import { SqliteStoreHost } from "./host/store"
 import { GatewayTransportHost } from "./host/transport"
+import { GatewayExecutor } from "./runtime/executor"
 import { openSqliteStore } from "./store/sqlite"
 import { TelegramBotClient } from "./telegram/client"
 import { TelegramPollingService } from "./telegram/poller"
@@ -25,21 +26,27 @@ export type GatewayPluginStatus = {
     telegramAllowlistMode: "disabled" | "explicit"
 }
 
+const RUST_CONTRACT_STATUS_SNAPSHOT = {
+    runtimeMode: "contract",
+    supportsTelegram: true,
+    supportsCron: true,
+    hasWebUi: false,
+} as const
+
 export class GatewayPluginRuntime {
     constructor(
         readonly binding: GatewayBindingHandle,
+        readonly executor: GatewayExecutor,
         readonly cron: GatewayCronRuntime,
         readonly telegram: GatewayTelegramRuntime,
     ) {}
 
     status(): GatewayPluginStatus {
-        const status = this.binding.status()
-
         return {
-            runtimeMode: status.runtimeMode,
-            supportsTelegram: status.supportsTelegram,
-            supportsCron: status.supportsCron,
-            hasWebUi: status.hasWebUi,
+            runtimeMode: RUST_CONTRACT_STATUS_SNAPSHOT.runtimeMode,
+            supportsTelegram: RUST_CONTRACT_STATUS_SNAPSHOT.supportsTelegram,
+            supportsCron: RUST_CONTRACT_STATUS_SNAPSHOT.supportsCron,
+            hasWebUi: RUST_CONTRACT_STATUS_SNAPSHOT.hasWebUi,
             cronEnabled: this.cron.isEnabled(),
             cronPolling: this.cron.isRunning(),
             cronRunningJobs: this.cron.runningJobs(),
@@ -58,23 +65,26 @@ export async function createGatewayRuntime(
     const store = await openSqliteStore(config.stateDbPath)
     const logger = new ConsoleLoggerHost()
     const telegramClient = config.telegram.enabled ? new TelegramBotClient(config.telegram.botToken) : null
+    const opencode = new GatewayOpencodeHost(input.client, input.directory)
+    const transport = new GatewayTransportHost(telegramClient, store)
 
     const binding = module.GatewayBinding.new(
         new SqliteStoreHost(store),
-        new GatewayOpencodeHost(input.client, input.directory),
-        new GatewayTransportHost(telegramClient, store),
+        opencode,
+        transport,
         new SystemClockHost(),
         logger,
     )
-    const cron = new GatewayCronRuntime(binding, store, logger, config.cron)
+    const executor = new GatewayExecutor(store, opencode, transport, logger)
+    const cron = new GatewayCronRuntime(executor, binding, store, logger, config.cron)
 
     const telegramPolling =
         config.telegram.enabled && telegramClient !== null
-            ? new TelegramPollingService(telegramClient, binding, store, logger, config.telegram)
+            ? new TelegramPollingService(telegramClient, executor, store, logger, config.telegram)
             : null
     const telegram = new GatewayTelegramRuntime(telegramClient, store, logger, config.telegram, telegramPolling)
     cron.start()
     telegram.start()
 
-    return new GatewayPluginRuntime(binding, cron, telegram)
+    return new GatewayPluginRuntime(binding, executor, cron, telegram)
 }
