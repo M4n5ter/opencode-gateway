@@ -16,14 +16,14 @@ This repository is intentionally being built in layers:
 4. Add real integrations only after the module boundaries are stable.
 
 The current state of the repository is **contract-first scaffold plus the first real
-binding/runtime integration slices**: the workspace, crate/package boundaries,
-launcher bootstrap, pure Rust domain model, host orchestration contracts, the first
-BoltFFI export facade, callback-capable binding handles, and an OpenCode plugin with
-debug-oriented gateway tools are in place. SQLite-backed session persistence and
-runtime journaling now exist inside the plugin host, Telegram long polling is wired
-through the plugin with explicit allowlists and persistent update cursors, and the
-first recurring cron slice is now in place with a persisted job catalog, run history,
-background tick loop, and Telegram-capable cron delivery. Richer durable gateway data
+runtime slices**: the workspace, crate/package boundaries, launcher bootstrap, pure
+Rust domain model, host orchestration contracts, the first BoltFFI export facade, and
+an OpenCode plugin with real Telegram, SQLite, and cron behavior are in place.
+SQLite-backed session persistence and runtime journaling now exist inside the plugin
+host, Telegram long polling is wired through the plugin with explicit allowlists and
+persistent update cursors, recurring cron jobs now run through a persisted job
+catalog plus a background tick loop, and Telegram operational tools are available for
+live status probing and explicit send-test delivery. Richer durable gateway data
 models and end-to-end smoke coverage are still to be implemented.
 
 ## Vision
@@ -179,15 +179,17 @@ This package now:
 - implements a real OpenCode session adapter that reuses persisted session bindings,
 - runs a cron tick worker backed by persisted next-run timestamps,
 - runs a Telegram long-poll worker with explicit chat/user allowlists,
-- normalizes Telegram text messages into Rust inbound gateway messages,
+- normalizes Telegram text messages into plugin-local gateway execution inputs,
 - delivers Telegram replies through a real transport host,
 - delivers cron results to Telegram when a job has a delivery target,
+- exposes `telegram_status` and `telegram_send_test` as operational tools,
+- persists Telegram health snapshots in `kv_state`,
+- uses a plugin-local executor for inbound message handling and cron dispatch,
 - and serves as the host-side entrypoint for later storage, transport, and durable
   runtime wiring.
 
 This package will later also:
 
-- add richer control-plane tools for Telegram operations,
 - promote audit/journal data into richer durable gateway tables where useful,
 - and add end-to-end smoke coverage against a local `OpenCode` server.
 
@@ -202,10 +204,10 @@ opencode-gateway serve
   -> OpenCode loads the local plugin
   -> plugin loads BoltFFI-generated Rust binding
   -> plugin creates host adapters
-  -> Rust engine runs inside the plugin process
-  -> Telegram updates and cron ticks are forwarded into Rust
-  -> Rust decides what should happen
-  -> host executes OpenCode sessions and sends outbound messages
+  -> plugin creates a local gateway executor
+  -> Telegram updates and cron ticks are routed into the plugin executor
+  -> plugin executes OpenCode sessions and outbound delivery
+  -> Rust remains responsible for typed contracts and cron next-run calculation
 ```
 
 ## Ownership Boundaries
@@ -281,6 +283,11 @@ The FFI crate currently exports runtime-facing concepts such as:
 - `CronJobSpec`
 - host callback contracts for store / transport / OpenCode execution / logging
 
+At the moment, synchronous Rust contract and scheduling surfaces are stable, but the
+plugin does **not** rely on BoltFFI-generated async execution methods for inbound
+message handling or cron dispatch. Those paths currently run through a plugin-local
+executor until the upstream BoltFFI async struct-argument issue is resolved.
+
 ## Configuration Model
 
 The first implementation will use a dedicated project config file instead of trying to
@@ -354,8 +361,10 @@ The current scaffold already establishes:
 - split core modules for channel / conversation / message / cron / engine / status,
 - split FFI modules for host traits and runtime orchestration,
 - a BoltFFI-exported `GatewayBinding` handle with callback-capable host traits,
+- a root binding smoke script for generated WASM loading,
 - plugin-side binding loading plus one status tool, one cron-dispatch debug tool, and
   the first persisted cron control-plane tools,
+- a plugin-local executor that handles Telegram inbound messages and cron dispatch,
 - SQLite-backed session bindings and runtime journaling inside the plugin host,
 - SQLite-backed Telegram update offsets,
 - SQLite-backed Telegram health snapshots in `kv_state`,
@@ -379,10 +388,12 @@ Those will be added incrementally on top of the structure introduced here.
 
 The next implementation passes should happen in this order:
 
-1. Promote runtime journaling into richer durable gateway tables where needed.
-2. Add richer cron-facing inspection or operational tools only when the current catalog
+1. Add end-to-end smoke coverage against a local `OpenCode` server.
+2. Promote runtime journaling into richer durable gateway tables where needed.
+3. Revisit the plugin-local executor workaround after the upstream BoltFFI async
+   struct-argument issue is fixed.
+4. Add richer cron-facing inspection or operational tools only when the current catalog
    and run history stop being sufficient.
-3. Add end-to-end smoke tests against a local OpenCode server.
 
 ## References
 
