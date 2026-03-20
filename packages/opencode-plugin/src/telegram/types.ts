@@ -36,6 +36,8 @@ export type TelegramChat = {
     type: string
 }
 
+export type TelegramChatType = TelegramChat["type"]
+
 export type TelegramBotProfile = TelegramUser & {
     is_bot: true
 }

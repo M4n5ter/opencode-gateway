@@ -3,11 +3,13 @@ import type {
     BindingDeliveryTarget,
     BindingInboundMessage,
     BindingLoggerHost,
+    BindingPromptRequest,
     BindingRuntimeReport,
 } from "../binding"
+import type { GatewayTextDelivery, TextDeliverySession } from "../delivery/text"
 import type { GatewayOpencodeHost } from "../host/opencode"
-import type { GatewayTransportHost } from "../host/transport"
 import type { RuntimeJournalEntry, SqliteStore } from "../store/sqlite"
+import { formatError } from "../utils/error"
 
 type PromptExecutionPlan = {
     conversationKey: string
@@ -18,8 +20,8 @@ type PromptExecutionPlan = {
 export class GatewayExecutor {
     constructor(
         private readonly store: SqliteStore,
-        private readonly opencode: GatewayOpencodeHost,
-        private readonly transport: GatewayTransportHost,
+        private readonly opencode: GatewayOpencodeHostLike,
+        private readonly delivery: GatewayTextDeliveryLike,
         private readonly logger: BindingLoggerHost,
     ) {}
 
@@ -75,38 +77,22 @@ export class GatewayExecutor {
     }
 
     private async executePlan(plan: PromptExecutionPlan, recordedAtMs: number): Promise<BindingRuntimeReport> {
-        const sessionId = this.store.getSessionBinding(plan.conversationKey)
-        const promptResult = await this.opencode.runPrompt({
-            conversationKey: plan.conversationKey,
-            prompt: plan.prompt,
-            sessionId,
-        })
+        const persistedSessionId = this.store.getSessionBinding(plan.conversationKey)
+        const deliverySession = plan.replyTarget === null ? null : await this.delivery.open(plan.replyTarget, "auto")
+        const promptResult = await this.executePromptWithRecovery(plan, persistedSessionId, deliverySession)
 
-        if (promptResult.errorMessage !== null) {
-            throw new Error(promptResult.errorMessage)
-        }
-
-        const nextSessionId = normalizeRequiredField(promptResult.sessionId ?? "", "opencode session id")
+        const nextSessionId = normalizeRequiredField(promptResult.sessionId, "opencode session id")
         this.store.putSessionBinding(plan.conversationKey, nextSessionId, recordedAtMs)
 
         let delivered = false
-        if (plan.replyTarget !== null) {
-            const ack = await this.transport.sendMessage({
-                deliveryTarget: plan.replyTarget,
-                body: promptResult.responseText,
-            })
-
-            if (ack.errorMessage !== null) {
-                throw new Error(ack.errorMessage)
-            }
-
+        if (deliverySession !== null) {
+            delivered = await deliverySession.finish(promptResult.responseText)
             this.store.appendJournal(
                 createJournalEntry("delivery", recordedAtMs, plan.conversationKey, {
                     deliveryTarget: plan.replyTarget,
                     body: promptResult.responseText,
                 }),
             )
-            delivered = true
         }
 
         return {
@@ -116,9 +102,53 @@ export class GatewayExecutor {
             recordedAtMs: BigInt(recordedAtMs),
         }
     }
+
+    private async executePromptWithRecovery(
+        plan: PromptExecutionPlan,
+        persistedSessionId: string | null,
+        deliverySession: TextDeliverySessionLike | null,
+    ): Promise<{ sessionId: string; responseText: string }> {
+        try {
+            return await this.executePrompt(plan, persistedSessionId, deliverySession)
+        } catch (error) {
+            if (persistedSessionId === null || !isMissingSessionBindingError(error)) {
+                throw error
+            }
+
+            this.logger.log(
+                "warn",
+                `stale opencode session binding detected for ${plan.conversationKey}; recreating session`,
+            )
+            this.store.deleteSessionBinding(plan.conversationKey)
+
+            return await this.executePrompt(plan, null, deliverySession)
+        }
+    }
+
+    private async executePrompt(
+        plan: PromptExecutionPlan,
+        sessionId: string | null,
+        deliverySession: TextDeliverySessionLike | null,
+    ): Promise<{ sessionId: string; responseText: string }> {
+        const request: BindingPromptRequest = {
+            conversationKey: plan.conversationKey,
+            prompt: plan.prompt,
+            sessionId,
+        }
+
+        return deliverySession?.mode === "progressive"
+            ? await this.opencode.runPromptWithSnapshots(request, async (snapshot) => {
+                  await deliverySession.preview(snapshot)
+              })
+            : await runPromptOnce(this.opencode, request)
+    }
 }
 
 export type GatewayExecutorLike = Pick<GatewayExecutor, "handleInboundMessage" | "dispatchCronJob">
+
+type GatewayTextDeliveryLike = Pick<GatewayTextDelivery, "open">
+type GatewayOpencodeHostLike = Pick<GatewayOpencodeHost, "runPrompt" | "runPromptWithSnapshots">
+type TextDeliverySessionLike = Pick<TextDeliverySession, "mode" | "preview">
 
 type NormalizedCronJob = {
     id: string
@@ -216,4 +246,46 @@ function normalizeOptionalField(value: string | null): string | null {
 
     const trimmed = value.trim()
     return trimmed.length === 0 ? null : trimmed
+}
+
+async function runPromptOnce(
+    opencode: GatewayOpencodeHostLike,
+    request: BindingPromptRequest,
+): Promise<{ sessionId: string; responseText: string }> {
+    const promptResult = await opencode.runPrompt(request)
+    if (promptResult.errorMessage !== null) {
+        throw new Error(promptResult.errorMessage)
+    }
+
+    return {
+        sessionId: normalizeRequiredField(promptResult.sessionId ?? "", "opencode session id"),
+        responseText: promptResult.responseText,
+    }
+}
+
+function isMissingSessionBindingError(error: unknown): boolean {
+    return containsMissingSessionBinding(error, 0)
+}
+
+function containsMissingSessionBinding(value: unknown, depth: number): boolean {
+    if (depth > 6) {
+        return false
+    }
+
+    if (typeof value === "string") {
+        return value.includes("Session not found:")
+    }
+
+    if (typeof value !== "object" || value === null) {
+        return false
+    }
+
+    for (const key of Object.getOwnPropertyNames(value)) {
+        const nested = (value as Record<string, unknown>)[key]
+        if (containsMissingSessionBinding(nested, depth + 1)) {
+            return true
+        }
+    }
+
+    return false
 }

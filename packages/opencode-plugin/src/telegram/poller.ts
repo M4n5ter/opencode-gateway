@@ -2,9 +2,10 @@ import type { BindingLoggerHost } from "../binding"
 import type { TelegramConfig } from "../config/telegram"
 import type { GatewayExecutorLike } from "../runtime/executor"
 import type { SqliteStore } from "../store/sqlite"
+import { formatError } from "../utils/error"
 import { TelegramApiError, type TelegramPollingClientLike } from "./client"
 import { buildTelegramAllowlist, normalizeTelegramUpdate } from "./normalize"
-import { recordTelegramPollFailure, recordTelegramPollSuccess } from "./state"
+import { recordTelegramChatType, recordTelegramPollFailure, recordTelegramPollSuccess } from "./state"
 
 export class TelegramPollingService {
     private readonly allowlist
@@ -54,6 +55,12 @@ export class TelegramPollingService {
                         continue
                     }
 
+                    recordTelegramChatType(
+                        this.store,
+                        normalized.message.deliveryTarget.target,
+                        normalized.chatType,
+                        Date.now(),
+                    )
                     await this.executor.handleInboundMessage(normalized.message)
                     offset = this.advanceOffset(nextOffset)
                 }
@@ -87,7 +94,7 @@ function isPermanentTelegramFailure(error: unknown): boolean {
 }
 
 function formatTelegramPollerError(error: unknown): string {
-    return `telegram poller failure: ${error instanceof Error ? error.message : String(error)}`
+    return `telegram poller failure: ${formatError(error)}`
 }
 
 function sleep(durationMs: number): Promise<void> {

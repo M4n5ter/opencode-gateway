@@ -27,6 +27,7 @@ test("normalizeTelegramUpdate accepts allowlisted private text messages", () => 
 
     expect(result).toEqual({
         kind: "message",
+        chatType: "private",
         message: {
             deliveryTarget: {
                 channel: "telegram",
@@ -56,6 +57,7 @@ test("normalizeTelegramUpdate preserves Telegram topics for allowlisted group me
 
     expect(result).toEqual({
         kind: "message",
+        chatType: "supergroup",
         message: {
             deliveryTarget: {
                 channel: "telegram",

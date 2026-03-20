@@ -59,6 +59,11 @@ export type BindingOutboundMessage = {
     body: string
 }
 
+export type BindingProgressiveDirective = {
+    kind: string
+    text: string | null
+}
+
 export type BindingStoreHost = {
     getSessionBinding(conversationKey: string): Promise<BindingSessionBinding>
     putSessionBinding(conversationKey: string, sessionId: string, recordedAtMs: bigint): Promise<BindingHostAck>
@@ -83,38 +88,28 @@ export type BindingLoggerHost = {
     log(level: string, message: string): void
 }
 
-export type GatewayBindingHandle = {
-    status(): GatewayStatusSnapshot
-    nextCronRunAt(job: BindingCronJobSpec, afterMs: bigint): bigint
-    handleInboundMessage(message: BindingInboundMessage): Promise<BindingRuntimeReport>
-    dispatchCronJob(job: BindingCronJobSpec): Promise<BindingRuntimeReport>
-    dispose?(): void
+export type GatewayContract = {
+    gatewayStatus(): GatewayStatusSnapshot
+    nextCronRunAt(job: BindingCronJobSpec, afterMs: number): number
 }
 
-export type GatewayBindingModule = {
-    GatewayBinding: {
-        new: (
-            store: BindingStoreHost,
-            opencode: BindingOpencodeHost,
-            transport: BindingTransportHost,
-            clock: BindingClockHost,
-            logger: BindingLoggerHost,
-        ) => GatewayBindingHandle
+export type ProgressiveTextHandle = {
+    observeSnapshot(text: string, nowMs: number): BindingProgressiveDirective
+    finish(finalText: string, nowMs: number): BindingProgressiveDirective
+    free?(): void
+}
+
+export type GatewayBindingModule = GatewayContract & {
+    ProgressiveTextHandle: {
+        progressive: (flushIntervalMs: number) => ProgressiveTextHandle
+        oneshot: (flushIntervalMs: number) => ProgressiveTextHandle
     }
-    initialized?: Promise<void>
-    default?: () => Promise<void>
+    initSync?: (module?: BufferSource | WebAssembly.Module) => unknown
+    default?: (module?: BufferSource | WebAssembly.Module) => Promise<unknown>
 }
 
-const GENERATED_NODE_ENTRYPOINT = new URL("../../../dist/wasm/pkg/node.js", import.meta.url)
+const GENERATED_NODE_ENTRYPOINT = new URL("../../../dist/wasm/pkg/opencode_gateway_ffi.js", import.meta.url)
 
 export async function loadGatewayBindingModule(): Promise<GatewayBindingModule> {
-    const module = (await import(GENERATED_NODE_ENTRYPOINT.href)) as GatewayBindingModule
-
-    if (module.initialized) {
-        await module.initialized
-    } else if (module.default) {
-        await module.default()
-    }
-
-    return module
+    return (await import(GENERATED_NODE_ENTRYPOINT.href)) as GatewayBindingModule
 }

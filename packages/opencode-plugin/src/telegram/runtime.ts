@@ -1,15 +1,17 @@
 import type { BindingLoggerHost } from "../binding"
 import type { TelegramConfig } from "../config/telegram"
+import type { DeliveryModePreference } from "../delivery/telegram"
+import type { GatewayTextDelivery } from "../delivery/text"
 import type { SqliteStore } from "../store/sqlite"
 import { formatUnixMsAsUtc } from "../tools/time"
-import type { TelegramOpsClientLike } from "./client"
+import { formatError } from "../utils/error"
+import type { TelegramRuntimeClientLike } from "./client"
 import type { TelegramPollingService } from "./poller"
 import {
     readTelegramHealthSnapshot,
     recordTelegramProbeFailure,
     recordTelegramProbeSuccess,
     recordTelegramSendFailure,
-    recordTelegramSendSuccess,
     type TelegramHealthSnapshot,
 } from "./state"
 import type { TelegramBotProfile } from "./types"
@@ -26,6 +28,7 @@ export type GatewayTelegramStatus = TelegramHealthSnapshot & {
     liveProbeError: string | null
     liveBotId: string | null
     liveBotUsername: string | null
+    streamingEnabled: boolean
 }
 
 export type TelegramSendTestResult = {
@@ -33,11 +36,15 @@ export type TelegramSendTestResult = {
     topic: string | null
     text: string
     sentAtMs: number
+    mode: "oneshot" | "progressive"
 }
+
+type TelegramTextDeliveryLike = Pick<GatewayTextDelivery, "sendTest">
 
 export class GatewayTelegramRuntime {
     constructor(
-        private readonly client: TelegramOpsClientLike | null,
+        private readonly client: TelegramRuntimeClientLike | null,
+        private readonly delivery: TelegramTextDeliveryLike,
         private readonly store: SqliteStore,
         private readonly logger: BindingLoggerHost,
         private readonly config: TelegramConfig,
@@ -74,6 +81,7 @@ export class GatewayTelegramRuntime {
                 liveProbeError: null,
                 liveBotId: null,
                 liveBotUsername: null,
+                streamingEnabled: false,
             }
         }
 
@@ -107,7 +115,12 @@ export class GatewayTelegramRuntime {
         }
     }
 
-    async sendTest(chatId: string, topic: string | null, text: string | null): Promise<TelegramSendTestResult> {
+    async sendTest(
+        chatId: string,
+        topic: string | null,
+        text: string | null,
+        mode: DeliveryModePreference,
+    ): Promise<TelegramSendTestResult> {
         const normalizedChatId = normalizeRequiredField(chatId, "chat_id")
         const normalizedTopic = normalizeOptionalField(topic)
         const body = normalizeOptionalField(text) ?? defaultTestMessage()
@@ -117,14 +130,27 @@ export class GatewayTelegramRuntime {
         }
 
         try {
-            await this.client.sendMessage(normalizedChatId, body, normalizedTopic)
             const sentAtMs = Date.now()
-            recordTelegramSendSuccess(this.store, sentAtMs)
+            const result = await this.delivery.sendTest(
+                {
+                    channel: "telegram",
+                    target: normalizedChatId,
+                    topic: normalizedTopic,
+                },
+                body,
+                mode,
+            )
+
+            if (!result.delivered) {
+                throw new Error("telegram test delivery produced no final message")
+            }
+
             return {
                 chatId: normalizedChatId,
                 topic: normalizedTopic,
                 text: body,
                 sentAtMs,
+                mode: result.mode,
             }
         } catch (error) {
             const message = formatError(error)
@@ -154,6 +180,7 @@ function buildEnabledStatus(
         liveProbeError,
         liveBotId: bot ? String(bot.id) : null,
         liveBotUsername: bot?.username ?? null,
+        streamingEnabled: true,
     }
 }
 
@@ -178,8 +205,4 @@ function normalizeOptionalField(value: string | null): string | null {
 function defaultTestMessage(): string {
     const recordedAtMs = Date.now()
     return `opencode-gateway telegram_send_test at ${formatUnixMsAsUtc(recordedAtMs)}`
-}
-
-function formatError(error: unknown): string {
-    return error instanceof Error ? error.message : String(error)
 }

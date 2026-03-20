@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite"
 import { expect, test } from "bun:test"
 
-import type { BindingCronJobSpec, BindingLoggerHost, GatewayBindingHandle } from "../binding"
+import type { BindingCronJobSpec, BindingLoggerHost, GatewayContract } from "../binding"
 import type { GatewayExecutorLike } from "../runtime/executor"
 import { migrateGatewayDatabase } from "../store/migrations"
 import { SqliteStore } from "../store/sqlite"
@@ -88,9 +88,9 @@ test("cron tick executes due jobs and records successful runs", async () => {
     }
 })
 
-function createBindingStub(): GatewayBindingHandle {
+function createBindingStub(): GatewayContract {
     return {
-        status() {
+        gatewayStatus() {
             return {
                 runtimeMode: "contract",
                 supportsTelegram: true,
@@ -98,14 +98,8 @@ function createBindingStub(): GatewayBindingHandle {
                 hasWebUi: false,
             }
         },
-        nextCronRunAt(_job: BindingCronJobSpec, afterMs: bigint): bigint {
-            return afterMs < 1_735_722_000_000n ? 1_735_722_000_000n : 1_735_808_400_000n
-        },
-        async handleInboundMessage() {
-            throw new Error("unused")
-        },
-        async dispatchCronJob() {
-            throw new Error("unused")
+        nextCronRunAt(_job: BindingCronJobSpec, afterMs: number): number {
+            return afterMs < 1_735_722_000_000 ? 1_735_722_000_000 : 1_735_808_400_000
         },
     }
 }

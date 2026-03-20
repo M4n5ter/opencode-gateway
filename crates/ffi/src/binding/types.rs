@@ -1,15 +1,10 @@
-//! FFI-friendly data types shared by binding exports and callback traits.
+//! Wasm-facing data types shared by exported functions and handles.
 
-use boltffi::data;
-use opencode_gateway_core::{
-    ChannelKind, CronJobSpec, DeliveryTarget, GatewayStatus, InboundMessage, OutboundMessage,
-    PromptRequest, TargetKey,
-};
+use opencode_gateway_core::{ChannelKind, CronJobSpec, DeliveryTarget, GatewayStatus, ProgressiveDirective, TargetKey};
+use serde::{Deserialize, Serialize};
 
-use crate::{OpencodePromptResult, RuntimeReport};
-
-#[data]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BindingGatewayStatus {
     pub runtime_mode: String,
     pub supports_telegram: bool,
@@ -28,51 +23,8 @@ impl From<&GatewayStatus> for BindingGatewayStatus {
     }
 }
 
-#[data]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct BindingHostAck {
-    pub error_message: Option<String>,
-}
-
-impl BindingHostAck {
-    pub fn ok() -> Self {
-        Self {
-            error_message: None,
-        }
-    }
-
-    pub fn failed(message: impl Into<String>) -> Self {
-        Self {
-            error_message: Some(message.into()),
-        }
-    }
-}
-
-#[data]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct BindingSessionBinding {
-    pub session_id: Option<String>,
-    pub error_message: Option<String>,
-}
-
-impl BindingSessionBinding {
-    pub fn ok(session_id: Option<String>) -> Self {
-        Self {
-            session_id,
-            error_message: None,
-        }
-    }
-
-    pub fn failed(message: impl Into<String>) -> Self {
-        Self {
-            session_id: None,
-            error_message: Some(message.into()),
-        }
-    }
-}
-
-#[data]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BindingCronJobSpec {
     pub id: String,
     pub schedule: String,
@@ -80,28 +32,6 @@ pub struct BindingCronJobSpec {
     pub delivery_channel: Option<String>,
     pub delivery_target: Option<String>,
     pub delivery_topic: Option<String>,
-}
-
-impl From<&CronJobSpec> for BindingCronJobSpec {
-    fn from(value: &CronJobSpec) -> Self {
-        let (delivery_channel, delivery_target, delivery_topic) = match &value.delivery_target {
-            Some(target) => (
-                Some(target.channel.as_str().to_owned()),
-                Some(target.target.as_str().to_owned()),
-                target.topic.clone(),
-            ),
-            None => (None, None, None),
-        };
-
-        Self {
-            id: value.id.as_str().to_owned(),
-            schedule: value.schedule.clone(),
-            prompt: value.prompt.clone(),
-            delivery_channel,
-            delivery_target,
-            delivery_topic,
-        }
-    }
 }
 
 impl TryFrom<BindingCronJobSpec> for CronJobSpec {
@@ -112,7 +42,7 @@ impl TryFrom<BindingCronJobSpec> for CronJobSpec {
             (None, None, topic) => {
                 if topic.as_deref().is_some_and(|value| !value.trim().is_empty()) {
                     return Err(
-                        "cron delivery_topic requires delivery_channel and delivery_target".to_owned(),
+                        "cron deliveryTopic requires deliveryChannel and deliveryTarget".to_owned(),
                     );
                 }
                 None
@@ -125,7 +55,7 @@ impl TryFrom<BindingCronJobSpec> for CronJobSpec {
             .try_into()?),
             (Some(_), None, _) | (None, Some(_), _) => {
                 return Err(
-                    "cron delivery_channel and delivery_target must be provided together".to_owned(),
+                    "cron deliveryChannel and deliveryTarget must be provided together".to_owned(),
                 )
             }
         };
@@ -135,22 +65,12 @@ impl TryFrom<BindingCronJobSpec> for CronJobSpec {
     }
 }
 
-#[data]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BindingDeliveryTarget {
     pub channel: String,
     pub target: String,
     pub topic: Option<String>,
-}
-
-impl From<&DeliveryTarget> for BindingDeliveryTarget {
-    fn from(value: &DeliveryTarget) -> Self {
-        Self {
-            channel: value.channel.as_str().to_owned(),
-            target: value.target.as_str().to_owned(),
-            topic: value.topic.clone(),
-        }
-    }
 }
 
 impl TryFrom<BindingDeliveryTarget> for DeliveryTarget {
@@ -158,119 +78,41 @@ impl TryFrom<BindingDeliveryTarget> for DeliveryTarget {
 
     fn try_from(value: BindingDeliveryTarget) -> Result<Self, Self::Error> {
         let channel = parse_channel_kind(&value.channel)?;
-        let target = TargetKey::new(value.target)
-            .ok_or_else(|| "delivery target must not be empty".to_owned())?;
+        let target =
+            TargetKey::new(value.target).ok_or_else(|| "delivery target must not be empty".to_owned())?;
 
         Ok(DeliveryTarget::new(channel, target, value.topic))
     }
 }
 
-#[data]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct BindingInboundMessage {
-    pub delivery_target: BindingDeliveryTarget,
-    pub sender: String,
-    pub body: String,
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BindingProgressiveDirective {
+    pub kind: String,
+    pub text: Option<String>,
 }
 
-impl From<&InboundMessage> for BindingInboundMessage {
-    fn from(value: &InboundMessage) -> Self {
+impl BindingProgressiveDirective {
+    pub fn noop() -> Self {
         Self {
-            delivery_target: BindingDeliveryTarget::from(&value.delivery_target),
-            sender: value.sender.clone(),
-            body: value.body.clone(),
+            kind: "noop".to_owned(),
+            text: None,
         }
     }
 }
 
-impl TryFrom<BindingInboundMessage> for InboundMessage {
-    type Error = String;
-
-    fn try_from(value: BindingInboundMessage) -> Result<Self, Self::Error> {
-        let delivery_target = value.delivery_target;
-        let channel = parse_channel_kind(&delivery_target.channel)?;
-        let target = TargetKey::new(delivery_target.target)
-            .ok_or_else(|| "delivery target must not be empty".to_owned())?;
-
-        InboundMessage::new(
-            channel,
-            target,
-            delivery_target.topic,
-            value.sender,
-            value.body,
-        )
-        .map_err(|error| error.to_string())
-    }
-}
-
-#[data]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct BindingPromptRequest {
-    pub conversation_key: String,
-    pub prompt: String,
-    pub session_id: Option<String>,
-}
-
-impl BindingPromptRequest {
-    pub fn from_request_and_session(value: &PromptRequest, session_id: Option<String>) -> Self {
-        Self {
-            conversation_key: value.conversation_key.as_str().to_owned(),
-            prompt: value.prompt.clone(),
-            session_id,
-        }
-    }
-}
-
-#[data]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct BindingPromptResult {
-    pub session_id: Option<String>,
-    pub response_text: String,
-    pub error_message: Option<String>,
-}
-
-impl From<OpencodePromptResult> for BindingPromptResult {
-    fn from(value: OpencodePromptResult) -> Self {
-        Self {
-            session_id: Some(value.session_id),
-            response_text: value.response_text,
-            error_message: None,
-        }
-    }
-}
-
-#[data]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct BindingOutboundMessage {
-    pub delivery_target: BindingDeliveryTarget,
-    pub body: String,
-}
-
-impl From<&OutboundMessage> for BindingOutboundMessage {
-    fn from(value: &OutboundMessage) -> Self {
-        Self {
-            delivery_target: BindingDeliveryTarget::from(&value.delivery_target),
-            body: value.body.clone(),
-        }
-    }
-}
-
-#[data]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct BindingRuntimeReport {
-    pub conversation_key: String,
-    pub response_text: String,
-    pub delivered: bool,
-    pub recorded_at_ms: u64,
-}
-
-impl From<RuntimeReport> for BindingRuntimeReport {
-    fn from(value: RuntimeReport) -> Self {
-        Self {
-            conversation_key: value.conversation_key.as_str().to_owned(),
-            response_text: value.response_text,
-            delivered: value.delivered,
-            recorded_at_ms: value.recorded_at_ms,
+impl From<ProgressiveDirective> for BindingProgressiveDirective {
+    fn from(value: ProgressiveDirective) -> Self {
+        match value {
+            ProgressiveDirective::Noop => Self::noop(),
+            ProgressiveDirective::Preview(text) => Self {
+                kind: "preview".to_owned(),
+                text: Some(text),
+            },
+            ProgressiveDirective::Final(text) => Self {
+                kind: "final".to_owned(),
+                text: Some(text),
+            },
         }
     }
 }

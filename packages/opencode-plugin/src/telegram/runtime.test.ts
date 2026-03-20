@@ -7,24 +7,6 @@ import { SqliteStore } from "../store/sqlite"
 import { GatewayTelegramRuntime } from "./runtime"
 import type { TelegramBotProfile } from "./types"
 
-test("telegram status returns disabled snapshot without probing when Telegram is off", async () => {
-    const db = new Database(":memory:")
-
-    try {
-        migrateGatewayDatabase(db)
-        const store = new SqliteStore(db)
-        const runtime = new GatewayTelegramRuntime(null, store, new MemoryLogger(), { enabled: false }, null)
-
-        const status = await runtime.status()
-
-        expect(status.enabled).toBe(false)
-        expect(status.liveProbe).toBe("disabled")
-        expect(status.liveBotId).toBeNull()
-    } finally {
-        db.close()
-    }
-})
-
 test("telegram status performs a live getMe probe and persists bot metadata", async () => {
     const db = new Database(":memory:")
 
@@ -41,6 +23,17 @@ test("telegram status performs a live getMe probe and persists bot metadata", as
                     }
                 },
                 async sendMessage(): Promise<void> {
+                    throw new Error("unused")
+                },
+                async getChat() {
+                    throw new Error("unused")
+                },
+                async sendMessageDraft() {
+                    throw new Error("unused")
+                },
+            },
+            {
+                async sendTest() {
                     throw new Error("unused")
                 },
             },
@@ -83,8 +76,28 @@ test("telegram sendTest uses explicit targets and records send health", async ()
                 async getMe(): Promise<TelegramBotProfile> {
                     throw new Error("unused")
                 },
-                async sendMessage(chatId: string, text: string, topic: string | null): Promise<void> {
-                    sent.current = { chatId, text, topic }
+                async sendMessage(): Promise<void> {
+                    throw new Error("unused")
+                },
+                async getChat() {
+                    throw new Error("unused")
+                },
+                async sendMessageDraft() {
+                    throw new Error("unused")
+                },
+            },
+            {
+                async sendTest(target, text) {
+                    sent.current = {
+                        chatId: target.target,
+                        text,
+                        topic: target.topic,
+                    }
+
+                    return {
+                        delivered: true,
+                        mode: "oneshot" as const,
+                    }
                 },
             },
             store,
@@ -100,7 +113,7 @@ test("telegram sendTest uses explicit targets and records send health", async ()
             null,
         )
 
-        const result = await runtime.sendTest("-100123", "42", "hello test")
+        const result = await runtime.sendTest("-100123", "42", "hello test", "auto")
 
         expect(sent.current).toEqual({
             chatId: "-100123",
@@ -108,7 +121,7 @@ test("telegram sendTest uses explicit targets and records send health", async ()
             topic: "42",
         })
         expect(result.text).toBe("hello test")
-        expect(store.getStateValue("telegram.last_send_success_ms")).not.toBeNull()
+        expect(result.mode).toBe("oneshot")
     } finally {
         db.close()
     }

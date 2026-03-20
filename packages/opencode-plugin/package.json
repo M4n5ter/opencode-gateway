@@ -5,11 +5,10 @@
   "type": "module",
   "scripts": {
     "build": "tsc --project tsconfig.json",
-    "check": "tsc --noEmit --project tsconfig.json && bun test",
-    "test": "bun test"
+    "check": "tsc --noEmit --project tsconfig.json && bun test src",
+    "test": "bun test src"
   },
   "dependencies": {
-    "@boltffi/runtime": "0.2",
     "@opencode-ai/plugin": "1.2"
   },
   "devDependencies": {

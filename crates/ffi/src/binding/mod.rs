@@ -1,17 +1,9 @@
-//! BoltFFI-facing gateway binding surface.
+//! Wasm-facing gateway export surface.
 
-mod adapters;
 mod export;
-mod traits;
+mod progressive;
 mod types;
 
-pub use export::GatewayBinding;
-pub use traits::{
-    BindingClockHost, BindingLoggerHost, BindingOpencodeHost, BindingStoreHost,
-    BindingTransportHost,
-};
-pub use types::{
-    BindingCronJobSpec, BindingDeliveryTarget, BindingGatewayStatus, BindingHostAck,
-    BindingInboundMessage, BindingOutboundMessage, BindingPromptRequest, BindingPromptResult,
-    BindingRuntimeReport, BindingSessionBinding,
-};
+pub use export::{gateway_status, next_cron_run_at};
+pub use progressive::ProgressiveTextHandle;
+pub use types::{BindingCronJobSpec, BindingDeliveryTarget, BindingGatewayStatus, BindingProgressiveDirective};

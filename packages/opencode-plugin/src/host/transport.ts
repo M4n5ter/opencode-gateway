@@ -2,6 +2,7 @@ import type { BindingHostAck, BindingOutboundMessage, BindingTransportHost } fro
 import type { SqliteStore } from "../store/sqlite"
 import type { TelegramSendClientLike } from "../telegram/client"
 import { recordTelegramSendFailure, recordTelegramSendSuccess } from "../telegram/state"
+import { formatError } from "../utils/error"
 import { failedAck, okAck } from "./result"
 
 export class GatewayTransportHost implements BindingTransportHost {
@@ -29,7 +30,7 @@ export class GatewayTransportHost implements BindingTransportHost {
             recordTelegramSendSuccess(this.store, Date.now())
             return okAck()
         } catch (error) {
-            recordTelegramSendFailure(this.store, error instanceof Error ? error.message : String(error), Date.now())
+            recordTelegramSendFailure(this.store, formatError(error), Date.now())
             return failedAck(error)
         }
     }

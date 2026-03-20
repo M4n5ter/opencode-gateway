@@ -1,4 +1,5 @@
-import type { TelegramApiResponse, TelegramBotProfile, TelegramUpdate } from "./types"
+import { formatError } from "../utils/error"
+import type { TelegramApiResponse, TelegramBotProfile, TelegramChat, TelegramUpdate } from "./types"
 
 export class TelegramApiError extends Error {
     constructor(
@@ -25,9 +26,33 @@ export class TelegramBotClient {
         return this.call("getMe", {})
     }
 
+    async getChat(chatId: string): Promise<TelegramChat> {
+        return this.call("getChat", {
+            chat_id: chatId,
+        })
+    }
+
     async sendMessage(chatId: string, text: string, messageThreadId: string | null): Promise<void> {
         await this.call("sendMessage", {
             chat_id: chatId,
+            text,
+            message_thread_id: parseMessageThreadId(messageThreadId),
+        })
+    }
+
+    async sendMessageDraft(
+        chatId: string,
+        draftId: number,
+        text: string,
+        messageThreadId: string | null,
+    ): Promise<void> {
+        if (!Number.isSafeInteger(draftId) || draftId === 0) {
+            throw new Error(`invalid Telegram draft id: ${draftId}`)
+        }
+
+        await this.call("sendMessageDraft", {
+            chat_id: chatId,
+            draft_id: draftId,
             text,
             message_thread_id: parseMessageThreadId(messageThreadId),
         })
@@ -45,7 +70,7 @@ export class TelegramBotClient {
                 body: JSON.stringify(stripUndefined(body)),
             })
         } catch (error) {
-            throw new TelegramApiError(`Telegram ${method} request failed: ${String(error)}`, true)
+            throw new TelegramApiError(`Telegram ${method} request failed: ${formatError(error)}`, true)
         }
 
         const payload = (await response.json()) as TelegramApiResponse<Result>
@@ -66,7 +91,11 @@ export class TelegramBotClient {
 export type TelegramPollingClientLike = Pick<TelegramBotClient, "getUpdates">
 export type TelegramSendClientLike = Pick<TelegramBotClient, "sendMessage">
 export type TelegramProbeClientLike = Pick<TelegramBotClient, "getMe">
+export type TelegramChatClientLike = Pick<TelegramBotClient, "getChat">
+export type TelegramDraftClientLike = Pick<TelegramBotClient, "sendMessageDraft">
 export type TelegramOpsClientLike = TelegramSendClientLike & TelegramProbeClientLike
+export type TelegramDeliveryClientLike = TelegramSendClientLike & TelegramDraftClientLike & TelegramChatClientLike
+export type TelegramRuntimeClientLike = TelegramOpsClientLike & TelegramDeliveryClientLike
 
 function parseMessageThreadId(value: string | null): number | undefined {
     if (value === null) {

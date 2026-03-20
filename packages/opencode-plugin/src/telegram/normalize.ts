@@ -1,6 +1,6 @@
 import type { BindingInboundMessage } from "../binding"
 import type { TelegramConfig } from "../config/telegram"
-import type { TelegramUpdate } from "./types"
+import type { TelegramChatType, TelegramUpdate } from "./types"
 
 export type TelegramNormalizedUpdate =
     | {
@@ -9,6 +9,7 @@ export type TelegramNormalizedUpdate =
       }
     | {
           kind: "message"
+          chatType: TelegramChatType
           message: BindingInboundMessage
       }
 
@@ -53,6 +54,7 @@ export function normalizeTelegramUpdate(
 
     return {
         kind: "message",
+        chatType: message.chat.type,
         message: {
             deliveryTarget: {
                 channel: "telegram",

@@ -38,5 +38,13 @@ function formatTelegramStatus(status: GatewayTelegramStatus): string {
         `live_probe_error=${status.liveProbeError ?? "none"}`,
         `bot_id=${status.liveBotId ?? status.lastBotId ?? "none"}`,
         `bot_username=${status.liveBotUsername ?? status.lastBotUsername ?? "none"}`,
+        `streaming_enabled=${status.streamingEnabled}`,
+        `last_draft_success_ms=${status.lastDraftSuccessMs ?? "none"}`,
+        `last_draft_success_utc=${formatOptionalUnixMsAsUtc(status.lastDraftSuccessMs)}`,
+        `last_draft_error_at_ms=${status.lastDraftErrorAtMs ?? "none"}`,
+        `last_draft_error=${status.lastDraftErrorMessage ?? "none"}`,
+        `last_stream_fallback_at_ms=${status.lastStreamFallbackAtMs ?? "none"}`,
+        `last_stream_fallback_utc=${formatOptionalUnixMsAsUtc(status.lastStreamFallbackAtMs)}`,
+        `last_stream_fallback_reason=${status.lastStreamFallbackReason ?? "none"}`,
     ].join("\n")
 }

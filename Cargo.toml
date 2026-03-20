@@ -1,6 +1,5 @@
 [workspace]
 members = ["crates/core", "crates/ffi", "crates/launcher"]
-exclude = ["target/boltffi_bindgen_type_resolution"]
 resolver = "3"
 
 [workspace.package]

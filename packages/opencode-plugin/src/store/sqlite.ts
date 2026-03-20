@@ -66,6 +66,10 @@ export class SqliteStore {
             .run(conversationKey, sessionId, recordedAtMs)
     }
 
+    deleteSessionBinding(conversationKey: string): void {
+        this.db.query("DELETE FROM session_bindings WHERE conversation_key = ?1;").run(conversationKey)
+    }
+
     appendJournal(entry: RuntimeJournalEntry): void {
         this.db
             .query(

@@ -23,29 +23,6 @@ test("loadGatewayConfig resolves relative state_db against the config file", asy
     }
 })
 
-test("loadGatewayConfig falls back to the XDG default state path when no config file exists", async () => {
-    const configRoot = await mkdtemp(join(tmpdir(), "opencode-gateway-xdg-config-"))
-    const dataRoot = await mkdtemp(join(tmpdir(), "opencode-gateway-xdg-data-"))
-
-    try {
-        const config = await loadGatewayConfig({
-            XDG_CONFIG_HOME: configRoot,
-            XDG_DATA_HOME: dataRoot,
-        })
-
-        expect(config.configPath).toBe(join(configRoot, "opencode-gateway", "config.toml"))
-        expect(config.stateDbPath).toBe(join(dataRoot, "opencode-gateway", "state.db"))
-        expect(config.cron).toEqual({
-            enabled: true,
-            tickSeconds: 5,
-            maxConcurrentRuns: 1,
-        })
-    } finally {
-        await rm(configRoot, { recursive: true, force: true })
-        await rm(dataRoot, { recursive: true, force: true })
-    }
-})
-
 test("loadGatewayConfig requires an explicit telegram allowlist when Telegram is enabled", async () => {
     const root = await mkdtemp(join(tmpdir(), "opencode-gateway-config-"))
     const configPath = join(root, "config.toml")

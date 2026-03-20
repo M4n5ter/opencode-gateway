@@ -1,7 +1,11 @@
 use std::error::Error;
 use std::fs;
+use std::io::{Read, Write};
+use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
+use std::thread;
+use std::time::Duration;
 
 use opencode_gateway_core::GatewayEngine;
 
@@ -114,12 +118,63 @@ fn run_serve() -> Result<(), Box<dyn Error>> {
         .stderr(Stdio::inherit())
         .spawn()?;
 
+    warm_project_instance(&project_root);
+
     let exit_status = child.wait()?;
     if !exit_status.success() {
         return Err(format!("opencode serve exited with status {exit_status}").into());
     }
 
     Ok(())
+}
+
+fn warm_project_instance(project_root: &Path) {
+    let encoded_directory = percent_encode(project_root.to_string_lossy().as_bytes());
+    let request_path = format!("/experimental/tool/ids?directory={encoded_directory}");
+
+    for _ in 0..30 {
+        match http_get("127.0.0.1", 4096, &request_path) {
+            Ok(response) if response.starts_with("HTTP/1.1 200") || response.starts_with("HTTP/1.0 200") => return,
+            Ok(_) | Err(_) => thread::sleep(Duration::from_millis(250)),
+        }
+    }
+
+    eprintln!(
+        "warning: failed to warm the project instance automatically; the plugin may stay idle until the first project-scoped request"
+    );
+}
+
+fn http_get(host: &str, port: u16, path: &str) -> Result<String, Box<dyn Error>> {
+    let mut stream = TcpStream::connect((host, port))?;
+    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(2)))?;
+    write!(
+        stream,
+        "GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\n\r\n"
+    )?;
+    stream.flush()?;
+
+    let mut response = String::new();
+    stream.read_to_string(&mut response)?;
+    Ok(response)
+}
+
+fn percent_encode(bytes: &[u8]) -> String {
+    let mut encoded = String::with_capacity(bytes.len());
+
+    for byte in bytes {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(char::from(*byte));
+            }
+            _ => {
+                encoded.push('%');
+                encoded.push_str(&format!("{byte:02X}"));
+            }
+        }
+    }
+
+    encoded
 }
 
 fn run_doctor() -> Result<(), Box<dyn Error>> {

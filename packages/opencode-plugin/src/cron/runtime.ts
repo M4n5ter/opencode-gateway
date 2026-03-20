@@ -1,7 +1,8 @@
-import type { BindingCronJobSpec, BindingLoggerHost, BindingRuntimeReport, GatewayBindingHandle } from "../binding"
+import type { BindingCronJobSpec, BindingLoggerHost, BindingRuntimeReport, GatewayContract } from "../binding"
 import type { CronConfig } from "../config/cron"
 import type { GatewayExecutorLike } from "../runtime/executor"
 import type { CronJobRecord, PersistCronJobInput, SqliteStore } from "../store/sqlite"
+import { formatError } from "../utils/error"
 
 export type UpsertCronJobInput = {
     id: string
@@ -19,7 +20,7 @@ export class GatewayCronRuntime {
 
     constructor(
         private readonly executor: GatewayExecutorLike,
-        private readonly binding: GatewayBindingHandle,
+        private readonly contract: GatewayContract,
         private readonly store: SqliteStore,
         private readonly logger: BindingLoggerHost,
         private readonly config: CronConfig,
@@ -55,10 +56,7 @@ export class GatewayCronRuntime {
     upsertJob(input: UpsertCronJobInput): CronJobRecord {
         const normalized = normalizeUpsertInput(input)
         const recordedAtMs = Date.now()
-        const nextRunAtMs = toSafeInteger(
-            this.binding.nextCronRunAt(toBindingCronJobSpec(normalized), BigInt(recordedAtMs)),
-            "next cron run at",
-        )
+        const nextRunAtMs = computeNextRunAt(this.contract, normalized, recordedAtMs)
 
         this.store.upsertCronJob({
             ...normalized,
@@ -106,7 +104,7 @@ export class GatewayCronRuntime {
 
         for (const job of this.store.listOverdueCronJobs(nowMs)) {
             try {
-                const nextRunAtMs = computeNextRunAt(this.binding, job, nowMs)
+                const nextRunAtMs = computeNextRunAt(this.contract, job, nowMs)
                 this.store.updateCronJobNextRun(job.id, nextRunAtMs, nowMs)
             } catch (error) {
                 this.logger.log("error", `failed to rebase cron job ${job.id}: ${formatError(error)}`)
@@ -148,7 +146,7 @@ export class GatewayCronRuntime {
     ): Promise<BindingRuntimeReport> {
         const startedAtMs = Date.now()
         if (nextRunBaseMs !== null) {
-            const nextRunAtMs = computeNextRunAt(this.binding, job, Math.max(nextRunBaseMs, scheduledForMs))
+            const nextRunAtMs = computeNextRunAt(this.contract, job, Math.max(nextRunBaseMs, scheduledForMs))
             this.store.updateCronJobNextRun(job.id, nextRunAtMs, startedAtMs)
         }
 
@@ -246,21 +244,20 @@ function toBindingCronJobSpec(
     }
 }
 
-function computeNextRunAt(binding: GatewayBindingHandle, job: CronJobRecord, afterMs: number): number {
-    return toSafeInteger(binding.nextCronRunAt(toBindingCronJobSpec(job), BigInt(afterMs)), "next cron run at")
-}
-
-function toSafeInteger(value: bigint, field: string): number {
-    const asNumber = Number(value)
-    if (!Number.isSafeInteger(asNumber) || asNumber < 0) {
-        throw new Error(`${field} is out of range for JavaScript: ${value}`)
+function computeNextRunAt(
+    contract: GatewayContract,
+    job: Pick<
+        CronJobRecord | PersistCronJobInput,
+        "id" | "schedule" | "prompt" | "deliveryChannel" | "deliveryTarget" | "deliveryTopic"
+    >,
+    afterMs: number,
+): number {
+    const nextRunAt = contract.nextCronRunAt(toBindingCronJobSpec(job), afterMs)
+    if (!Number.isSafeInteger(nextRunAt) || nextRunAt < 0) {
+        throw new Error(`next cron run at is out of range for JavaScript: ${nextRunAt}`)
     }
 
-    return asNumber
-}
-
-function formatError(error: unknown): string {
-    return error instanceof Error ? error.message : String(error)
+    return nextRunAt
 }
 
 function sleep(durationMs: number): Promise<void> {

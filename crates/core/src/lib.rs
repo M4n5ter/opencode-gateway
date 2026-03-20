@@ -5,6 +5,7 @@ pub mod conversation;
 pub mod cron;
 pub mod engine;
 pub mod message;
+pub mod progressive;
 pub mod status;
 
 pub use channel::{ChannelKind, TargetKey};
@@ -15,4 +16,5 @@ pub use message::{
     DeliveryTarget, InboundMessage, MessageValidationError, OutboundMessage, PromptRequest,
     PromptSource,
 };
+pub use progressive::{ProgressiveDirective, ProgressiveMode, ProgressiveTextState};
 pub use status::GatewayStatus;
