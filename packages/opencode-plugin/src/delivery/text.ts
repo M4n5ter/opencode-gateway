@@ -1,7 +1,7 @@
 import type { BindingDeliveryTarget, GatewayBindingModule, ProgressiveTextHandle } from "../binding"
 import type { GatewayTransportHost } from "../host/transport"
 import type { SqliteStore } from "../store/sqlite"
-import { recordTelegramStreamFallback } from "../telegram/state"
+import { recordTelegramPreviewEmit, recordTelegramStreamFallback } from "../telegram/state"
 import { createDraftId, type DeliveryModePreference, type TelegramProgressiveSupport } from "./telegram"
 
 const DEFAULT_FLUSH_INTERVAL_MS = 400
@@ -55,7 +55,9 @@ export class GatewayTextDelivery {
             return new OneshotTextDeliverySession(target, this.transport)
         }
 
-        return new ProgressiveTextDeliverySession(target, this.transport, this.telegramSupport, state)
+        const session = new ProgressiveTextDeliverySession(target, this.transport, this.telegramSupport, this.store, state)
+        session.start()
+        return session
     }
 
     private createProgressiveHandle(): ProgressiveTextHandle | null {
@@ -104,8 +106,13 @@ class ProgressiveTextDeliverySession implements TextDeliverySession {
         private readonly target: BindingDeliveryTarget,
         private readonly transport: GatewayTransportHost,
         private readonly telegramSupport: TelegramProgressiveSupport,
+        private readonly store: SqliteStore,
         private readonly state: ProgressiveTextHandle,
     ) {}
+
+    start(): void {
+        this.telegramSupport.startTyping(this.target)
+    }
 
     async preview(text: string): Promise<void> {
         if (this.previewFailed || this.closed) {
@@ -124,6 +131,7 @@ class ProgressiveTextDeliverySession implements TextDeliverySession {
                 }
 
                 try {
+                    recordTelegramPreviewEmit(this.store, Date.now())
                     await this.telegramSupport.sendDraft(this.target, this.draftId, directive.text)
                     this.previewDelivered = true
                 } catch {
@@ -155,6 +163,9 @@ class ProgressiveTextDeliverySession implements TextDeliverySession {
 
     private resolveFinalBody(finalText: string): string | null {
         if (!this.previewDelivered) {
+            if (!this.previewFailed) {
+                recordTelegramStreamFallback(this.store, "preview_not_established", Date.now())
+            }
             return finalText.trim().length === 0 ? null : finalText
         }
 

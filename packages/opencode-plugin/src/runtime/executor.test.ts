@@ -81,7 +81,9 @@ test("GatewayExecutor retries when progressive execution reports a stale OpenCod
                 async runPrompt(): Promise<BindingPromptResult> {
                     throw new Error("unused")
                 },
-                async runPromptWithSnapshots(request: BindingPromptRequest): Promise<{ sessionId: string; responseText: string }> {
+                async runPromptWithSnapshots(
+                    request: BindingPromptRequest,
+                ): Promise<{ sessionId: string; responseText: string }> {
                     seenSessionIds.push(request.sessionId)
 
                     if (request.sessionId === "ses_stale") {
@@ -144,7 +146,9 @@ test("GatewayExecutor retries when a parse error wraps a stale OpenCode session 
                 async runPrompt(): Promise<BindingPromptResult> {
                     throw new Error("unused")
                 },
-                async runPromptWithSnapshots(request: BindingPromptRequest): Promise<{ sessionId: string; responseText: string }> {
+                async runPromptWithSnapshots(
+                    request: BindingPromptRequest,
+                ): Promise<{ sessionId: string; responseText: string }> {
                     seenSessionIds.push(request.sessionId)
 
                     if (request.sessionId === "ses_stale") {

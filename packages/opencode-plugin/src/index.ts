@@ -2,7 +2,6 @@ import type { Plugin } from "@opencode-ai/plugin"
 
 import { loadGatewayBindingModule } from "./binding"
 import { createGatewayRuntime } from "./gateway"
-import type { OpencodeRuntimeEvent } from "./opencode/events"
 import { createCronListTool } from "./tools/cron-list"
 import { createCronRemoveTool } from "./tools/cron-remove"
 import { createCronRunTool } from "./tools/cron-run"
@@ -21,9 +20,6 @@ export const OpencodeGatewayPlugin: Plugin = async (input) => {
     const runtime = await createGatewayRuntime(gatewayModule, input)
 
     return {
-        event: async ({ event }) => {
-            await runtime.handleEvent(event as OpencodeRuntimeEvent)
-        },
         tool: {
             cron_list: createCronListTool(runtime.cron),
             cron_remove: createCronRemoveTool(runtime.cron),

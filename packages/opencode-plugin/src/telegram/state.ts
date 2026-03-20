@@ -16,6 +16,7 @@ const TELEGRAM_LAST_BOT_USERNAME_KEY = "telegram.last_bot_username"
 const TELEGRAM_LAST_DRAFT_SUCCESS_MS_KEY = "telegram.last_draft_success_ms"
 const TELEGRAM_LAST_DRAFT_ERROR_AT_MS_KEY = "telegram.last_draft_error_at_ms"
 const TELEGRAM_LAST_DRAFT_ERROR_MESSAGE_KEY = "telegram.last_draft_error_message"
+const TELEGRAM_LAST_PREVIEW_EMIT_MS_KEY = "telegram.last_preview_emit_ms"
 const TELEGRAM_LAST_STREAM_FALLBACK_AT_MS_KEY = "telegram.last_stream_fallback_at_ms"
 const TELEGRAM_LAST_STREAM_FALLBACK_REASON_KEY = "telegram.last_stream_fallback_reason"
 
@@ -23,6 +24,7 @@ export type TelegramStreamingFallbackReason =
     | "non_private_chat"
     | "progressive_handle_unavailable"
     | "draft_send_failed"
+    | "preview_not_established"
 
 export type TelegramHealthSnapshot = {
     updateOffset: number | null
@@ -40,6 +42,7 @@ export type TelegramHealthSnapshot = {
     lastDraftSuccessMs: number | null
     lastDraftErrorAtMs: number | null
     lastDraftErrorMessage: string | null
+    lastPreviewEmitMs: number | null
     lastStreamFallbackAtMs: number | null
     lastStreamFallbackReason: TelegramStreamingFallbackReason | null
 }
@@ -61,6 +64,7 @@ export function readTelegramHealthSnapshot(store: SqliteStore): TelegramHealthSn
         lastDraftSuccessMs: readStoredInteger(store, TELEGRAM_LAST_DRAFT_SUCCESS_MS_KEY),
         lastDraftErrorAtMs: readStoredInteger(store, TELEGRAM_LAST_DRAFT_ERROR_AT_MS_KEY),
         lastDraftErrorMessage: readStoredText(store, TELEGRAM_LAST_DRAFT_ERROR_MESSAGE_KEY),
+        lastPreviewEmitMs: readStoredInteger(store, TELEGRAM_LAST_PREVIEW_EMIT_MS_KEY),
         lastStreamFallbackAtMs: readStoredInteger(store, TELEGRAM_LAST_STREAM_FALLBACK_AT_MS_KEY),
         lastStreamFallbackReason: readStoredFallbackReason(store),
     }
@@ -110,6 +114,10 @@ export function recordTelegramDraftSuccess(store: SqliteStore, recordedAtMs: num
 export function recordTelegramDraftFailure(store: SqliteStore, message: string, recordedAtMs: number): void {
     store.putStateValue(TELEGRAM_LAST_DRAFT_ERROR_AT_MS_KEY, String(recordedAtMs), recordedAtMs)
     store.putStateValue(TELEGRAM_LAST_DRAFT_ERROR_MESSAGE_KEY, message, recordedAtMs)
+}
+
+export function recordTelegramPreviewEmit(store: SqliteStore, recordedAtMs: number): void {
+    store.putStateValue(TELEGRAM_LAST_PREVIEW_EMIT_MS_KEY, String(recordedAtMs), recordedAtMs)
 }
 
 export function recordTelegramStreamFallback(
@@ -172,6 +180,7 @@ function readStoredFallbackReason(store: SqliteStore): TelegramStreamingFallback
         case "non_private_chat":
         case "progressive_handle_unavailable":
         case "draft_send_failed":
+        case "preview_not_established":
             return value
         default:
             throw new Error(`stored ${TELEGRAM_LAST_STREAM_FALLBACK_REASON_KEY} is invalid: ${value}`)

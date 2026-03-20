@@ -25,6 +25,9 @@ test("telegram status performs a live getMe probe and persists bot metadata", as
                 async sendMessage(): Promise<void> {
                     throw new Error("unused")
                 },
+                async sendChatAction(): Promise<void> {
+                    throw new Error("unused")
+                },
                 async getChat() {
                     throw new Error("unused")
                 },
@@ -48,6 +51,7 @@ test("telegram status performs a live getMe probe and persists bot metadata", as
                 allowedUsers: ["7"],
             },
             null,
+            createEventStream(),
         )
 
         const status = await runtime.status()
@@ -56,6 +60,8 @@ test("telegram status performs a live getMe probe and persists bot metadata", as
         expect(status.liveProbe).toBe("ok")
         expect(status.liveBotId).toBe("42")
         expect(status.liveBotUsername).toBe("gateway_bot")
+        expect(status.opencodeEventStreamConnected).toBe(true)
+        expect(status.lastEventStreamError).toBeNull()
         expect(store.getStateValue("telegram.last_bot_username")).toBe("gateway_bot")
     } finally {
         db.close()
@@ -77,6 +83,9 @@ test("telegram sendTest uses explicit targets and records send health", async ()
                     throw new Error("unused")
                 },
                 async sendMessage(): Promise<void> {
+                    throw new Error("unused")
+                },
+                async sendChatAction(): Promise<void> {
                     throw new Error("unused")
                 },
                 async getChat() {
@@ -111,6 +120,7 @@ test("telegram sendTest uses explicit targets and records send health", async ()
                 allowedUsers: [],
             },
             null,
+            createEventStream(),
         )
 
         const result = await runtime.sendTest("-100123", "42", "hello test", "auto")
@@ -129,4 +139,15 @@ test("telegram sendTest uses explicit targets and records send health", async ()
 
 class MemoryLogger implements BindingLoggerHost {
     log(_level: string, _message: string): void {}
+}
+
+function createEventStream() {
+    return {
+        isConnected() {
+            return true
+        },
+        lastStreamError() {
+            return null
+        },
+    }
 }

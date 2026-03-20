@@ -9,7 +9,6 @@ import type {
 import type { GatewayTextDelivery, TextDeliverySession } from "../delivery/text"
 import type { GatewayOpencodeHost } from "../host/opencode"
 import type { RuntimeJournalEntry, SqliteStore } from "../store/sqlite"
-import { formatError } from "../utils/error"
 
 type PromptExecutionPlan = {
     conversationKey: string

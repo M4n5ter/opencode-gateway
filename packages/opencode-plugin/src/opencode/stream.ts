@@ -5,6 +5,8 @@ import type { OpencodeEventHub } from "./events"
 type OpencodeClient = PluginInput["client"]
 type TextSnapshotHandler = (text: string) => Promise<void> | void
 
+const PREVIEW_ESTABLISH_WINDOW_MS = 500
+
 export async function streamPromptText(
     client: OpencodeClient,
     directory: string,
@@ -13,7 +15,20 @@ export async function streamPromptText(
     prompt: string,
     onSnapshot: TextSnapshotHandler,
 ): Promise<string> {
-    const pendingPrompt = events.registerPrompt(sessionId, onSnapshot)
+    let previewEstablished = false
+    let resolvePreviewEstablished: (() => void) | null = null
+    const previewEstablishedPromise = new Promise<void>((resolve) => {
+        resolvePreviewEstablished = resolve
+    })
+    const pendingPrompt = events.registerPrompt(sessionId, async (text) => {
+        if (!previewEstablished) {
+            previewEstablished = true
+            resolvePreviewEstablished?.()
+            resolvePreviewEstablished = null
+        }
+
+        await onSnapshot(text)
+    })
 
     try {
         const response = await client.session.prompt({
@@ -25,6 +40,10 @@ export async function streamPromptText(
             responseStyle: "data",
             throwOnError: true,
         })
+
+        if (!previewEstablished) {
+            await Promise.race([previewEstablishedPromise, Bun.sleep(PREVIEW_ESTABLISH_WINDOW_MS)])
+        }
 
         const payload = unwrapData<PromptResponse>(response)
         return await readFinalResponseText(client, directory, sessionId, payload)

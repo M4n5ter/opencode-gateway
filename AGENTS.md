@@ -95,8 +95,8 @@ This package now:
 - runs Telegram long polling with explicit allowlists
 - runs the cron scheduler loop
 - executes OpenCode sessions through the plugin SDK
-- subscribes to plugin `event` hooks and correlates preview events per session while
-  binding them to the assistant message selected for the current prompt
+- subscribes to the OpenCode SDK event stream and correlates preview events per session
+  while binding them to the assistant message selected for the current prompt
 - delivers Telegram replies and private-chat draft previews
 - exposes gateway, cron, and Telegram operational tools
 

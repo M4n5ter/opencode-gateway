@@ -40,6 +40,14 @@ export class TelegramBotClient {
         })
     }
 
+    async sendChatAction(chatId: string, action: string, messageThreadId: string | null): Promise<void> {
+        await this.call("sendChatAction", {
+            chat_id: chatId,
+            action,
+            message_thread_id: parseMessageThreadId(messageThreadId),
+        })
+    }
+
     async sendMessageDraft(
         chatId: string,
         draftId: number,
@@ -90,11 +98,16 @@ export class TelegramBotClient {
 
 export type TelegramPollingClientLike = Pick<TelegramBotClient, "getUpdates">
 export type TelegramSendClientLike = Pick<TelegramBotClient, "sendMessage">
+export type TelegramChatActionClientLike = Pick<TelegramBotClient, "sendChatAction">
 export type TelegramProbeClientLike = Pick<TelegramBotClient, "getMe">
 export type TelegramChatClientLike = Pick<TelegramBotClient, "getChat">
 export type TelegramDraftClientLike = Pick<TelegramBotClient, "sendMessageDraft">
 export type TelegramOpsClientLike = TelegramSendClientLike & TelegramProbeClientLike
-export type TelegramDeliveryClientLike = TelegramSendClientLike & TelegramDraftClientLike & TelegramChatClientLike
+export type TelegramDeliveryClientLike =
+    & TelegramSendClientLike
+    & TelegramDraftClientLike
+    & TelegramChatClientLike
+    & TelegramChatActionClientLike
 export type TelegramRuntimeClientLike = TelegramOpsClientLike & TelegramDeliveryClientLike
 
 function parseMessageThreadId(value: string | null): number | undefined {

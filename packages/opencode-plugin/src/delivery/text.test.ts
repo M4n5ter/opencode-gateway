@@ -17,12 +17,16 @@ test("GatewayTextDelivery uses draft preview for cached private chats", async ()
         store.putStateValue("telegram.chat_type:42", "private", Date.now())
 
         const calls = {
+            typing: 0,
             drafts: [] as string[],
             sends: [] as string[],
         }
         const client = {
             async getChat() {
                 throw new Error("unused")
+            },
+            async sendChatAction(): Promise<void> {
+                calls.typing += 1
             },
             async sendMessage(_chatId: string, text: string): Promise<void> {
                 calls.sends.push(text)
@@ -54,6 +58,7 @@ test("GatewayTextDelivery uses draft preview for cached private chats", async ()
 
         expect(calls.drafts).toEqual(["hello"])
         expect(calls.sends).toEqual(["hello world"])
+        expect(calls.typing).toBe(1)
     } finally {
         db.close()
     }
@@ -68,6 +73,7 @@ test("GatewayTextDelivery falls back to oneshot for non-private Telegram chats",
 
         const calls = {
             getChat: 0,
+            typing: 0,
             drafts: 0,
             sends: 0,
         }
@@ -78,6 +84,9 @@ test("GatewayTextDelivery falls back to oneshot for non-private Telegram chats",
                     id: -100123,
                     type: "supergroup",
                 }
+            },
+            async sendChatAction(): Promise<void> {
+                calls.typing += 1
             },
             async sendMessage(): Promise<void> {
                 calls.sends += 1
@@ -106,6 +115,7 @@ test("GatewayTextDelivery falls back to oneshot for non-private Telegram chats",
 
         expect(result.mode).toBe("oneshot")
         expect(calls.getChat).toBe(1)
+        expect(calls.typing).toBe(0)
         expect(calls.drafts).toBe(0)
         expect(calls.sends).toBe(1)
         expect(store.getStateValue("telegram.last_stream_fallback_reason")).toBe("non_private_chat")
@@ -127,6 +137,7 @@ test("GatewayTextDelivery rejects forced stream mode for non-private chats", asy
                     type: "supergroup",
                 }
             },
+            async sendChatAction(): Promise<void> {},
             async sendMessage(): Promise<void> {},
             async sendMessageDraft(): Promise<void> {},
         }
@@ -163,12 +174,16 @@ test("GatewayTextDelivery falls back to oneshot when the progressive handle is u
         store.putStateValue("telegram.chat_type:42", "private", Date.now())
 
         const calls = {
+            typing: 0,
             drafts: 0,
             sends: [] as string[],
         }
         const client = {
             async getChat() {
                 throw new Error("unused")
+            },
+            async sendChatAction(): Promise<void> {
+                calls.typing += 1
             },
             async sendMessage(_chatId: string, text: string): Promise<void> {
                 calls.sends.push(text)
@@ -207,6 +222,7 @@ test("GatewayTextDelivery falls back to oneshot when the progressive handle is u
         )
 
         expect(result.mode).toBe("oneshot")
+        expect(calls.typing).toBe(0)
         expect(calls.drafts).toBe(0)
         expect(calls.sends).toEqual(["hello world"])
         expect(store.getStateValue("telegram.last_stream_fallback_reason")).toBe("progressive_handle_unavailable")
@@ -224,11 +240,15 @@ test("GatewayTextDelivery records a draft fallback when Telegram draft preview f
         store.putStateValue("telegram.chat_type:42", "private", Date.now())
 
         const calls = {
+            typing: 0,
             sends: [] as string[],
         }
         const client = {
             async getChat() {
                 throw new Error("unused")
+            },
+            async sendChatAction(): Promise<void> {
+                calls.typing += 1
             },
             async sendMessage(_chatId: string, text: string): Promise<void> {
                 calls.sends.push(text)
@@ -256,8 +276,73 @@ test("GatewayTextDelivery records a draft fallback when Telegram draft preview f
         )
 
         expect(result.mode).toBe("progressive")
+        expect(calls.typing).toBe(1)
         expect(calls.sends).toEqual(["hello world"])
         expect(store.getStateValue("telegram.last_stream_fallback_reason")).toBe("draft_send_failed")
+    } finally {
+        db.close()
+    }
+})
+
+test("GatewayTextDelivery records preview_not_established when no preview is delivered", async () => {
+    const db = new Database(":memory:")
+
+    try {
+        migrateGatewayDatabase(db)
+        const store = new SqliteStore(db)
+        store.putStateValue("telegram.chat_type:42", "private", Date.now())
+
+        const sends: string[] = []
+        const client = {
+            async getChat() {
+                throw new Error("unused")
+            },
+            async sendChatAction(): Promise<void> {},
+            async sendMessage(_chatId: string, text: string): Promise<void> {
+                sends.push(text)
+            },
+            async sendMessageDraft(): Promise<void> {
+                throw new Error("unused")
+            },
+        }
+
+        const delivery = new GatewayTextDelivery(
+            {
+                gatewayStatus: createBindingModule().gatewayStatus,
+                nextCronRunAt: createBindingModule().nextCronRunAt,
+                ProgressiveTextHandle: {
+                    progressive() {
+                        return {
+                            observeSnapshot() {
+                                return { kind: "noop", text: null }
+                            },
+                            finish(finalText: string) {
+                                return { kind: "final", text: finalText }
+                            },
+                        }
+                    },
+                    oneshot: createBindingModule().ProgressiveTextHandle.oneshot,
+                },
+            },
+            new GatewayTransportHost(client, store),
+            store,
+            new TelegramProgressiveSupport(client, store, createLogger()),
+        )
+
+        const session = await delivery.open(
+            {
+                channel: "telegram",
+                target: "42",
+                topic: null,
+            },
+            "auto",
+        )
+
+        await session.preview("hello")
+        await session.finish("hello world")
+
+        expect(sends).toEqual(["hello world"])
+        expect(store.getStateValue("telegram.last_stream_fallback_reason")).toBe("preview_not_established")
     } finally {
         db.close()
     }
@@ -280,6 +365,9 @@ test("GatewayTextDelivery does not emit late drafts after finish starts", async 
         const client = {
             async getChat() {
                 throw new Error("unused")
+            },
+            async sendChatAction(): Promise<void> {
+                calls.push("typing")
             },
             async sendMessage(_chatId: string, text: string): Promise<void> {
                 calls.push(`send:${text}`)
@@ -316,7 +404,7 @@ test("GatewayTextDelivery does not emit late drafts after finish starts", async 
         await preview
         await finish
 
-        expect(calls).toEqual(["draft:hello", "send:hello world"])
+        expect(calls).toEqual(["typing", "draft:hello", "send:hello world"])
     } finally {
         db.close()
     }

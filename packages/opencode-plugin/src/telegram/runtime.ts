@@ -17,6 +17,10 @@ import {
 import type { TelegramBotProfile } from "./types"
 
 type EnabledTelegramConfig = Extract<TelegramConfig, { enabled: true }>
+type OpencodeEventStreamLike = {
+    isConnected(): boolean
+    lastStreamError(): string | null
+}
 
 export type GatewayTelegramStatus = TelegramHealthSnapshot & {
     enabled: boolean
@@ -29,6 +33,8 @@ export type GatewayTelegramStatus = TelegramHealthSnapshot & {
     liveBotId: string | null
     liveBotUsername: string | null
     streamingEnabled: boolean
+    opencodeEventStreamConnected: boolean
+    lastEventStreamError: string | null
 }
 
 export type TelegramSendTestResult = {
@@ -49,6 +55,7 @@ export class GatewayTelegramRuntime {
         private readonly logger: BindingLoggerHost,
         private readonly config: TelegramConfig,
         private readonly polling: TelegramPollingService | null,
+        private readonly opencodeEvents: OpencodeEventStreamLike,
     ) {}
 
     isEnabled(): boolean {
@@ -82,6 +89,8 @@ export class GatewayTelegramRuntime {
                 liveBotId: null,
                 liveBotUsername: null,
                 streamingEnabled: false,
+                opencodeEventStreamConnected: this.opencodeEvents.isConnected(),
+                lastEventStreamError: this.opencodeEvents.lastStreamError(),
             }
         }
 
@@ -97,6 +106,7 @@ export class GatewayTelegramRuntime {
                 "ok",
                 null,
                 bot,
+                this.opencodeEvents,
             )
         } catch (error) {
             const message = formatError(error)
@@ -111,6 +121,7 @@ export class GatewayTelegramRuntime {
                 "failed",
                 message,
                 null,
+                this.opencodeEvents,
             )
         }
     }
@@ -168,6 +179,7 @@ function buildEnabledStatus(
     liveProbe: "ok" | "failed",
     liveProbeError: string | null,
     bot: TelegramBotProfile | null,
+    opencodeEvents: OpencodeEventStreamLike,
 ): GatewayTelegramStatus {
     return {
         ...snapshot,
@@ -181,6 +193,8 @@ function buildEnabledStatus(
         liveBotId: bot ? String(bot.id) : null,
         liveBotUsername: bot?.username ?? null,
         streamingEnabled: true,
+        opencodeEventStreamConnected: opencodeEvents.isConnected(),
+        lastEventStreamError: opencodeEvents.lastStreamError(),
     }
 }
 

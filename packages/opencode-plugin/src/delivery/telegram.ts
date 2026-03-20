@@ -62,6 +62,16 @@ export class TelegramProgressiveSupport {
         }
     }
 
+    startTyping(target: BindingDeliveryTarget): void {
+        if (this.client === null) {
+            return
+        }
+
+        void this.client.sendChatAction(target.target, "typing", target.topic).catch(() => {
+            // Typing hints are best-effort only.
+        })
+    }
+
     private async isPrivateChat(chatId: string): Promise<boolean> {
         const cachedChatType = readTelegramChatType(this.store, chatId)
         if (cachedChatType !== null) {

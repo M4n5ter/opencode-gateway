@@ -8,7 +8,7 @@ import { GatewayTextDelivery } from "./delivery/text"
 import { ConsoleLoggerHost } from "./host/noop"
 import { GatewayOpencodeHost } from "./host/opencode"
 import { GatewayTransportHost } from "./host/transport"
-import type { OpencodeRuntimeEvent } from "./opencode/events"
+import { OpencodeEventStream } from "./opencode/event-stream"
 import { OpencodeEventHub } from "./opencode/events"
 import { GatewayExecutor } from "./runtime/executor"
 import { openSqliteStore } from "./store/sqlite"
@@ -35,7 +35,6 @@ export class GatewayPluginRuntime {
         readonly executor: GatewayExecutor,
         readonly cron: GatewayCronRuntime,
         readonly telegram: GatewayTelegramRuntime,
-        private readonly opencodeEvents: OpencodeEventHub,
     ) {}
 
     status(): GatewayPluginStatus {
@@ -54,10 +53,6 @@ export class GatewayPluginRuntime {
             telegramAllowlistMode: this.telegram.allowlistMode(),
         }
     }
-
-    async handleEvent(event: OpencodeRuntimeEvent): Promise<void> {
-        await this.opencodeEvents.handleEvent(event)
-    }
 }
 
 export async function createGatewayRuntime(
@@ -75,6 +70,7 @@ export async function createGatewayRuntime(
     const delivery = new GatewayTextDelivery(module, transport, store, progressiveSupport)
     const executor = new GatewayExecutor(store, opencode, delivery, logger)
     const cron = new GatewayCronRuntime(executor, module, store, logger, config.cron)
+    const eventStream = new OpencodeEventStream(input.client, input.directory, opencodeEvents, logger)
     const telegramPolling =
         config.telegram.enabled && telegramClient !== null
             ? new TelegramPollingService(telegramClient, executor, store, logger, config.telegram)
@@ -86,9 +82,11 @@ export async function createGatewayRuntime(
         logger,
         config.telegram,
         telegramPolling,
+        eventStream,
     )
+    eventStream.start()
     cron.start()
     telegram.start()
 
-    return new GatewayPluginRuntime(module, executor, cron, telegram, opencodeEvents)
+    return new GatewayPluginRuntime(module, executor, cron, telegram)
 }
