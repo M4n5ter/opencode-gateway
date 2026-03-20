@@ -33,6 +33,11 @@ impl GatewayBinding {
         self.runtime.status().into()
     }
 
+    pub fn next_cron_run_at(&self, job: BindingCronJobSpec, after_ms: u64) -> Result<u64, String> {
+        let job = opencode_gateway_core::CronJobSpec::try_from(job)?;
+        job.next_run_at(after_ms).map_err(|error| error.to_string())
+    }
+
     pub async fn handle_inbound_message(
         &self,
         message: BindingInboundMessage,
@@ -198,6 +203,9 @@ mod tests {
             id: "nightly".to_owned(),
             schedule: "0 0 * * *".to_owned(),
             prompt: "Summarize work".to_owned(),
+            delivery_channel: None,
+            delivery_target: None,
+            delivery_topic: None,
         }))
         .expect("cron dispatch");
 
@@ -224,5 +232,26 @@ mod tests {
         assert_eq!(report.conversation_key, "telegram:123:topic:42");
         assert_eq!(report.response_text, "reply from agent");
         assert!(report.delivered);
+    }
+
+    #[test]
+    fn binding_computes_next_cron_occurrence() {
+        let binding = build_binding("unused");
+
+        let next = binding
+            .next_cron_run_at(
+                BindingCronJobSpec {
+                    id: "nightly".to_owned(),
+                    schedule: "0 9 * * *".to_owned(),
+                    prompt: "Summarize work".to_owned(),
+                    delivery_channel: None,
+                    delivery_target: None,
+                    delivery_topic: None,
+                },
+                1_735_689_600_000,
+            )
+            .expect("next cron occurrence");
+
+        assert_eq!(next, 1_735_722_000_000);
     }
 }

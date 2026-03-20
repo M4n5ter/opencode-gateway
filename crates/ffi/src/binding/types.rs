@@ -77,13 +77,61 @@ pub struct BindingCronJobSpec {
     pub id: String,
     pub schedule: String,
     pub prompt: String,
+    pub delivery_channel: Option<String>,
+    pub delivery_target: Option<String>,
+    pub delivery_topic: Option<String>,
+}
+
+impl From<&CronJobSpec> for BindingCronJobSpec {
+    fn from(value: &CronJobSpec) -> Self {
+        let (delivery_channel, delivery_target, delivery_topic) = match &value.delivery_target {
+            Some(target) => (
+                Some(target.channel.as_str().to_owned()),
+                Some(target.target.as_str().to_owned()),
+                target.topic.clone(),
+            ),
+            None => (None, None, None),
+        };
+
+        Self {
+            id: value.id.as_str().to_owned(),
+            schedule: value.schedule.clone(),
+            prompt: value.prompt.clone(),
+            delivery_channel,
+            delivery_target,
+            delivery_topic,
+        }
+    }
 }
 
 impl TryFrom<BindingCronJobSpec> for CronJobSpec {
     type Error = String;
 
     fn try_from(value: BindingCronJobSpec) -> Result<Self, Self::Error> {
-        CronJobSpec::new(value.id, value.schedule, value.prompt).map_err(|error| error.to_string())
+        let delivery_target = match (value.delivery_channel, value.delivery_target, value.delivery_topic) {
+            (None, None, topic) => {
+                if topic.as_deref().is_some_and(|value| !value.trim().is_empty()) {
+                    return Err(
+                        "cron delivery_topic requires delivery_channel and delivery_target".to_owned(),
+                    );
+                }
+                None
+            }
+            (Some(channel), Some(target), topic) => Some(BindingDeliveryTarget {
+                channel,
+                target,
+                topic,
+            }
+            .try_into()?),
+            (Some(_), None, _) | (None, Some(_), _) => {
+                return Err(
+                    "cron delivery_channel and delivery_target must be provided together".to_owned(),
+                )
+            }
+        };
+
+        CronJobSpec::with_delivery_target(value.id, value.schedule, value.prompt, delivery_target)
+            .map_err(|error| error.to_string())
     }
 }
 

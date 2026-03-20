@@ -35,6 +35,11 @@ test("loadGatewayConfig falls back to the XDG default state path when no config 
 
         expect(config.configPath).toBe(join(configRoot, "opencode-gateway", "config.toml"))
         expect(config.stateDbPath).toBe(join(dataRoot, "opencode-gateway", "state.db"))
+        expect(config.cron).toEqual({
+            enabled: true,
+            tickSeconds: 5,
+            maxConcurrentRuns: 1,
+        })
     } finally {
         await rm(configRoot, { recursive: true, force: true })
         await rm(dataRoot, { recursive: true, force: true })
@@ -91,6 +96,31 @@ test("loadGatewayConfig normalizes Telegram allowlist identifiers", async () => 
             allowedChats: ["-100123456", "-100999888"],
             allowedUsers: ["42", "77"],
         })
+        expect(config.cron).toEqual({
+            enabled: true,
+            tickSeconds: 5,
+            maxConcurrentRuns: 1,
+        })
+    } finally {
+        await rm(root, { recursive: true, force: true })
+    }
+})
+
+test("loadGatewayConfig validates cron scheduler settings", async () => {
+    const root = await mkdtemp(join(tmpdir(), "opencode-gateway-config-"))
+    const configPath = join(root, "config.toml")
+
+    try {
+        await writeFile(
+            configPath,
+            ["[cron]", "enabled = true", "tick_seconds = 0", "max_concurrent_runs = 0"].join("\n"),
+        )
+
+        await expect(
+            loadGatewayConfig({
+                OPENCODE_GATEWAY_CONFIG: configPath,
+            }),
+        ).rejects.toThrow("cron.tick_seconds must be greater than or equal to 1")
     } finally {
         await rm(root, { recursive: true, force: true })
     }

@@ -4,7 +4,7 @@ import { expect, test } from "bun:test"
 import { migrateGatewayDatabase } from "./migrations"
 import { SqliteStore } from "./sqlite"
 
-test("sqlite store persists session bindings and runtime journal entries", () => {
+test("sqlite store persists session bindings, offsets, and cron catalog state", () => {
     const db = new Database(":memory:")
 
     try {
@@ -19,28 +19,54 @@ test("sqlite store persists session bindings and runtime journal entries", () =>
             conversationKey: "cron:nightly",
             payload: { id: "nightly" },
         })
+        store.upsertCronJob({
+            id: "nightly",
+            schedule: "0 9 * * *",
+            prompt: "Summarize work",
+            deliveryChannel: "telegram",
+            deliveryTarget: "-100123",
+            deliveryTopic: "42",
+            enabled: true,
+            nextRunAtMs: 9000,
+            recordedAtMs: 4242,
+        })
 
         expect(store.getSessionBinding("cron:nightly")).toBe("session-1")
         expect(store.getTelegramUpdateOffset()).toBe(99)
-
-        const bindingRow = db
-            .query<{ session_id: string; updated_at_ms: number }, [string]>(
-                "SELECT session_id, updated_at_ms FROM session_bindings WHERE conversation_key = ?1;",
-            )
-            .get("cron:nightly")
-        const journalRow = db.query<{ total: number }, []>("SELECT COUNT(*) AS total FROM runtime_journal;").get()
-
-        expect(bindingRow).toEqual({
-            session_id: "session-1",
-            updated_at_ms: 4242,
+        expect(store.getCronJob("nightly")).toEqual({
+            id: "nightly",
+            schedule: "0 9 * * *",
+            prompt: "Summarize work",
+            deliveryChannel: "telegram",
+            deliveryTarget: "-100123",
+            deliveryTopic: "42",
+            enabled: true,
+            nextRunAtMs: 9000,
+            createdAtMs: 4242,
+            updatedAtMs: 4242,
         })
+
+        const runId = store.insertCronRun("nightly", 9000, 4242)
+        store.finishCronRun(runId, "succeeded", 5252, "ok", null)
+
+        const journalRow = db.query<{ total: number }, []>("SELECT COUNT(*) AS total FROM runtime_journal;").get()
+        const runRow = db
+            .query<{ status: string; response_text: string | null }, [number]>(
+                "SELECT status, response_text FROM cron_runs WHERE id = ?1;",
+            )
+            .get(runId)
+
         expect(journalRow?.total).toBe(1)
+        expect(runRow).toEqual({
+            status: "succeeded",
+            response_text: "ok",
+        })
     } finally {
         db.close()
     }
 })
 
-test("sqlite migration upgrades a v1 database to include kv_state", () => {
+test("sqlite migration upgrades a v2 database to include cron tables", () => {
     const db = new Database(":memory:")
 
     try {
@@ -62,15 +88,31 @@ test("sqlite migration upgrades a v1 database to include kv_state", () => {
             CREATE INDEX runtime_journal_kind_recorded_at_ms_idx
                 ON runtime_journal (kind, recorded_at_ms);
 
-            PRAGMA user_version = 1;
+            CREATE TABLE kv_state (
+                key TEXT PRIMARY KEY NOT NULL,
+                value TEXT NOT NULL,
+                updated_at_ms INTEGER NOT NULL
+            );
+
+            PRAGMA user_version = 2;
         `)
 
         migrateGatewayDatabase(db)
 
         const store = new SqliteStore(db)
-        store.putTelegramUpdateOffset(7, 1234)
+        store.upsertCronJob({
+            id: "nightly",
+            schedule: "0 9 * * *",
+            prompt: "Summarize work",
+            deliveryChannel: null,
+            deliveryTarget: null,
+            deliveryTopic: null,
+            enabled: true,
+            nextRunAtMs: 9000,
+            recordedAtMs: 1234,
+        })
 
-        expect(store.getTelegramUpdateOffset()).toBe(7)
+        expect(store.listCronJobs()).toHaveLength(1)
     } finally {
         db.close()
     }

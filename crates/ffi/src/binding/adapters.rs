@@ -88,14 +88,7 @@ impl HostStore for StoreCallbackAdapter {
         ack_result(
             HostSubsystem::Store,
             self.inner
-                .record_cron_dispatch(
-                    BindingCronJobSpec {
-                        id: job.id.as_str().to_owned(),
-                        schedule: job.schedule.clone(),
-                        prompt: job.prompt.clone(),
-                    },
-                    recorded_at_ms,
-                )
+                .record_cron_dispatch(BindingCronJobSpec::from(job), recorded_at_ms)
                 .await,
         )
     }

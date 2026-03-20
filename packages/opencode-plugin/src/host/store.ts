@@ -59,6 +59,9 @@ export class SqliteStoreHost implements BindingStoreHost {
                     id: job.id,
                     schedule: job.schedule,
                     prompt: job.prompt,
+                    deliveryChannel: job.deliveryChannel,
+                    deliveryTarget: job.deliveryTarget,
+                    deliveryTopic: job.deliveryTopic,
                 }),
             )
             return okAck()

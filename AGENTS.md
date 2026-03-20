@@ -20,10 +20,11 @@ binding/runtime integration slices**: the workspace, crate/package boundaries,
 launcher bootstrap, pure Rust domain model, host orchestration contracts, the first
 BoltFFI export facade, callback-capable binding handles, and an OpenCode plugin with
 debug-oriented gateway tools are in place. SQLite-backed session persistence and
-runtime journaling now exist inside the plugin host, and Telegram long polling is now
-wired through the plugin with explicit allowlists, persistent update cursors, and
-Rust-driven inbound message handling. Cron scheduling loops and richer durable gateway
-data models are still to be implemented.
+runtime journaling now exist inside the plugin host, Telegram long polling is wired
+through the plugin with explicit allowlists and persistent update cursors, and the
+first recurring cron slice is now in place with a persisted job catalog, run history,
+background tick loop, and Telegram-capable cron delivery. Richer durable gateway data
+models and end-to-end smoke coverage are still to be implemented.
 
 ## Vision
 
@@ -168,24 +169,27 @@ This package now:
 
 - loads the BoltFFI-generated binding,
 - constructs a long-lived `GatewayBinding` instance with host callbacks,
-- exposes `gateway_status` plus a debug `gateway_dispatch_cron` tool through
-  OpenCode,
+- exposes `gateway_status`, `gateway_dispatch_cron`, and the first cron management
+  tools through OpenCode,
 - parses the gateway config to locate the managed SQLite database,
 - persists logical conversation to `OpenCode` session bindings in SQLite,
 - records a minimal runtime journal in SQLite,
 - persists the Telegram long-poll cursor in SQLite,
+- persists recurring cron jobs and cron run history in SQLite,
 - implements a real OpenCode session adapter that reuses persisted session bindings,
+- runs a cron tick worker backed by persisted next-run timestamps,
 - runs a Telegram long-poll worker with explicit chat/user allowlists,
 - normalizes Telegram text messages into Rust inbound gateway messages,
-- and delivers Telegram replies through a real transport host,
+- delivers Telegram replies through a real transport host,
+- delivers cron results to Telegram when a job has a delivery target,
 - and serves as the host-side entrypoint for later storage, transport, and durable
   runtime wiring.
 
 This package will later also:
 
-- start the cron tick loop,
-- add richer control-plane tools for cron and Telegram operations,
-- and translate scheduled host events into Rust engine calls.
+- add richer control-plane tools for Telegram operations,
+- promote audit/journal data into richer durable gateway tables where useful,
+- and add end-to-end smoke coverage against a local `OpenCode` server.
 
 ## Runtime Model
 
@@ -325,6 +329,9 @@ Even though only Telegram is planned initially, these tables are being shaped ar
 generic `channel/account/target` model so new IM providers can fit later without
 rewriting the core semantics.
 
+The current cron implementation interprets recurring cron expressions in `UTC` only.
+Per-job or host-local timezone configuration has not been added yet.
+
 ## Development Rules
 
 This repo follows a few non-negotiable engineering rules:
@@ -347,17 +354,23 @@ The current scaffold already establishes:
 - split core modules for channel / conversation / message / cron / engine / status,
 - split FFI modules for host traits and runtime orchestration,
 - a BoltFFI-exported `GatewayBinding` handle with callback-capable host traits,
-- plugin-side binding loading plus one status tool and one cron-dispatch debug tool,
+- plugin-side binding loading plus one status tool, one cron-dispatch debug tool, and
+  the first persisted cron control-plane tools,
 - SQLite-backed session bindings and runtime journaling inside the plugin host,
 - SQLite-backed Telegram update offsets,
+- SQLite-backed cron job catalogs and cron run history,
+- cron next-run calculation exported from Rust through BoltFFI,
+- a plugin-local cron scheduler with skip-missed semantics and bounded concurrency,
 - Telegram long polling with explicit allowlists and text-message routing,
 - Telegram transport-backed replies driven by Rust runtime plans,
+- cron-triggered `OpenCode` execution with optional Telegram delivery,
 - and a launcher that can materialize managed config files for local development.
 
 The scaffold does **not** yet include:
 
-- cron job catalogs or persistent run-state tables,
-- or actual cron scheduling loops beyond manual dispatch through the debug tool.
+- richer durable gateway tables beyond the current minimal catalog/run-history split,
+- dedicated Telegram operational tools such as status/send-test,
+- or end-to-end smoke coverage against a local `OpenCode` server.
 
 Those will be added incrementally on top of the structure introduced here.
 
@@ -365,9 +378,10 @@ Those will be added incrementally on top of the structure introduced here.
 
 The next implementation passes should happen in this order:
 
-1. Add cron management and execution loops on top of the existing SQLite store.
-2. Promote runtime journaling into richer durable gateway tables where needed.
-3. Add Telegram-facing operational tools such as status and send-test where useful.
+1. Promote runtime journaling into richer durable gateway tables where needed.
+2. Add Telegram-facing operational tools such as status and send-test where useful.
+3. Add richer cron-facing inspection or operational tools only when the current catalog
+   and run history stop being sufficient.
 4. Add end-to-end smoke tests against a local OpenCode server.
 
 ## References

@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite"
 
-const LATEST_SCHEMA_VERSION = 2
+const LATEST_SCHEMA_VERSION = 3
 
 export function migrateGatewayDatabase(db: Database): void {
     db.exec("PRAGMA journal_mode = WAL;")
@@ -18,6 +18,11 @@ export function migrateGatewayDatabase(db: Database): void {
 
     if (currentVersion === 1) {
         migrateToV2(db)
+        currentVersion = 2
+    }
+
+    if (currentVersion === 2) {
+        migrateToV3(db)
     }
 }
 
@@ -55,6 +60,44 @@ function migrateToV2(db: Database): void {
             value TEXT NOT NULL,
             updated_at_ms INTEGER NOT NULL
         );
+    `)
+    db.exec("PRAGMA user_version = 2;")
+}
+
+function migrateToV3(db: Database): void {
+    db.exec(`
+        CREATE TABLE cron_jobs (
+            id TEXT PRIMARY KEY NOT NULL,
+            schedule TEXT NOT NULL,
+            prompt TEXT NOT NULL,
+            delivery_channel TEXT,
+            delivery_target TEXT,
+            delivery_topic TEXT,
+            enabled INTEGER NOT NULL,
+            next_run_at_ms INTEGER NOT NULL,
+            created_at_ms INTEGER NOT NULL,
+            updated_at_ms INTEGER NOT NULL
+        );
+
+        CREATE INDEX cron_jobs_enabled_next_run_at_ms_idx
+            ON cron_jobs (enabled, next_run_at_ms);
+
+        CREATE TABLE cron_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id TEXT NOT NULL,
+            scheduled_for_ms INTEGER NOT NULL,
+            started_at_ms INTEGER NOT NULL,
+            finished_at_ms INTEGER,
+            status TEXT NOT NULL,
+            response_text TEXT,
+            error_message TEXT
+        );
+
+        CREATE INDEX cron_runs_job_id_started_at_ms_idx
+            ON cron_runs (job_id, started_at_ms DESC);
+
+        CREATE INDEX cron_runs_status_started_at_ms_idx
+            ON cron_runs (status, started_at_ms DESC);
     `)
     db.exec(`PRAGMA user_version = ${LATEST_SCHEMA_VERSION};`)
 }

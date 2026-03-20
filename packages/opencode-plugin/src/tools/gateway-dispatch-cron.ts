@@ -23,6 +23,9 @@ function toCronJobSpec(args: { id: string; schedule: string; prompt: string }): 
         id: args.id,
         schedule: args.schedule,
         prompt: args.prompt,
+        deliveryChannel: null,
+        deliveryTarget: null,
+        deliveryTopic: null,
     }
 }
 

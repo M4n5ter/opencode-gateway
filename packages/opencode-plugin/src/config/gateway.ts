@@ -2,9 +2,11 @@ import { existsSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, isAbsolute, join, resolve } from "node:path"
 
+import { type CronConfig, parseCronConfig } from "./cron"
 import { parseTelegramConfig, type TelegramConfig } from "./telegram"
 
 type RawGatewayConfig = {
+    cron?: unknown
     gateway?: {
         state_db?: unknown
     }
@@ -16,6 +18,7 @@ type RawGatewayConfig = {
 export type GatewayConfig = {
     configPath: string
     stateDbPath: string
+    cron: CronConfig
     telegram: TelegramConfig
 }
 
@@ -33,6 +36,7 @@ export async function loadGatewayConfig(env: EnvSource = process.env): Promise<G
     return {
         configPath,
         stateDbPath: resolveStateDbPath(stateDbValue, configPath, env),
+        cron: parseCronConfig(rawConfig?.cron),
         telegram: parseTelegramConfig(rawConfig?.channels?.telegram, env),
     }
 }

@@ -9,6 +9,9 @@ export type BindingCronJobSpec = {
     id: string
     schedule: string
     prompt: string
+    deliveryChannel: string | null
+    deliveryTarget: string | null
+    deliveryTopic: string | null
 }
 
 export type BindingRuntimeReport = {
@@ -82,6 +85,7 @@ export type BindingLoggerHost = {
 
 export type GatewayBindingHandle = {
     status(): GatewayStatusSnapshot
+    nextCronRunAt(job: BindingCronJobSpec, afterMs: bigint): bigint
     handleInboundMessage(message: BindingInboundMessage): Promise<BindingRuntimeReport>
     dispatchCronJob(job: BindingCronJobSpec): Promise<BindingRuntimeReport>
     dispose?(): void

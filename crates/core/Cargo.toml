@@ -7,3 +7,5 @@ authors.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+chrono = "0.4"
+croner = "3.0"

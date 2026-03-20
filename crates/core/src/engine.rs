@@ -74,7 +74,7 @@ impl GatewayEngine {
             PromptSource::CronJob { id: job.id.clone() },
         );
 
-        Ok(GatewayPlan::new(request, None))
+        Ok(GatewayPlan::new(request, job.delivery_target.clone()))
     }
 }
 
@@ -97,14 +97,23 @@ mod tests {
     }
 
     #[test]
-    fn cron_job_creates_non_reply_plan() {
+    fn cron_job_creates_reply_plan_when_delivery_is_present() {
         let engine = GatewayEngine::new();
-        let job =
-            CronJobSpec::new("nightly", "0 0 * * *", "Summarize work").expect("cron job spec");
+        let job = CronJobSpec::with_delivery_target(
+            "nightly",
+            "0 0 * * *",
+            "Summarize work",
+            Some(crate::DeliveryTarget::new(
+                ChannelKind::Telegram,
+                TargetKey::new("123").expect("target key"),
+                None,
+            )),
+        )
+        .expect("cron job spec");
 
         let plan = engine.plan_cron_job(&job).expect("cron plan");
 
         assert_eq!(plan.request.conversation_key.as_str(), "cron:nightly");
-        assert!(plan.reply_target.is_none());
+        assert!(plan.reply_target.is_some());
     }
 }

@@ -1,9 +1,9 @@
-//! Cron job identifiers and validation.
-
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
-use crate::ConversationKey;
+use crate::{ConversationKey, DeliveryTarget};
+
+use super::schedule::{next_run_at, normalize_schedule};
 
 /// Stable identifier for a persisted cron job.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -41,7 +41,9 @@ impl CronJobId {
 pub enum CronValidationError {
     EmptyId,
     EmptySchedule,
+    InvalidSchedule(String),
     EmptyPrompt,
+    NextOccurrenceOutOfRange,
 }
 
 impl Display for CronValidationError {
@@ -49,20 +51,25 @@ impl Display for CronValidationError {
         match self {
             Self::EmptyId => f.write_str("cron job id must not be empty"),
             Self::EmptySchedule => f.write_str("cron schedule must not be empty"),
+            Self::InvalidSchedule(message) => write!(f, "invalid cron schedule: {message}"),
             Self::EmptyPrompt => f.write_str("cron prompt must not be empty"),
+            Self::NextOccurrenceOutOfRange => {
+                f.write_str("next cron occurrence is out of range for unix milliseconds")
+            }
         }
     }
 }
 
 impl Error for CronValidationError {}
 
-/// Canonical job definition used by pure gateway planning.
+/// Canonical recurring job definition used by pure gateway planning.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CronJobSpec {
     pub id: CronJobId,
     pub schedule: String,
     pub prompt: String,
     pub conversation_key: ConversationKey,
+    pub delivery_target: Option<DeliveryTarget>,
 }
 
 impl CronJobSpec {
@@ -70,24 +77,36 @@ impl CronJobSpec {
     ///
     /// # Errors
     ///
-    /// Returns a [`CronValidationError`] when the identifier, schedule, or prompt is empty after
-    /// trimming.
+    /// Returns a [`CronValidationError`] when the identifier, schedule, or prompt is invalid.
     pub fn new(
         id: impl Into<String>,
         schedule: impl Into<String>,
         prompt: impl Into<String>,
     ) -> Result<Self, CronValidationError> {
+        Self::with_delivery_target(id, schedule, prompt, None)
+    }
+
+    /// Builds a validated cron job definition with an optional outbound delivery target.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`CronValidationError`] when the identifier, schedule, or prompt is invalid.
+    pub fn with_delivery_target(
+        id: impl Into<String>,
+        schedule: impl Into<String>,
+        prompt: impl Into<String>,
+        delivery_target: Option<DeliveryTarget>,
+    ) -> Result<Self, CronValidationError> {
         let id = CronJobId::new(id)?;
-        let schedule = schedule.into();
-        let prompt = prompt.into();
-        let schedule = normalize_schedule(&schedule)?;
-        let prompt = normalize_prompt(&prompt)?;
+        let schedule = normalize_schedule(&schedule.into())?;
+        let prompt = normalize_prompt(&prompt.into())?;
 
         Ok(Self {
             conversation_key: ConversationKey::for_cron_job(id.as_str()),
             id,
             schedule,
             prompt,
+            delivery_target,
         })
     }
 
@@ -102,15 +121,17 @@ impl CronJobSpec {
         let _ = normalize_prompt(&self.prompt)?;
         Ok(())
     }
-}
 
-fn normalize_schedule(value: &str) -> Result<String, CronValidationError> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return Err(CronValidationError::EmptySchedule);
+    /// Computes the next future occurrence for this recurring cron expression.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`CronValidationError`] when the schedule is invalid or the next occurrence
+    /// cannot be represented as unix milliseconds.
+    pub fn next_run_at(&self, after_unix_ms: u64) -> Result<u64, CronValidationError> {
+        self.validate()?;
+        next_run_at(&self.schedule, after_unix_ms)
     }
-
-    Ok(trimmed.to_owned())
 }
 
 fn normalize_prompt(value: &str) -> Result<String, CronValidationError> {
@@ -124,7 +145,7 @@ fn normalize_prompt(value: &str) -> Result<String, CronValidationError> {
 
 #[cfg(test)]
 mod tests {
-    use crate::cron::{CronJobSpec, CronValidationError};
+    use crate::{ChannelKind, CronJobSpec, CronValidationError, DeliveryTarget, TargetKey};
 
     #[test]
     fn cron_job_rejects_empty_prompt() {
@@ -132,5 +153,25 @@ mod tests {
             .expect_err("expected empty prompt");
 
         assert_eq!(error, CronValidationError::EmptyPrompt);
+    }
+
+    #[test]
+    fn cron_job_preserves_delivery_target() {
+        let job = CronJobSpec::with_delivery_target(
+            "nightly",
+            "0 9 * * *",
+            "Summarize work",
+            Some(DeliveryTarget::new(
+                ChannelKind::Telegram,
+                TargetKey::new("123").expect("target"),
+                Some("42".to_owned()),
+            )),
+        )
+        .expect("cron job");
+
+        assert_eq!(
+            job.delivery_target.expect("delivery target").conversation_key().as_str(),
+            "telegram:123:topic:42"
+        );
     }
 }

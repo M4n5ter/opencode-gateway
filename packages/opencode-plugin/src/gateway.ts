@@ -2,6 +2,7 @@ import type { PluginInput } from "@opencode-ai/plugin"
 
 import type { GatewayBindingHandle, GatewayBindingModule } from "./binding"
 import { loadGatewayConfig } from "./config/gateway"
+import { GatewayCronRuntime } from "./cron/runtime"
 import { ConsoleLoggerHost, SystemClockHost } from "./host/noop"
 import { GatewayOpencodeHost } from "./host/opencode"
 import { SqliteStoreHost } from "./host/store"
@@ -15,6 +16,9 @@ export type GatewayPluginStatus = {
     supportsTelegram: boolean
     supportsCron: boolean
     hasWebUi: boolean
+    cronEnabled: boolean
+    cronPolling: boolean
+    cronRunningJobs: number
     telegramEnabled: boolean
     telegramPolling: boolean
     telegramAllowlistMode: "disabled" | "explicit"
@@ -23,6 +27,7 @@ export type GatewayPluginStatus = {
 export class GatewayPluginRuntime {
     constructor(
         readonly binding: GatewayBindingHandle,
+        readonly cron: GatewayCronRuntime,
         private readonly telegramPolling: TelegramPollingService | null,
     ) {}
 
@@ -34,6 +39,9 @@ export class GatewayPluginRuntime {
             supportsTelegram: status.supportsTelegram,
             supportsCron: status.supportsCron,
             hasWebUi: status.hasWebUi,
+            cronEnabled: this.cron.isEnabled(),
+            cronPolling: this.cron.isRunning(),
+            cronRunningJobs: this.cron.runningJobs(),
             telegramEnabled: this.telegramPolling !== null,
             telegramPolling: this.telegramPolling?.isRunning() ?? false,
             telegramAllowlistMode: this.telegramPolling === null ? "disabled" : "explicit",
@@ -57,12 +65,14 @@ export async function createGatewayRuntime(
         new SystemClockHost(),
         logger,
     )
+    const cron = new GatewayCronRuntime(binding, store, logger, config.cron)
 
     const telegramPolling =
         config.telegram.enabled && telegramClient !== null
             ? new TelegramPollingService(telegramClient, binding, store, logger, config.telegram)
             : null
+    cron.start()
     telegramPolling?.start()
 
-    return new GatewayPluginRuntime(binding, telegramPolling)
+    return new GatewayPluginRuntime(binding, cron, telegramPolling)
 }
