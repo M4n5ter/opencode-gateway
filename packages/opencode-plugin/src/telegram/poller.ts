@@ -1,15 +1,16 @@
 import type { BindingLoggerHost, GatewayBindingHandle } from "../binding"
 import type { TelegramConfig } from "../config/telegram"
 import type { SqliteStore } from "../store/sqlite"
-import { TelegramApiError, type TelegramBotClient } from "./client"
+import { TelegramApiError, type TelegramPollingClientLike } from "./client"
 import { buildTelegramAllowlist, normalizeTelegramUpdate } from "./normalize"
+import { recordTelegramPollFailure, recordTelegramPollSuccess } from "./state"
 
 export class TelegramPollingService {
     private readonly allowlist
     private running = false
 
     constructor(
-        private readonly client: TelegramBotClient,
+        private readonly client: TelegramPollingClientLike,
         private readonly binding: GatewayBindingHandle,
         private readonly store: SqliteStore,
         private readonly logger: BindingLoggerHost,
@@ -40,6 +41,7 @@ export class TelegramPollingService {
         for (;;) {
             try {
                 const updates = await this.client.getUpdates(offset, this.config.pollTimeoutSeconds)
+                recordTelegramPollSuccess(this.store, Date.now())
 
                 for (const update of updates) {
                     const nextOffset = update.update_id + 1
@@ -57,6 +59,8 @@ export class TelegramPollingService {
 
                 retryDelayMs = 1_000
             } catch (error) {
+                recordTelegramPollFailure(this.store, formatTelegramPollerError(error), Date.now())
+
                 if (isPermanentTelegramFailure(error)) {
                     this.logger.log("error", formatTelegramPollerError(error))
                     return

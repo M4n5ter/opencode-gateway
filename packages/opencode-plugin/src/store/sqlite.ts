@@ -78,20 +78,26 @@ export class SqliteStore {
     }
 
     getTelegramUpdateOffset(): number | null {
-        const row = this.db
-            .query<{ value: string }, [string]>("SELECT value FROM kv_state WHERE key = ?1;")
-            .get("telegram.update_offset")
-
-        if (!row) {
+        const value = this.getStateValue("telegram.update_offset")
+        if (value === null) {
             return null
         }
 
-        return parseStoredInteger(row.value, "stored telegram.update_offset")
+        return parseStoredInteger(value, "stored telegram.update_offset")
     }
 
     putTelegramUpdateOffset(offset: number, recordedAtMs: number): void {
         assertSafeInteger(offset, "telegram update offset")
+        this.putStateValue("telegram.update_offset", String(offset), recordedAtMs)
+    }
 
+    getStateValue(key: string): string | null {
+        const row = this.db.query<{ value: string }, [string]>("SELECT value FROM kv_state WHERE key = ?1;").get(key)
+
+        return row?.value ?? null
+    }
+
+    putStateValue(key: string, value: string, recordedAtMs: number): void {
         this.db
             .query(
                 `
@@ -102,7 +108,7 @@ export class SqliteStore {
                         updated_at_ms = excluded.updated_at_ms;
                 `,
             )
-            .run("telegram.update_offset", String(offset), recordedAtMs)
+            .run(key, value, recordedAtMs)
     }
 
     upsertCronJob(input: PersistCronJobInput): void {

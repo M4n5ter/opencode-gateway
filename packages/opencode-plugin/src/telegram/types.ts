@@ -25,9 +25,17 @@ export type TelegramMessage = {
 export type TelegramUser = {
     id: number
     is_bot?: boolean
+    username?: string
+    can_join_groups?: boolean
+    can_read_all_group_messages?: boolean
+    supports_inline_queries?: boolean
 }
 
 export type TelegramChat = {
     id: number
     type: string
+}
+
+export type TelegramBotProfile = TelegramUser & {
+    is_bot: true
 }

@@ -1,4 +1,4 @@
-import type { TelegramApiResponse, TelegramUpdate } from "./types"
+import type { TelegramApiResponse, TelegramBotProfile, TelegramUpdate } from "./types"
 
 export class TelegramApiError extends Error {
     constructor(
@@ -19,6 +19,10 @@ export class TelegramBotClient {
             timeout: timeoutSeconds,
             allowed_updates: ["message"],
         })
+    }
+
+    async getMe(): Promise<TelegramBotProfile> {
+        return this.call("getMe", {})
     }
 
     async sendMessage(chatId: string, text: string, messageThreadId: string | null): Promise<void> {
@@ -58,6 +62,11 @@ export class TelegramBotClient {
         )
     }
 }
+
+export type TelegramPollingClientLike = Pick<TelegramBotClient, "getUpdates">
+export type TelegramSendClientLike = Pick<TelegramBotClient, "sendMessage">
+export type TelegramProbeClientLike = Pick<TelegramBotClient, "getMe">
+export type TelegramOpsClientLike = TelegramSendClientLike & TelegramProbeClientLike
 
 function parseMessageThreadId(value: string | null): number | undefined {
     if (value === null) {

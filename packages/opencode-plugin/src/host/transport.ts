@@ -1,9 +1,14 @@
 import type { BindingHostAck, BindingOutboundMessage, BindingTransportHost } from "../binding"
-import type { TelegramBotClient } from "../telegram/client"
+import type { SqliteStore } from "../store/sqlite"
+import type { TelegramSendClientLike } from "../telegram/client"
+import { recordTelegramSendFailure, recordTelegramSendSuccess } from "../telegram/state"
 import { failedAck, okAck } from "./result"
 
 export class GatewayTransportHost implements BindingTransportHost {
-    constructor(private readonly telegramClient: TelegramBotClient | null) {}
+    constructor(
+        private readonly telegramClient: TelegramSendClientLike | null,
+        private readonly store: SqliteStore,
+    ) {}
 
     async sendMessage(message: BindingOutboundMessage): Promise<BindingHostAck> {
         try {
@@ -21,8 +26,10 @@ export class GatewayTransportHost implements BindingTransportHost {
             }
 
             await this.telegramClient.sendMessage(message.deliveryTarget.target, body, message.deliveryTarget.topic)
+            recordTelegramSendSuccess(this.store, Date.now())
             return okAck()
         } catch (error) {
+            recordTelegramSendFailure(this.store, error instanceof Error ? error.message : String(error), Date.now())
             return failedAck(error)
         }
     }

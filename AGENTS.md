@@ -358,10 +358,12 @@ The current scaffold already establishes:
   the first persisted cron control-plane tools,
 - SQLite-backed session bindings and runtime journaling inside the plugin host,
 - SQLite-backed Telegram update offsets,
+- SQLite-backed Telegram health snapshots in `kv_state`,
 - SQLite-backed cron job catalogs and cron run history,
 - cron next-run calculation exported from Rust through BoltFFI,
 - a plugin-local cron scheduler with skip-missed semantics and bounded concurrency,
 - Telegram long polling with explicit allowlists and text-message routing,
+- Telegram operational tools for live status probing and explicit send-test delivery,
 - Telegram transport-backed replies driven by Rust runtime plans,
 - cron-triggered `OpenCode` execution with optional Telegram delivery,
 - and a launcher that can materialize managed config files for local development.
@@ -369,7 +371,6 @@ The current scaffold already establishes:
 The scaffold does **not** yet include:
 
 - richer durable gateway tables beyond the current minimal catalog/run-history split,
-- dedicated Telegram operational tools such as status/send-test,
 - or end-to-end smoke coverage against a local `OpenCode` server.
 
 Those will be added incrementally on top of the structure introduced here.
@@ -379,10 +380,9 @@ Those will be added incrementally on top of the structure introduced here.
 The next implementation passes should happen in this order:
 
 1. Promote runtime journaling into richer durable gateway tables where needed.
-2. Add Telegram-facing operational tools such as status and send-test where useful.
-3. Add richer cron-facing inspection or operational tools only when the current catalog
+2. Add richer cron-facing inspection or operational tools only when the current catalog
    and run history stop being sufficient.
-4. Add end-to-end smoke tests against a local OpenCode server.
+3. Add end-to-end smoke tests against a local OpenCode server.
 
 ## References
 

@@ -8,6 +8,8 @@ import { createCronRunTool } from "./tools/cron-run"
 import { createCronUpsertTool } from "./tools/cron-upsert"
 import { createGatewayDispatchCronTool } from "./tools/gateway-dispatch-cron"
 import { createGatewayStatusTool } from "./tools/gateway-status"
+import { createTelegramSendTestTool } from "./tools/telegram-send-test"
+import { createTelegramStatusTool } from "./tools/telegram-status"
 
 /**
  * Minimal plugin scaffold that loads the BoltFFI-generated gateway binding and exposes
@@ -25,6 +27,8 @@ export const OpencodeGatewayPlugin: Plugin = async (input) => {
             cron_upsert: createCronUpsertTool(runtime.cron),
             gateway_status: createGatewayStatusTool(runtime),
             gateway_dispatch_cron: createGatewayDispatchCronTool(runtime.binding),
+            telegram_status: createTelegramStatusTool(runtime.telegram),
+            telegram_send_test: createTelegramSendTestTool(runtime.telegram),
         },
     }
 }
