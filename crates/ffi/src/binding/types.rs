@@ -109,6 +109,7 @@ pub struct BindingInboundMessage {
     pub delivery_target: BindingDeliveryTarget,
     pub sender: String,
     pub body: String,
+    pub mailbox_key: Option<String>,
 }
 
 impl TryFrom<BindingInboundMessage> for opencode_gateway_core::InboundMessage {
@@ -119,14 +120,22 @@ impl TryFrom<BindingInboundMessage> for opencode_gateway_core::InboundMessage {
         let sender = parse_required(value.sender, "message sender")?;
         let body = parse_required(value.body, "message body")?;
 
-        opencode_gateway_core::InboundMessage::new(
+        let mut message = opencode_gateway_core::InboundMessage::new(
             delivery_target.channel,
             delivery_target.target,
             delivery_target.topic,
             sender,
             body,
         )
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+
+        if let Some(mailbox_key) = value.mailbox_key {
+            message
+                .set_conversation_key_override(mailbox_key)
+                .map_err(|error| error.to_string())?;
+        }
+
+        Ok(message)
     }
 }
 

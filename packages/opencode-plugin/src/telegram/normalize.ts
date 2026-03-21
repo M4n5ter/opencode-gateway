@@ -18,6 +18,10 @@ type TelegramAllowlist = {
     allowedUsers: ReadonlySet<string>
 }
 
+type MailboxRouterLike = {
+    resolve(target: BindingInboundMessage["deliveryTarget"]): string | null
+}
+
 export function buildTelegramAllowlist(config: Extract<TelegramConfig, { enabled: true }>): TelegramAllowlist {
     return {
         allowedChats: new Set(config.allowedChats),
@@ -28,6 +32,7 @@ export function buildTelegramAllowlist(config: Extract<TelegramConfig, { enabled
 export function normalizeTelegramUpdate(
     update: TelegramUpdate,
     allowlist: TelegramAllowlist,
+    mailboxRouter?: MailboxRouterLike,
 ): TelegramNormalizedUpdate {
     const message = update.message
     if (!message) {
@@ -52,15 +57,18 @@ export function normalizeTelegramUpdate(
         return ignored("message is not allowlisted")
     }
 
+    const deliveryTarget = {
+        channel: "telegram",
+        target: chatId,
+        topic: message.message_thread_id === undefined ? null : String(message.message_thread_id),
+    } satisfies BindingInboundMessage["deliveryTarget"]
+
     return {
         kind: "message",
         chatType: message.chat.type,
         message: {
-            deliveryTarget: {
-                channel: "telegram",
-                target: chatId,
-                topic: message.message_thread_id === undefined ? null : String(message.message_thread_id),
-            },
+            mailboxKey: mailboxRouter?.resolve(deliveryTarget) ?? null,
+            deliveryTarget,
             sender: `telegram:${userId}`,
             body: message.text,
         },

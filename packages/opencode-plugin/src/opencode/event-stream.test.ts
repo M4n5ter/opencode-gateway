@@ -30,6 +30,7 @@ test("OpencodeEventStream forwards SDK SSE events into the prompt hub", async ()
                 }
             },
         },
+        "msg_user_1",
         () => {},
     )
 

@@ -94,7 +94,10 @@ This package now:
 - loads the generated `wasm-bindgen` package
 - parses gateway config and opens the managed SQLite database
 - persists OpenCode session bindings, Telegram state, cron jobs, and cron runs
+- persists durable mailbox queue entries for gateway-managed ingress
 - runs Telegram long polling with explicit allowlists
+- runs per-mailbox workers with optional reply batching
+- supports explicit mailbox route overrides so multiple gateway targets can share one session
 - runs the cron scheduler loop
 - executes OpenCode sessions through the plugin SDK
 - subscribes to the OpenCode SDK event stream and forwards normalized execution
@@ -112,7 +115,9 @@ opencode-gateway serve
   -> OpenCode loads the local plugin
   -> plugin loads the generated wasm package
   -> plugin builds host-side services
-  -> Telegram updates and cron ticks enter the plugin-local executor
+  -> Telegram updates are enqueued into durable mailboxes
+  -> per-mailbox workers serialize ingress and optionally batch replies
+  -> cron ticks enter the plugin-local executor directly
   -> plugin executes OpenCode sessions and outbound delivery
   -> Rust remains responsible for typed contracts, prepared executions,
      event aggregation, cron next-run calculation, and progressive delivery state
@@ -200,6 +205,7 @@ The session model for v1 is intentionally conservative:
 
 The SQLite layer currently revolves around:
 
+- `mailbox_entries`
 - `session_bindings`
 - `runtime_journal`
 - `cron_jobs`
@@ -218,7 +224,10 @@ The repository already contains:
 - Rust-owned prepared execution and event aggregation state
 - a launcher that can materialize managed config and warm the current project
 - a plugin package with Telegram, SQLite, and cron behavior
-- plugin-local host orchestration for inbound messages and cron dispatch
+- plugin-local host orchestration for mailbox workers and cron dispatch
+- durable mailbox queueing for gateway-managed ingress
+- optional mailbox reply batching behind a config flag
+- explicit mailbox route overrides for shared-session ingress
 - SQLite-backed session bindings and runtime journaling
 - SQLite-backed Telegram health snapshots and update cursors
 - SQLite-backed cron catalogs and run history

@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test"
 
+import { GatewayMailboxRouter } from "../mailbox/router"
 import { buildTelegramAllowlist, normalizeTelegramUpdate } from "./normalize"
 
 const allowlist = buildTelegramAllowlist({
@@ -29,6 +30,7 @@ test("normalizeTelegramUpdate accepts allowlisted private text messages", () => 
         kind: "message",
         chatType: "private",
         message: {
+            mailboxKey: null,
             deliveryTarget: {
                 channel: "telegram",
                 target: "42",
@@ -59,6 +61,7 @@ test("normalizeTelegramUpdate preserves Telegram topics for allowlisted group me
         kind: "message",
         chatType: "supergroup",
         message: {
+            mailboxKey: null,
             deliveryTarget: {
                 channel: "telegram",
                 target: "-100123",
@@ -66,6 +69,46 @@ test("normalizeTelegramUpdate preserves Telegram topics for allowlisted group me
             },
             sender: "telegram:7",
             body: "status",
+        },
+    })
+})
+
+test("normalizeTelegramUpdate applies an explicit mailbox override when a route matches", () => {
+    const router = new GatewayMailboxRouter([
+        {
+            channel: "telegram",
+            target: "42",
+            topic: null,
+            mailboxKey: "shared:alpha",
+        },
+    ])
+
+    const result = normalizeTelegramUpdate(
+        {
+            update_id: 14,
+            message: {
+                message_id: 5,
+                text: "hello",
+                from: { id: 42 },
+                chat: { id: 42, type: "private" },
+            },
+        },
+        allowlist,
+        router,
+    )
+
+    expect(result).toEqual({
+        kind: "message",
+        chatType: "private",
+        message: {
+            mailboxKey: "shared:alpha",
+            deliveryTarget: {
+                channel: "telegram",
+                target: "42",
+                topic: null,
+            },
+            sender: "telegram:42",
+            body: "hello",
         },
     })
 })

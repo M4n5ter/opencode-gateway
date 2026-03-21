@@ -28,6 +28,13 @@ impl ConversationKey {
         }
     }
 
+    /// Creates an explicitly supplied logical mailbox/session key.
+    pub fn for_override(value: impl Into<String>) -> Self {
+        Self {
+            value: value.into(),
+        }
+    }
+
     /// Returns the stable storage value for the conversation key.
     pub fn as_str(&self) -> &str {
         &self.value

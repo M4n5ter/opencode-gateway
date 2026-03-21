@@ -1,14 +1,9 @@
 import { Database } from "bun:sqlite"
 import { expect, test } from "bun:test"
 
-import type {
-    BindingExecutionObservation,
-    BindingInboundMessage,
-    BindingLoggerHost,
-    BindingPreparedExecution,
-    BindingProgressiveDirective,
-} from "../binding"
+import type { BindingInboundMessage, BindingLoggerHost, BindingPreparedExecution } from "../binding"
 import { migrateGatewayDatabase } from "../store/migrations"
+import type { MailboxEntryRecord } from "../store/sqlite"
 import { SqliteStore } from "../store/sqlite"
 import { GatewayExecutor } from "./executor"
 
@@ -29,7 +24,11 @@ test("GatewayExecutor clears a stale session binding and retries once on the one
                 async ensureSession(_conversationKey: string, sessionId: string | null): Promise<string> {
                     return sessionId ?? "ses_fresh"
                 },
-                async promptSession(sessionId: string): Promise<string> {
+                async waitUntilSessionIdle(): Promise<void> {},
+                async appendPrompt(): Promise<void> {
+                    throw new Error("unused")
+                },
+                async promptSessionWithSnapshots(sessionId: string): Promise<string> {
                     seenSessionIds.push(sessionId)
 
                     if (sessionId === "ses_stale") {
@@ -38,20 +37,19 @@ test("GatewayExecutor clears a stale session binding and retries once on the one
 
                     return "hello back"
                 },
-                async promptSessionWithSnapshots(): Promise<never> {
-                    throw new Error("unused")
-                },
             },
             {
-                async open() {
-                    return {
-                        mode: "oneshot" as const,
-                        async preview(): Promise<void> {},
-                        async finish(finalText: string | null): Promise<boolean> {
-                            deliveredBodies.push(finalText)
-                            return true
+                async openMany() {
+                    return [
+                        {
+                            mode: "oneshot" as const,
+                            async preview(): Promise<void> {},
+                            async finish(finalText: string | null): Promise<boolean> {
+                                deliveredBodies.push(finalText)
+                                return true
+                            },
                         },
-                    }
+                    ]
                 },
             },
             new MemoryLogger(),
@@ -69,15 +67,14 @@ test("GatewayExecutor clears a stale session binding and retries once on the one
     }
 })
 
-test("GatewayExecutor retries when a wrapped error reports a stale OpenCode session on the progressive path", async () => {
+test("GatewayExecutor appends earlier mailbox entries and previews the final reply once", async () => {
     const db = new Database(":memory:")
 
     try {
         migrateGatewayDatabase(db)
         const store = new SqliteStore(db)
-        store.putSessionBinding("telegram:42", "ses_stale", 0)
 
-        const seenSessionIds: Array<string | null> = []
+        const appended: Array<{ sessionId: string; prompt: string; messageId: string }> = []
         const previewSnapshots: string[] = []
         const deliveredBodies: Array<string | null> = []
         const executor = new GatewayExecutor(
@@ -87,74 +84,57 @@ test("GatewayExecutor retries when a wrapped error reports a stale OpenCode sess
                 async ensureSession(_conversationKey: string, sessionId: string | null): Promise<string> {
                     return sessionId ?? "ses_fresh"
                 },
-                async promptSession(): Promise<never> {
-                    throw new Error("unused")
+                async waitUntilSessionIdle(): Promise<void> {},
+                async appendPrompt(sessionId: string, prompt: string, ids: { messageId: string }): Promise<void> {
+                    appended.push({ sessionId, prompt, messageId: ids.messageId })
                 },
                 async promptSessionWithSnapshots(
                     sessionId: string,
-                    _prompt: string,
-                    execution: {
-                        observeEvent(
-                            observation: BindingExecutionObservation,
-                            nowMs: number,
-                        ): BindingProgressiveDirective
-                    },
-                    onSnapshot: (text: string) => Promise<void>,
+                    prompt: string,
+                    ids: { messageId: string },
+                    _execution,
+                    onSnapshot,
                 ): Promise<string> {
-                    seenSessionIds.push(sessionId)
+                    expect(sessionId).toBe("ses_fresh")
+                    expect(prompt).toBe("second")
+                    expect(ids.messageId).toBe("msg_gateway_mailbox_2")
 
-                    if (sessionId === "ses_stale") {
-                        const inner = new Error("NotFoundError")
-                        ;(inner as Error & { data: { message: string } }).data = {
-                            message: "Session not found: ses_stale",
-                        }
-
-                        const outer = new Error("JSON Parse error: Unexpected EOF")
-                        ;(outer as Error & { cause: unknown }).cause = inner
-                        throw outer
-                    }
-
-                    const preview = execution.observeEvent(
-                        {
-                            kind: "textPartUpdated",
-                            sessionId,
-                            messageId: "msg_assistant_1",
-                            partId: "part-1",
-                            text: null,
-                            delta: "hello",
-                            ignored: false,
-                        },
-                        0,
-                    )
-                    if (preview.kind === "preview" && preview.text !== null) {
-                        await onSnapshot(preview.text)
-                    }
-
+                    await onSnapshot?.("preview")
                     return "hello back"
                 },
             },
             {
-                async open() {
-                    return {
-                        mode: "progressive" as const,
-                        async preview(text: string): Promise<void> {
-                            previewSnapshots.push(text)
+                async openMany() {
+                    return [
+                        {
+                            mode: "progressive" as const,
+                            async preview(text: string): Promise<void> {
+                                previewSnapshots.push(text)
+                            },
+                            async finish(finalText: string | null): Promise<boolean> {
+                                deliveredBodies.push(finalText)
+                                return true
+                            },
                         },
-                        async finish(finalText: string | null): Promise<boolean> {
-                            deliveredBodies.push(finalText)
-                            return true
-                        },
-                    }
+                    ]
                 },
             },
             new MemoryLogger(),
         )
 
-        const report = await executor.handleInboundMessage(createMessage())
+        const report = await executor.executeMailboxEntries([
+            createMailboxEntry(1, "first"),
+            createMailboxEntry(2, "second"),
+        ])
 
-        expect(seenSessionIds).toEqual(["ses_stale", "ses_fresh"])
-        expect(store.getSessionBinding("telegram:42")).toBe("ses_fresh")
-        expect(previewSnapshots).toEqual(["hello"])
+        expect(appended).toEqual([
+            {
+                sessionId: "ses_fresh",
+                prompt: "first",
+                messageId: "msg_gateway_mailbox_1",
+            },
+        ])
+        expect(previewSnapshots).toEqual(["preview"])
         expect(deliveredBodies).toEqual(["hello back"])
         expect(report.responseText).toBe("hello back")
         expect(report.delivered).toBe(true)
@@ -172,6 +152,21 @@ function createMessage(): BindingInboundMessage {
             target: "42",
             topic: null,
         },
+    }
+}
+
+function createMailboxEntry(id: number, body: string): MailboxEntryRecord {
+    return {
+        id,
+        mailboxKey: "telegram:42",
+        sourceKind: "telegram_update",
+        externalId: `update:${id}`,
+        sender: "telegram:7",
+        body,
+        replyChannel: "telegram",
+        replyTarget: "42",
+        replyTopic: null,
+        createdAtMs: 1_000 + id,
     }
 }
 
@@ -199,50 +194,38 @@ function createModule() {
             throw new Error("unused")
         },
         ExecutionHandle: {
-            progressive(prepared: BindingPreparedExecution, sessionId: string) {
-                return createExecutionHandle(prepared, sessionId)
-            },
-            oneshot(prepared: BindingPreparedExecution, sessionId: string) {
-                return createExecutionHandle(prepared, sessionId)
-            },
-        },
-    }
-}
-
-function createExecutionHandle(prepared: BindingPreparedExecution, sessionId: string) {
-    let finished = false
-
-    return {
-        observeEvent(observation: BindingExecutionObservation): BindingProgressiveDirective {
-            if (
-                observation.kind === "textPartUpdated" &&
-                observation.sessionId === sessionId &&
-                observation.delta !== null
-            ) {
+            progressive(_prepared: BindingPreparedExecution, _sessionId: string) {
                 return {
-                    kind: "preview",
-                    text: observation.delta,
+                    observeEvent() {
+                        return {
+                            kind: "noop",
+                            text: null,
+                        }
+                    },
+                    finish(finalText: string) {
+                        return {
+                            kind: "final",
+                            text: finalText,
+                        }
+                    },
                 }
-            }
-
-            return {
-                kind: "noop",
-                text: null,
-            }
-        },
-        finish(finalText: string): BindingProgressiveDirective {
-            if (finished) {
+            },
+            oneshot(_prepared: BindingPreparedExecution, _sessionId: string) {
                 return {
-                    kind: "noop",
-                    text: null,
+                    observeEvent() {
+                        return {
+                            kind: "noop",
+                            text: null,
+                        }
+                    },
+                    finish(finalText: string) {
+                        return {
+                            kind: "final",
+                            text: finalText,
+                        }
+                    },
                 }
-            }
-
-            finished = true
-            return {
-                kind: "final",
-                text: prepared.replyTarget === null ? finalText : finalText,
-            }
+            },
         },
     }
 }

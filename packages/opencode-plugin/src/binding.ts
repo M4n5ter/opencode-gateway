@@ -47,6 +47,7 @@ export type BindingInboundMessage = {
     deliveryTarget: BindingDeliveryTarget
     sender: string
     body: string
+    mailboxKey?: string | null
 }
 
 export type BindingPreparedExecution = {

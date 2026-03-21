@@ -1,6 +1,7 @@
 import type { BindingLoggerHost } from "../binding"
 import type { TelegramConfig } from "../config/telegram"
-import type { GatewayExecutorLike } from "../runtime/executor"
+import type { GatewayMailboxRouter } from "../mailbox/router"
+import type { GatewayMailboxRuntime } from "../runtime/mailbox"
 import type { SqliteStore } from "../store/sqlite"
 import { formatError } from "../utils/error"
 import { TelegramApiError, type TelegramPollingClientLike } from "./client"
@@ -13,10 +14,11 @@ export class TelegramPollingService {
 
     constructor(
         private readonly client: TelegramPollingClientLike,
-        private readonly executor: GatewayExecutorLike,
+        private readonly mailbox: GatewayMailboxRuntimeLike,
         private readonly store: SqliteStore,
         private readonly logger: BindingLoggerHost,
         private readonly config: Extract<TelegramConfig, { enabled: true }>,
+        private readonly mailboxRouter: GatewayMailboxRouter,
     ) {
         this.allowlist = buildTelegramAllowlist(config)
     }
@@ -47,7 +49,7 @@ export class TelegramPollingService {
 
                 for (const update of updates) {
                     const nextOffset = update.update_id + 1
-                    const normalized = normalizeTelegramUpdate(update, this.allowlist)
+                    const normalized = normalizeTelegramUpdate(update, this.allowlist, this.mailboxRouter)
 
                     if (normalized.kind === "ignore") {
                         this.logger.log("info", `ignoring telegram update ${update.update_id}: ${normalized.reason}`)
@@ -61,7 +63,7 @@ export class TelegramPollingService {
                         normalized.chatType,
                         Date.now(),
                     )
-                    await this.executor.handleInboundMessage(normalized.message)
+                    this.mailbox.enqueueInboundMessage(normalized.message, "telegram_update", String(update.update_id))
                     offset = this.advanceOffset(nextOffset)
                 }
 
@@ -88,6 +90,8 @@ export class TelegramPollingService {
         return offset
     }
 }
+
+type GatewayMailboxRuntimeLike = Pick<GatewayMailboxRuntime, "enqueueInboundMessage">
 
 function isPermanentTelegramFailure(error: unknown): boolean {
     return error instanceof TelegramApiError && !error.retryable

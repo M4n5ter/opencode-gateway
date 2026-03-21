@@ -5,6 +5,10 @@ type TextSnapshotHandler = (text: string) => Promise<void> | void
 type PendingPrompt = {
     execution: ExecutionHandle
     onPreview: TextSnapshotHandler
+    expectedUserMessageId: string
+    assistantMessageId: string | null
+    resolveAssistantMessageId(messageId: string): void
+    assistantMessageIdPromise: Promise<string>
 }
 
 type MessageInfo =
@@ -68,8 +72,20 @@ export class OpencodeEventHub {
     private readonly pendingPrompts = new Map<string, Map<number, PendingPrompt>>()
     private nextPromptId = 0
 
-    registerPrompt(sessionId: string, execution: ExecutionHandle, onPreview: TextSnapshotHandler): { dispose(): void } {
+    registerPrompt(
+        sessionId: string,
+        execution: ExecutionHandle,
+        expectedUserMessageId: string,
+        onPreview: TextSnapshotHandler,
+    ): {
+        dispose(): void
+        waitForAssistantMessageId(): Promise<string>
+    } {
         const promptId = this.nextPromptId++
+        let resolveAssistantMessageId: ((messageId: string) => void) | null = null
+        const assistantMessageIdPromise = new Promise<string>((resolve) => {
+            resolveAssistantMessageId = resolve
+        })
         let prompts = this.pendingPrompts.get(sessionId)
         if (!prompts) {
             prompts = new Map()
@@ -79,6 +95,13 @@ export class OpencodeEventHub {
         prompts.set(promptId, {
             execution,
             onPreview,
+            expectedUserMessageId,
+            assistantMessageId: null,
+            resolveAssistantMessageId: (messageId: string) => {
+                resolveAssistantMessageId?.(messageId)
+                resolveAssistantMessageId = null
+            },
+            assistantMessageIdPromise,
         })
 
         return {
@@ -93,10 +116,12 @@ export class OpencodeEventHub {
                     this.pendingPrompts.delete(sessionId)
                 }
             },
+            waitForAssistantMessageId: () => assistantMessageIdPromise,
         }
     }
 
     handleEvent(event: OpencodeRuntimeEvent): void {
+        this.trackAssistantBindings(event)
         const observation = normalizeExecutionObservation(event)
         if (observation === null) {
             return
@@ -111,6 +136,31 @@ export class OpencodeEventHub {
             for (const prompt of prompts.values()) {
                 this.publishDirective(prompt, prompt.execution.observeEvent(observation, monotonicNowMs()))
             }
+        }
+    }
+
+    private trackAssistantBindings(event: OpencodeRuntimeEvent): void {
+        if (!isMessageUpdatedEvent(event)) {
+            return
+        }
+
+        const info = event.properties.info
+        if (info.role !== "assistant" || typeof info.parentID !== "string") {
+            return
+        }
+
+        const prompts = this.pendingPrompts.get(info.sessionID)
+        if (!prompts) {
+            return
+        }
+
+        for (const prompt of prompts.values()) {
+            if (prompt.assistantMessageId !== null || info.parentID !== prompt.expectedUserMessageId) {
+                continue
+            }
+
+            prompt.assistantMessageId = info.id
+            prompt.resolveAssistantMessageId(info.id)
         }
     }
 

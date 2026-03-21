@@ -4,6 +4,11 @@ import type { BindingExecutionObservation, BindingProgressiveDirective, Executio
 import { OpencodeEventHub } from "./events"
 import { streamPromptText } from "./stream"
 
+const PROMPT_IDS = {
+    messageId: "msg_user_1",
+    textPartId: "prt_user_1",
+}
+
 test("streamPromptText forwards session events into the execution handle and returns the final message text", async () => {
     const snapshots: string[] = []
     const observations: BindingExecutionObservation[] = []
@@ -33,7 +38,7 @@ test("streamPromptText forwards session events into the execution handle and ret
 
     const client = {
         session: {
-            async prompt() {
+            async promptAsync() {
                 events.handleEvent(createUserMessageUpdatedEvent("session-2", "msg_user_other"))
                 events.handleEvent(
                     createAssistantMessageUpdatedEvent("session-2", "msg_assistant_other", "msg_user_other"),
@@ -41,16 +46,16 @@ test("streamPromptText forwards session events into the execution handle and ret
                 events.handleEvent(
                     createUpdatedPartEvent("session-2", "msg_assistant_other", "part-other", "wrong", null),
                 )
-                events.handleEvent(createUserMessageUpdatedEvent("session-1", "msg_user_1"))
-                events.handleEvent(createAssistantMessageUpdatedEvent("session-1", "msg_assistant_1", "msg_user_1"))
+                events.handleEvent(createUserMessageUpdatedEvent("session-1", PROMPT_IDS.messageId))
+                events.handleEvent(
+                    createAssistantMessageUpdatedEvent("session-1", "msg_assistant_1", PROMPT_IDS.messageId),
+                )
                 events.handleEvent(createUpdatedPartEvent("session-1", "msg_assistant_1", "part-1", null, "hel"))
                 events.handleEvent(createDeltaPartEvent("msg_assistant_1", "part-1", "lo"))
-
+            },
+            async status() {
                 return {
-                    data: {
-                        info: { id: "msg_assistant_1" },
-                        parts: [{ messageID: "stale", type: "text", text: "ignored" }],
-                    },
+                    data: {},
                 }
             },
             async message(input: { path: { messageID: string } }) {
@@ -70,8 +75,9 @@ test("streamPromptText forwards session events into the execution handle and ret
         events,
         "session-1",
         "hello",
+        PROMPT_IDS,
         execution,
-        async (text) => {
+        async (text: string) => {
             snapshots.push(text)
         },
     )
@@ -82,7 +88,7 @@ test("streamPromptText forwards session events into the execution handle and ret
     expect(observations.some((observation) => observation.kind === "textPartDelta")).toBe(true)
 })
 
-test("streamPromptText waits briefly for preview establishment after prompt returns", async () => {
+test("streamPromptText waits briefly for preview establishment after promptAsync returns", async () => {
     const snapshots: string[] = []
     const events = new OpencodeEventHub()
     const execution = createExecutionHandle((observation) => {
@@ -100,18 +106,16 @@ test("streamPromptText waits briefly for preview establishment after prompt retu
 
     const client = {
         session: {
-            async prompt() {
+            async promptAsync() {
                 setTimeout(() => {
                     events.handleEvent(createUserMessageUpdatedEvent("session-1", "msg_user_2"))
                     events.handleEvent(createAssistantMessageUpdatedEvent("session-1", "msg_assistant_2", "msg_user_2"))
                     events.handleEvent(createUpdatedPartEvent("session-1", "msg_assistant_2", "part-1", null, "hel"))
                 }, 50)
-
+            },
+            async status() {
                 return {
-                    data: {
-                        info: { id: "msg_assistant_2" },
-                        parts: [],
-                    },
+                    data: {},
                 }
             },
             async message() {
@@ -131,8 +135,12 @@ test("streamPromptText waits briefly for preview establishment after prompt retu
         events,
         "session-1",
         "hello",
+        {
+            messageId: "msg_user_2",
+            textPartId: "prt_user_2",
+        },
         execution,
-        async (text) => {
+        async (text: string) => {
             snapshots.push(text)
         },
     )
@@ -142,7 +150,7 @@ test("streamPromptText waits briefly for preview establishment after prompt retu
     expect(Date.now() - started).toBeGreaterThanOrEqual(45)
 })
 
-test("event hub keeps processing later observations while an earlier preview handler is pending", async () => {
+test("event hub keeps processing later observations while an earlier preview handler is still pending", async () => {
     const snapshots: string[] = []
     const events = new OpencodeEventHub()
     let releaseFirstSnapshot: (() => void) | undefined
@@ -169,7 +177,8 @@ test("event hub keeps processing later observations while an earlier preview han
 
             return noop()
         }),
-        async (text) => {
+        "msg_user_3",
+        async (text: string) => {
             snapshots.push(text)
             if (firstSnapshot) {
                 firstSnapshot = false
@@ -188,9 +197,7 @@ test("event hub keeps processing later observations while an earlier preview han
 
         expect(snapshots).toEqual(["hel", "hello"])
     } finally {
-        if (releaseFirstSnapshot !== undefined) {
-            releaseFirstSnapshot()
-        }
+        releaseFirstSnapshot?.()
         registration.dispose()
     }
 })
@@ -198,7 +205,12 @@ test("event hub keeps processing later observations while an earlier preview han
 test("disposing one prompt does not remove a sibling prompt on the same session", async () => {
     const snapshots: string[] = []
     const events = new OpencodeEventHub()
-    const staleRegistration = events.registerPrompt("session-1", createExecutionHandle(() => noop()), () => {})
+    const staleRegistration = events.registerPrompt(
+        "session-1",
+        createExecutionHandle(() => noop()),
+        "msg_user_stale",
+        () => {},
+    )
     const activeRegistration = events.registerPrompt(
         "session-1",
         createExecutionHandle((observation) => {
@@ -212,7 +224,8 @@ test("disposing one prompt does not remove a sibling prompt on the same session"
 
             return noop()
         }),
-        (text) => {
+        "msg_user_4",
+        (text: string) => {
             snapshots.push(text)
         },
     )
@@ -235,12 +248,13 @@ test("streamPromptText preserves leading whitespace in final text parts", async 
     const execution = createExecutionHandle(() => noop())
     const client = {
         session: {
-            async prompt() {
+            async promptAsync() {
+                events.handleEvent(createUserMessageUpdatedEvent("session-1", "msg_user_5"))
+                events.handleEvent(createAssistantMessageUpdatedEvent("session-1", "msg_assistant_5", "msg_user_5"))
+            },
+            async status() {
                 return {
-                    data: {
-                        info: { id: "msg_assistant_5" },
-                        parts: [],
-                    },
+                    data: {},
                 }
             },
             async message() {
@@ -265,6 +279,10 @@ test("streamPromptText preserves leading whitespace in final text parts", async 
         events,
         "session-1",
         "hello",
+        {
+            messageId: "msg_user_5",
+            textPartId: "prt_user_5",
+        },
         execution,
         async () => {},
     )

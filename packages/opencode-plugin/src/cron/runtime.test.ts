@@ -109,6 +109,12 @@ function createExecutorStub(): GatewayExecutorLike {
         async handleInboundMessage(_message) {
             throw new Error("unused")
         },
+        prepareInboundMessage() {
+            throw new Error("unused")
+        },
+        async executeMailboxEntries() {
+            throw new Error("unused")
+        },
         async dispatchCronJob(_job: BindingCronJobSpec) {
             return {
                 conversationKey: "cron:nightly",

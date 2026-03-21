@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite"
 
-const LATEST_SCHEMA_VERSION = 3
+const LATEST_SCHEMA_VERSION = 4
 
 export function migrateGatewayDatabase(db: Database): void {
     db.exec("PRAGMA journal_mode = WAL;")
@@ -23,6 +23,11 @@ export function migrateGatewayDatabase(db: Database): void {
 
     if (currentVersion === 2) {
         migrateToV3(db)
+        currentVersion = 3
+    }
+
+    if (currentVersion === 3) {
+        migrateToV4(db)
     }
 }
 
@@ -98,6 +103,30 @@ function migrateToV3(db: Database): void {
 
         CREATE INDEX cron_runs_status_started_at_ms_idx
             ON cron_runs (status, started_at_ms DESC);
+    `)
+    db.exec("PRAGMA user_version = 3;")
+}
+
+function migrateToV4(db: Database): void {
+    db.exec(`
+        CREATE TABLE mailbox_entries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            mailbox_key TEXT NOT NULL,
+            source_kind TEXT NOT NULL,
+            external_id TEXT NOT NULL,
+            sender TEXT NOT NULL,
+            body TEXT NOT NULL,
+            reply_channel TEXT,
+            reply_target TEXT,
+            reply_topic TEXT,
+            created_at_ms INTEGER NOT NULL
+        );
+
+        CREATE UNIQUE INDEX mailbox_entries_source_kind_external_id_idx
+            ON mailbox_entries (source_kind, external_id);
+
+        CREATE INDEX mailbox_entries_mailbox_key_id_idx
+            ON mailbox_entries (mailbox_key, id);
     `)
     db.exec(`PRAGMA user_version = ${LATEST_SCHEMA_VERSION};`)
 }

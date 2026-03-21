@@ -53,6 +53,7 @@ pub struct InboundMessage {
     pub delivery_target: DeliveryTarget,
     pub sender: String,
     pub body: String,
+    conversation_key_override: Option<ConversationKey>,
 }
 
 impl InboundMessage {
@@ -78,12 +79,25 @@ impl InboundMessage {
             delivery_target: DeliveryTarget::new(channel, target, topic),
             sender,
             body,
+            conversation_key_override: None,
         })
     }
 
     /// Returns the logical conversation key for the inbound message route.
     pub fn conversation_key(&self) -> ConversationKey {
-        self.delivery_target.conversation_key()
+        self.conversation_key_override
+            .clone()
+            .unwrap_or_else(|| self.delivery_target.conversation_key())
+    }
+
+    /// Overrides the default mailbox/session key for this inbound message.
+    pub fn set_conversation_key_override(
+        &mut self,
+        conversation_key: impl Into<String>,
+    ) -> Result<(), MessageValidationError> {
+        let conversation_key = normalize_body(&conversation_key.into())?;
+        self.conversation_key_override = Some(ConversationKey::for_override(conversation_key));
+        Ok(())
     }
 }
 

@@ -2,7 +2,8 @@ import type { PluginInput } from "@opencode-ai/plugin"
 
 import type { BindingOpencodeHost, BindingPromptRequest, BindingPromptResult, ExecutionHandle } from "../binding"
 import type { OpencodeEventHub } from "../opencode/events"
-import { streamPromptText } from "../opencode/stream"
+import type { OpencodePromptIds } from "../opencode/message-ids"
+import { appendPromptText, streamPromptText } from "../opencode/stream"
 import { failedPromptResult, okPromptResult } from "./result"
 
 type OpencodeClient = PluginInput["client"]
@@ -57,7 +58,17 @@ export class GatewayOpencodeHost implements BindingOpencodeHost {
         onSnapshot: GatewayPromptSnapshotHandler,
     ): Promise<GatewayPromptExecution> {
         const sessionId = await this.ensureSession(request.conversationKey, request.sessionId)
-        const responseText = await this.promptSessionWithSnapshots(sessionId, request.prompt, execution, onSnapshot)
+        const stamp = Date.now()
+        const responseText = await this.promptSessionWithSnapshots(
+            sessionId,
+            request.prompt,
+            {
+                messageId: `msg_runtime_${stamp}`,
+                textPartId: `prt_runtime_${stamp}`,
+            },
+            execution,
+            onSnapshot,
+        )
 
         return { sessionId, responseText }
     }
@@ -73,15 +84,15 @@ export class GatewayOpencodeHost implements BindingOpencodeHost {
             throwOnError: true,
         })
 
-        const payload = unwrapData<PromptResponse>(response)
-        return await this.readFinalResponseText(sessionId, payload)
+        return await this.readFinalResponseText(sessionId, unwrapData<PromptResponse>(response))
     }
 
     async promptSessionWithSnapshots(
         sessionId: string,
         prompt: string,
+        ids: OpencodePromptIds,
         execution: ExecutionHandle,
-        onSnapshot: GatewayPromptSnapshotHandler,
+        onSnapshot: GatewayPromptSnapshotHandler | null,
     ): Promise<string> {
         return await streamPromptText(
             this.client,
@@ -89,9 +100,14 @@ export class GatewayOpencodeHost implements BindingOpencodeHost {
             this.events,
             sessionId,
             prompt,
+            ids,
             execution,
             onSnapshot,
         )
+    }
+
+    async appendPrompt(sessionId: string, prompt: string, ids: OpencodePromptIds): Promise<void> {
+        await appendPromptText(this.client, this.directory, sessionId, prompt, ids)
     }
 
     async ensureSession(conversationKey: string, sessionId: string | null): Promise<string> {
@@ -104,6 +120,32 @@ export class GatewayOpencodeHost implements BindingOpencodeHost {
         }
 
         return await this.createSession(conversationKey)
+    }
+
+    async waitUntilSessionIdle(sessionId: string): Promise<void> {
+        for (;;) {
+            const statuses = await this.client.session.status({
+                query: { directory: this.directory },
+                responseStyle: "data",
+                throwOnError: true,
+            })
+            const current = unwrapData<Record<string, { type?: string }>>(statuses)[sessionId]
+            if (!current || current.type === "idle") {
+                return
+            }
+
+            await Bun.sleep(250)
+        }
+    }
+
+    async isSessionBusy(sessionId: string): Promise<boolean> {
+        const statuses = await this.client.session.status({
+            query: { directory: this.directory },
+            responseStyle: "data",
+            throwOnError: true,
+        })
+        const current = unwrapData<Record<string, { type?: string }>>(statuses)[sessionId]
+        return current !== undefined && current.type !== "idle"
     }
 
     private async createSession(conversationKey: string): Promise<string> {

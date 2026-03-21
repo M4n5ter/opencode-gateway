@@ -4,7 +4,7 @@ import { dirname } from "node:path"
 
 import { migrateGatewayDatabase } from "./migrations"
 
-export type RuntimeJournalKind = "inbound_message" | "cron_dispatch" | "delivery"
+export type RuntimeJournalKind = "inbound_message" | "cron_dispatch" | "delivery" | "mailbox_enqueue" | "mailbox_flush"
 export type CronRunStatus = "running" | "succeeded" | "failed" | "abandoned"
 
 export type RuntimeJournalEntry = {
@@ -27,6 +27,19 @@ export type CronJobRecord = {
     updatedAtMs: number
 }
 
+export type MailboxEntryRecord = {
+    id: number
+    mailboxKey: string
+    sourceKind: string
+    externalId: string
+    sender: string
+    body: string
+    replyChannel: string | null
+    replyTarget: string | null
+    replyTopic: string | null
+    createdAtMs: number
+}
+
 export type PersistCronJobInput = {
     id: string
     schedule: string
@@ -36,6 +49,18 @@ export type PersistCronJobInput = {
     deliveryTopic: string | null
     enabled: boolean
     nextRunAtMs: number
+    recordedAtMs: number
+}
+
+export type PersistMailboxEntryInput = {
+    mailboxKey: string
+    sourceKind: string
+    externalId: string
+    sender: string
+    body: string
+    replyChannel: string | null
+    replyTarget: string | null
+    replyTopic: string | null
     recordedAtMs: number
 }
 
@@ -79,6 +104,92 @@ export class SqliteStore {
                 `,
             )
             .run(entry.kind, entry.recordedAtMs, entry.conversationKey, JSON.stringify(entry.payload))
+    }
+
+    enqueueMailboxEntry(input: PersistMailboxEntryInput): void {
+        assertSafeInteger(input.recordedAtMs, "mailbox recordedAtMs")
+
+        this.db
+            .query(
+                `
+                    INSERT INTO mailbox_entries (
+                        mailbox_key,
+                        source_kind,
+                        external_id,
+                        sender,
+                        body,
+                        reply_channel,
+                        reply_target,
+                        reply_topic,
+                        created_at_ms
+                    )
+                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                    ON CONFLICT(source_kind, external_id) DO NOTHING;
+                `,
+            )
+            .run(
+                input.mailboxKey,
+                input.sourceKind,
+                input.externalId,
+                input.sender,
+                input.body,
+                input.replyChannel,
+                input.replyTarget,
+                input.replyTopic,
+                input.recordedAtMs,
+            )
+    }
+
+    listPendingMailboxKeys(): string[] {
+        const rows = this.db
+            .query<{ mailbox_key: string }, []>(
+                `
+                    SELECT DISTINCT mailbox_key
+                    FROM mailbox_entries
+                    ORDER BY mailbox_key ASC;
+                `,
+            )
+            .all()
+
+        return rows.map((row) => row.mailbox_key)
+    }
+
+    listMailboxEntries(mailboxKey: string): MailboxEntryRecord[] {
+        const rows = this.db
+            .query<MailboxEntryRow, [string]>(
+                `
+                    SELECT
+                        id,
+                        mailbox_key,
+                        source_kind,
+                        external_id,
+                        sender,
+                        body,
+                        reply_channel,
+                        reply_target,
+                        reply_topic,
+                        created_at_ms
+                    FROM mailbox_entries
+                    WHERE mailbox_key = ?1
+                    ORDER BY id ASC;
+                `,
+            )
+            .all(mailboxKey)
+
+        return rows.map(mapMailboxEntryRow)
+    }
+
+    deleteMailboxEntries(ids: number[]): void {
+        if (ids.length === 0) {
+            return
+        }
+
+        for (const id of ids) {
+            assertSafeInteger(id, "mailbox entry id")
+        }
+        const placeholders = ids.map((_, index) => `?${index + 1}`).join(", ")
+
+        this.db.query(`DELETE FROM mailbox_entries WHERE id IN (${placeholders});`).run(...ids)
     }
 
     getTelegramUpdateOffset(): number | null {
@@ -369,6 +480,19 @@ type CronJobRow = {
     updated_at_ms: number
 }
 
+type MailboxEntryRow = {
+    id: number
+    mailbox_key: string
+    source_kind: string
+    external_id: string
+    sender: string
+    body: string
+    reply_channel: string | null
+    reply_target: string | null
+    reply_topic: string | null
+    created_at_ms: number
+}
+
 function mapCronJobRow(row: CronJobRow): CronJobRecord {
     return {
         id: row.id,
@@ -381,6 +505,21 @@ function mapCronJobRow(row: CronJobRow): CronJobRecord {
         nextRunAtMs: row.next_run_at_ms,
         createdAtMs: row.created_at_ms,
         updatedAtMs: row.updated_at_ms,
+    }
+}
+
+function mapMailboxEntryRow(row: MailboxEntryRow): MailboxEntryRecord {
+    return {
+        id: row.id,
+        mailboxKey: row.mailbox_key,
+        sourceKind: row.source_kind,
+        externalId: row.external_id,
+        sender: row.sender,
+        body: row.body,
+        replyChannel: row.reply_channel,
+        replyTarget: row.reply_target,
+        replyTopic: row.reply_topic,
+        createdAtMs: row.created_at_ms,
     }
 }
 

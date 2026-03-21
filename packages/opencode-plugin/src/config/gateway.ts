@@ -9,15 +9,43 @@ type RawGatewayConfig = {
     cron?: unknown
     gateway?: {
         state_db?: unknown
+        mailbox?: unknown
     }
     channels?: {
         telegram?: unknown
     }
 }
 
+type RawMailboxConfig = {
+    batch_replies?: unknown
+    batch_window_ms?: unknown
+    routes?: unknown
+}
+
+type RawMailboxRouteConfig = {
+    channel?: unknown
+    target?: unknown
+    topic?: unknown
+    mailbox_key?: unknown
+}
+
+export type GatewayMailboxRouteConfig = {
+    channel: string
+    target: string
+    topic: string | null
+    mailboxKey: string
+}
+
+export type GatewayMailboxConfig = {
+    batchReplies: boolean
+    batchWindowMs: number
+    routes: GatewayMailboxRouteConfig[]
+}
+
 export type GatewayConfig = {
     configPath: string
     stateDbPath: string
+    mailbox: GatewayMailboxConfig
     cron: CronConfig
     telegram: TelegramConfig
 }
@@ -36,8 +64,19 @@ export async function loadGatewayConfig(env: EnvSource = process.env): Promise<G
     return {
         configPath,
         stateDbPath: resolveStateDbPath(stateDbValue, configPath, env),
+        mailbox: parseMailboxConfig(rawConfig?.gateway?.mailbox),
         cron: parseCronConfig(rawConfig?.cron),
         telegram: parseTelegramConfig(rawConfig?.channels?.telegram, env),
+    }
+}
+
+function parseMailboxConfig(value: unknown): GatewayMailboxConfig {
+    const table = readMailboxTable(value)
+
+    return {
+        batchReplies: readBoolean(table.batch_replies, "gateway.mailbox.batch_replies", false),
+        batchWindowMs: readBatchWindowMs(table.batch_window_ms),
+        routes: readMailboxRoutes(table.routes),
     }
 }
 
@@ -80,6 +119,107 @@ function resolveStateDbPath(stateDb: string | undefined, configPath: string, env
     }
 
     return resolve(dirname(configPath), stateDb)
+}
+
+function readMailboxTable(value: unknown): RawMailboxConfig {
+    if (value === undefined) {
+        return {}
+    }
+
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+        throw new Error("gateway.mailbox must be a table when present")
+    }
+
+    return value as RawMailboxConfig
+}
+
+function readBoolean(value: unknown, field: string, fallback: boolean): boolean {
+    if (value === undefined) {
+        return fallback
+    }
+
+    if (typeof value !== "boolean") {
+        throw new Error(`${field} must be a boolean when present`)
+    }
+
+    return value
+}
+
+function readBatchWindowMs(value: unknown): number {
+    if (value === undefined) {
+        return 1_500
+    }
+
+    if (typeof value !== "number" || !Number.isInteger(value)) {
+        throw new Error("gateway.mailbox.batch_window_ms must be an integer when present")
+    }
+
+    if (value < 0 || value > 60_000) {
+        throw new Error("gateway.mailbox.batch_window_ms must be between 0 and 60000")
+    }
+
+    return value
+}
+
+function readMailboxRoutes(value: unknown): GatewayMailboxRouteConfig[] {
+    if (value === undefined) {
+        return []
+    }
+
+    if (!Array.isArray(value)) {
+        throw new Error("gateway.mailbox.routes must be an array when present")
+    }
+
+    const routes = value.map((entry, index) => readMailboxRoute(entry, index))
+    const seen = new Set<string>()
+
+    for (const route of routes) {
+        const key = `${route.channel}:${route.target}:${route.topic ?? ""}`
+        if (seen.has(key)) {
+            throw new Error(`gateway.mailbox.routes contains a duplicate match for ${key}`)
+        }
+
+        seen.add(key)
+    }
+
+    return routes
+}
+
+function readMailboxRoute(value: unknown, index: number): GatewayMailboxRouteConfig {
+    const field = `gateway.mailbox.routes[${index}]`
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+        throw new Error(`${field} must be a table`)
+    }
+
+    const route = value as RawMailboxRouteConfig
+
+    return {
+        channel: readRequiredString(route.channel, `${field}.channel`),
+        target: readRequiredString(route.target, `${field}.target`),
+        topic: readOptionalString(route.topic, `${field}.topic`),
+        mailboxKey: readRequiredString(route.mailbox_key, `${field}.mailbox_key`),
+    }
+}
+
+function readRequiredString(value: unknown, field: string): string {
+    if (typeof value !== "string") {
+        throw new Error(`${field} must be a string`)
+    }
+
+    const trimmed = value.trim()
+    if (trimmed.length === 0) {
+        throw new Error(`${field} must not be empty`)
+    }
+
+    return trimmed
+}
+
+function readOptionalString(value: unknown, field: string): string | null {
+    if (value === undefined) {
+        return null
+    }
+
+    return readRequiredString(value, field)
 }
 
 function defaultGatewayConfigPath(env: EnvSource): string {

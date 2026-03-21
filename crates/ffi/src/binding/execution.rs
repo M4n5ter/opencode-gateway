@@ -162,6 +162,7 @@ mod tests {
             },
             sender: "telegram:7".to_owned(),
             body: "hello".to_owned(),
+            mailbox_key: None,
         })
         .expect("prepared");
 
@@ -194,5 +195,22 @@ mod tests {
         assert_eq!(prepared.conversation_key, "cron:nightly");
         assert_eq!(prepared.prompt, "summarize");
         assert!(prepared.reply_target.is_none());
+    }
+
+    #[test]
+    fn prepare_inbound_execution_honors_mailbox_override() {
+        let prepared = prepare_inbound_execution_value(BindingInboundMessage {
+            delivery_target: BindingDeliveryTarget {
+                channel: "telegram".to_owned(),
+                target: "42".to_owned(),
+                topic: None,
+            },
+            sender: "telegram:7".to_owned(),
+            body: "hello".to_owned(),
+            mailbox_key: Some("shared:mailbox".to_owned()),
+        })
+        .expect("prepared");
+
+        assert_eq!(prepared.conversation_key, "shared:mailbox");
     }
 }

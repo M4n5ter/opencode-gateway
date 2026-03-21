@@ -18,12 +18,42 @@ export class GatewayTextDelivery {
     ) {}
 
     async open(target: BindingDeliveryTarget, preference: DeliveryModePreference): Promise<TextDeliverySession> {
-        const mode = await this.telegramSupport.resolveMode(target, preference)
-        if (mode === "progressive") {
-            return this.openProgressiveSession(target)
+        const [session] = await this.openMany([target], preference)
+        return session
+    }
+
+    async openMany(
+        targets: BindingDeliveryTarget[],
+        preference: DeliveryModePreference,
+    ): Promise<TextDeliverySession[]> {
+        const uniqueTargets = dedupeTargets(targets)
+        if (uniqueTargets.length === 0) {
+            return [new NoopTextDeliverySession()]
         }
 
-        return new OneshotTextDeliverySession(target, this.transport)
+        const sessions = await Promise.all(
+            uniqueTargets.map(async (target) => {
+                const mode = await this.telegramSupport.resolveMode(target, preference)
+                if (mode === "progressive") {
+                    const session = new ProgressiveTextDeliverySession(
+                        target,
+                        this.transport,
+                        this.telegramSupport,
+                        this.store,
+                    )
+                    session.start()
+                    return session
+                }
+
+                return new OneshotTextDeliverySession(target, this.transport)
+            }),
+        )
+
+        if (sessions.length === 1) {
+            return sessions
+        }
+
+        return [new FanoutTextDeliverySession(sessions)]
     }
 
     async sendTest(
@@ -44,11 +74,37 @@ export class GatewayTextDelivery {
             mode: session.mode,
         }
     }
+}
 
-    private openProgressiveSession(target: BindingDeliveryTarget): TextDeliverySession {
-        const session = new ProgressiveTextDeliverySession(target, this.transport, this.telegramSupport, this.store)
-        session.start()
-        return session
+class NoopTextDeliverySession implements TextDeliverySession {
+    readonly mode = "oneshot" as const
+
+    async preview(_text: string): Promise<void> {}
+
+    async finish(_finalText: string | null): Promise<boolean> {
+        return false
+    }
+}
+
+class FanoutTextDeliverySession implements TextDeliverySession {
+    readonly mode: "oneshot" | "progressive"
+
+    constructor(private readonly sessions: TextDeliverySession[]) {
+        this.mode = sessions.some((session) => session.mode === "progressive") ? "progressive" : "oneshot"
+    }
+
+    async preview(text: string): Promise<void> {
+        await Promise.all(this.sessions.map((session) => session.preview(text)))
+    }
+
+    async finish(finalText: string | null): Promise<boolean> {
+        const results = await Promise.allSettled(this.sessions.map((session) => session.finish(finalText)))
+        const firstFailure = results.find((result) => result.status === "rejected")
+        if (firstFailure?.status === "rejected") {
+            throw firstFailure.reason
+        }
+
+        return results.some((result) => result.status === "fulfilled" && result.value)
     }
 }
 
@@ -138,19 +194,13 @@ class ProgressiveTextDeliverySession implements TextDeliverySession {
             return false
         }
 
-        if (!this.previewDelivered) {
-            if (!this.previewFailed) {
-                recordTelegramStreamFallback(this.store, "preview_not_established", Date.now())
-            }
+        if (!this.previewDelivered && !this.previewFailed) {
+            recordTelegramStreamFallback(this.store, "preview_not_established", Date.now())
         }
 
-        return await this.sendFinal(finalText)
-    }
-
-    private async sendFinal(body: string): Promise<boolean> {
         const ack = await this.transport.sendMessage({
             deliveryTarget: this.target,
-            body,
+            body: finalText,
         })
 
         if (ack.errorMessage !== null) {
@@ -159,4 +209,21 @@ class ProgressiveTextDeliverySession implements TextDeliverySession {
 
         return true
     }
+}
+
+function dedupeTargets(targets: BindingDeliveryTarget[]): BindingDeliveryTarget[] {
+    const seen = new Set<string>()
+    const unique: BindingDeliveryTarget[] = []
+
+    for (const target of targets) {
+        const key = `${target.channel}:${target.target}:${target.topic ?? ""}`
+        if (seen.has(key)) {
+            continue
+        }
+
+        seen.add(key)
+        unique.push(target)
+    }
+
+    return unique
 }

@@ -8,9 +8,11 @@ import { GatewayTextDelivery } from "./delivery/text"
 import { ConsoleLoggerHost } from "./host/noop"
 import { GatewayOpencodeHost } from "./host/opencode"
 import { GatewayTransportHost } from "./host/transport"
+import { GatewayMailboxRouter } from "./mailbox/router"
 import { OpencodeEventStream } from "./opencode/event-stream"
 import { OpencodeEventHub } from "./opencode/events"
 import { GatewayExecutor } from "./runtime/executor"
+import { GatewayMailboxRuntime } from "./runtime/mailbox"
 import { openSqliteStore } from "./store/sqlite"
 import { TelegramBotClient } from "./telegram/client"
 import { TelegramPollingService } from "./telegram/poller"
@@ -63,17 +65,19 @@ export async function createGatewayRuntime(
     const store = await openSqliteStore(config.stateDbPath)
     const logger = new ConsoleLoggerHost()
     const telegramClient = config.telegram.enabled ? new TelegramBotClient(config.telegram.botToken) : null
+    const mailboxRouter = new GatewayMailboxRouter(config.mailbox.routes)
     const opencodeEvents = new OpencodeEventHub()
     const opencode = new GatewayOpencodeHost(input.client, input.directory, opencodeEvents)
     const transport = new GatewayTransportHost(telegramClient, store)
     const progressiveSupport = new TelegramProgressiveSupport(telegramClient, store, logger)
     const delivery = new GatewayTextDelivery(transport, store, progressiveSupport)
     const executor = new GatewayExecutor(module, store, opencode, delivery, logger)
+    const mailbox = new GatewayMailboxRuntime(executor, store, logger, config.mailbox)
     const cron = new GatewayCronRuntime(executor, module, store, logger, config.cron)
     const eventStream = new OpencodeEventStream(input.client, input.directory, opencodeEvents, logger)
     const telegramPolling =
         config.telegram.enabled && telegramClient !== null
-            ? new TelegramPollingService(telegramClient, executor, store, logger, config.telegram)
+            ? new TelegramPollingService(telegramClient, mailbox, store, logger, config.telegram, mailboxRouter)
             : null
     const telegram = new GatewayTelegramRuntime(
         telegramClient,
@@ -86,6 +90,7 @@ export async function createGatewayRuntime(
     )
     eventStream.start()
     cron.start()
+    mailbox.start()
     telegram.start()
 
     return new GatewayPluginRuntime(module, executor, cron, telegram)

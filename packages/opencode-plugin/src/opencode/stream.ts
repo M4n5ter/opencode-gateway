@@ -2,11 +2,13 @@ import type { PluginInput } from "@opencode-ai/plugin"
 
 import type { ExecutionHandle } from "../binding"
 import type { OpencodeEventHub } from "./events"
+import type { OpencodePromptIds } from "./message-ids"
 
 type OpencodeClient = PluginInput["client"]
 type TextSnapshotHandler = (text: string) => Promise<void> | void
 
 const PREVIEW_ESTABLISH_WINDOW_MS = 500
+const SESSION_IDLE_POLL_MS = 250
 
 export async function streamPromptText(
     client: OpencodeClient,
@@ -14,41 +16,46 @@ export async function streamPromptText(
     events: OpencodeEventHub,
     sessionId: string,
     prompt: string,
+    ids: OpencodePromptIds,
     execution: ExecutionHandle,
-    onSnapshot: TextSnapshotHandler,
+    onSnapshot: TextSnapshotHandler | null,
 ): Promise<string> {
     let previewEstablished = false
     let resolvePreviewEstablished: (() => void) | null = null
     const previewEstablishedPromise = new Promise<void>((resolve) => {
         resolvePreviewEstablished = resolve
     })
-    const pendingPrompt = events.registerPrompt(sessionId, execution, async (text) => {
-        if (!previewEstablished) {
-            previewEstablished = true
-            resolvePreviewEstablished?.()
-            resolvePreviewEstablished = null
-        }
+    const pendingPrompt = events.registerPrompt(sessionId, execution, ids.messageId, async (text) => {
+        if (onSnapshot !== null) {
+            if (!previewEstablished) {
+                previewEstablished = true
+                resolvePreviewEstablished?.()
+                resolvePreviewEstablished = null
+            }
 
-        await onSnapshot(text)
+            await onSnapshot(text)
+        }
     })
 
     try {
-        const response = await client.session.prompt({
+        await client.session.promptAsync({
             path: { id: sessionId },
             query: { directory },
             body: {
-                parts: [{ type: "text", text: prompt }],
+                messageID: ids.messageId,
+                parts: [{ id: ids.textPartId, type: "text", text: prompt }],
             },
             responseStyle: "data",
             throwOnError: true,
         })
 
-        if (!previewEstablished) {
+        if (onSnapshot !== null && !previewEstablished) {
             await Promise.race([previewEstablishedPromise, Bun.sleep(PREVIEW_ESTABLISH_WINDOW_MS)])
         }
 
-        const payload = unwrapData<PromptResponse>(response)
-        return await readFinalResponseText(client, directory, sessionId, payload)
+        const assistantMessageId = await pendingPrompt.waitForAssistantMessageId()
+        await waitUntilSessionIdle(client, directory, sessionId)
+        return await readFinalResponseText(client, directory, sessionId, assistantMessageId)
     } finally {
         pendingPrompt.dispose()
     }
@@ -72,13 +79,8 @@ async function readFinalResponseText(
     client: OpencodeClient,
     directory: string,
     sessionId: string,
-    payload: PromptResponse,
+    messageId: string,
 ): Promise<string> {
-    const messageId = payload.info?.id
-    if (!messageId) {
-        return extractVisibleTextParts(payload.parts, null)
-    }
-
     const message = await client.session.message({
         path: {
             id: sessionId,
@@ -90,6 +92,26 @@ async function readFinalResponseText(
     })
 
     return extractVisibleTextParts(unwrapData<PromptResponse>(message).parts, messageId)
+}
+
+export async function appendPromptText(
+    client: OpencodeClient,
+    directory: string,
+    sessionId: string,
+    prompt: string,
+    ids: OpencodePromptIds,
+): Promise<void> {
+    await client.session.promptAsync({
+        path: { id: sessionId },
+        query: { directory },
+        body: {
+            messageID: ids.messageId,
+            noReply: true,
+            parts: [{ id: ids.textPartId, type: "text", text: prompt }],
+        },
+        responseStyle: "data",
+        throwOnError: true,
+    })
 }
 
 function extractVisibleTextParts(parts: PromptResponse["parts"], messageId: string | null): string {
@@ -109,4 +131,20 @@ function extractVisibleTextParts(parts: PromptResponse["parts"], messageId: stri
 
 function unwrapData<T>(value: MaybeWrapped<T>): T {
     return typeof value === "object" && value !== null && "data" in value ? value.data : value
+}
+
+async function waitUntilSessionIdle(client: OpencodeClient, directory: string, sessionId: string): Promise<void> {
+    for (;;) {
+        const statuses = await client.session.status({
+            query: { directory },
+            responseStyle: "data",
+            throwOnError: true,
+        })
+        const sessionStatus = unwrapData<Record<string, { type?: string }>>(statuses)[sessionId]
+        if (!sessionStatus || sessionStatus.type === "idle") {
+            return
+        }
+
+        await Bun.sleep(SESSION_IDLE_POLL_MS)
+    }
 }

@@ -23,6 +23,129 @@ test("loadGatewayConfig resolves relative state_db against the config file", asy
     }
 })
 
+test("loadGatewayConfig defaults mailbox batching to off", async () => {
+    const root = await mkdtemp(join(tmpdir(), "opencode-gateway-config-"))
+    const configPath = join(root, "config.toml")
+
+    try {
+        await writeFile(configPath, "")
+
+        const config = await loadGatewayConfig({
+            OPENCODE_GATEWAY_CONFIG: configPath,
+        })
+
+        expect(config.mailbox).toEqual({
+            batchReplies: false,
+            batchWindowMs: 1_500,
+            routes: [],
+        })
+    } finally {
+        await rm(root, { recursive: true, force: true })
+    }
+})
+
+test("loadGatewayConfig parses mailbox batching settings", async () => {
+    const root = await mkdtemp(join(tmpdir(), "opencode-gateway-config-"))
+    const configPath = join(root, "config.toml")
+
+    try {
+        await writeFile(configPath, ["[gateway.mailbox]", "batch_replies = true", "batch_window_ms = 2500"].join("\n"))
+
+        const config = await loadGatewayConfig({
+            OPENCODE_GATEWAY_CONFIG: configPath,
+        })
+
+        expect(config.mailbox).toEqual({
+            batchReplies: true,
+            batchWindowMs: 2_500,
+            routes: [],
+        })
+    } finally {
+        await rm(root, { recursive: true, force: true })
+    }
+})
+
+test("loadGatewayConfig parses explicit mailbox routes", async () => {
+    const root = await mkdtemp(join(tmpdir(), "opencode-gateway-config-"))
+    const configPath = join(root, "config.toml")
+
+    try {
+        await writeFile(
+            configPath,
+            [
+                "[gateway.mailbox]",
+                "batch_replies = false",
+                "",
+                "[[gateway.mailbox.routes]]",
+                'channel = "telegram"',
+                'target = "42"',
+                'mailbox_key = "shared:alpha"',
+                "",
+                "[[gateway.mailbox.routes]]",
+                'channel = "telegram"',
+                'target = "-100123"',
+                'topic = "99"',
+                'mailbox_key = "shared:alpha"',
+            ].join("\n"),
+        )
+
+        const config = await loadGatewayConfig({
+            OPENCODE_GATEWAY_CONFIG: configPath,
+        })
+
+        expect(config.mailbox).toEqual({
+            batchReplies: false,
+            batchWindowMs: 1_500,
+            routes: [
+                {
+                    channel: "telegram",
+                    target: "42",
+                    topic: null,
+                    mailboxKey: "shared:alpha",
+                },
+                {
+                    channel: "telegram",
+                    target: "-100123",
+                    topic: "99",
+                    mailboxKey: "shared:alpha",
+                },
+            ],
+        })
+    } finally {
+        await rm(root, { recursive: true, force: true })
+    }
+})
+
+test("loadGatewayConfig rejects duplicate mailbox route matches", async () => {
+    const root = await mkdtemp(join(tmpdir(), "opencode-gateway-config-"))
+    const configPath = join(root, "config.toml")
+
+    try {
+        await writeFile(
+            configPath,
+            [
+                "[[gateway.mailbox.routes]]",
+                'channel = "telegram"',
+                'target = "42"',
+                'mailbox_key = "shared:alpha"',
+                "",
+                "[[gateway.mailbox.routes]]",
+                'channel = "telegram"',
+                'target = "42"',
+                'mailbox_key = "shared:beta"',
+            ].join("\n"),
+        )
+
+        await expect(
+            loadGatewayConfig({
+                OPENCODE_GATEWAY_CONFIG: configPath,
+            }),
+        ).rejects.toThrow("duplicate match")
+    } finally {
+        await rm(root, { recursive: true, force: true })
+    }
+})
+
 test("loadGatewayConfig requires an explicit telegram allowlist when Telegram is enabled", async () => {
     const root = await mkdtemp(join(tmpdir(), "opencode-gateway-config-"))
     const configPath = join(root, "config.toml")
@@ -72,6 +195,11 @@ test("loadGatewayConfig normalizes Telegram allowlist identifiers", async () => 
             pollTimeoutSeconds: 25,
             allowedChats: ["-100123456", "-100999888"],
             allowedUsers: ["42", "77"],
+        })
+        expect(config.mailbox).toEqual({
+            batchReplies: false,
+            batchWindowMs: 1_500,
+            routes: [],
         })
         expect(config.cron).toEqual({
             enabled: true,

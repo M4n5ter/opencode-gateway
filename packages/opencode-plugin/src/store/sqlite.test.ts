@@ -19,6 +19,17 @@ test("sqlite store persists session bindings, offsets, and cron catalog state", 
             conversationKey: "cron:nightly",
             payload: { id: "nightly" },
         })
+        store.enqueueMailboxEntry({
+            mailboxKey: "telegram:42",
+            sourceKind: "telegram_update",
+            externalId: "100",
+            sender: "telegram:7",
+            body: "hello",
+            replyChannel: "telegram",
+            replyTarget: "42",
+            replyTopic: null,
+            recordedAtMs: 4242,
+        })
         store.upsertCronJob({
             id: "nightly",
             schedule: "0 9 * * *",
@@ -33,6 +44,21 @@ test("sqlite store persists session bindings, offsets, and cron catalog state", 
 
         expect(store.getSessionBinding("cron:nightly")).toBe("session-1")
         expect(store.getTelegramUpdateOffset()).toBe(99)
+        expect(store.listPendingMailboxKeys()).toEqual(["telegram:42"])
+        expect(store.listMailboxEntries("telegram:42")).toEqual([
+            {
+                id: 1,
+                mailboxKey: "telegram:42",
+                sourceKind: "telegram_update",
+                externalId: "100",
+                sender: "telegram:7",
+                body: "hello",
+                replyChannel: "telegram",
+                replyTarget: "42",
+                replyTopic: null,
+                createdAtMs: 4242,
+            },
+        ])
         expect(store.getCronJob("nightly")).toEqual({
             id: "nightly",
             schedule: "0 9 * * *",
@@ -66,7 +92,43 @@ test("sqlite store persists session bindings, offsets, and cron catalog state", 
     }
 })
 
-test("sqlite migration upgrades a v2 database to include cron tables", () => {
+test("sqlite store deduplicates mailbox entries by source identity", () => {
+    const db = new Database(":memory:")
+
+    try {
+        migrateGatewayDatabase(db)
+        const store = new SqliteStore(db)
+
+        store.enqueueMailboxEntry({
+            mailboxKey: "telegram:42",
+            sourceKind: "telegram_update",
+            externalId: "100",
+            sender: "telegram:7",
+            body: "hello",
+            replyChannel: "telegram",
+            replyTarget: "42",
+            replyTopic: null,
+            recordedAtMs: 1,
+        })
+        store.enqueueMailboxEntry({
+            mailboxKey: "telegram:42",
+            sourceKind: "telegram_update",
+            externalId: "100",
+            sender: "telegram:7",
+            body: "hello again",
+            replyChannel: "telegram",
+            replyTarget: "42",
+            replyTopic: null,
+            recordedAtMs: 2,
+        })
+
+        expect(store.listMailboxEntries("telegram:42")).toHaveLength(1)
+    } finally {
+        db.close()
+    }
+})
+
+test("sqlite migration upgrades a v3 database to include mailbox tables", () => {
     const db = new Database(":memory:")
 
     try {
@@ -94,25 +156,58 @@ test("sqlite migration upgrades a v2 database to include cron tables", () => {
                 updated_at_ms INTEGER NOT NULL
             );
 
-            PRAGMA user_version = 2;
+            CREATE TABLE cron_jobs (
+                id TEXT PRIMARY KEY NOT NULL,
+                schedule TEXT NOT NULL,
+                prompt TEXT NOT NULL,
+                delivery_channel TEXT,
+                delivery_target TEXT,
+                delivery_topic TEXT,
+                enabled INTEGER NOT NULL,
+                next_run_at_ms INTEGER NOT NULL,
+                created_at_ms INTEGER NOT NULL,
+                updated_at_ms INTEGER NOT NULL
+            );
+
+            CREATE INDEX cron_jobs_enabled_next_run_at_ms_idx
+                ON cron_jobs (enabled, next_run_at_ms);
+
+            CREATE TABLE cron_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id TEXT NOT NULL,
+                scheduled_for_ms INTEGER NOT NULL,
+                started_at_ms INTEGER NOT NULL,
+                finished_at_ms INTEGER,
+                status TEXT NOT NULL,
+                response_text TEXT,
+                error_message TEXT
+            );
+
+            CREATE INDEX cron_runs_job_id_started_at_ms_idx
+                ON cron_runs (job_id, started_at_ms DESC);
+
+            CREATE INDEX cron_runs_status_started_at_ms_idx
+                ON cron_runs (status, started_at_ms DESC);
+
+            PRAGMA user_version = 3;
         `)
 
         migrateGatewayDatabase(db)
 
         const store = new SqliteStore(db)
-        store.upsertCronJob({
-            id: "nightly",
-            schedule: "0 9 * * *",
-            prompt: "Summarize work",
-            deliveryChannel: null,
-            deliveryTarget: null,
-            deliveryTopic: null,
-            enabled: true,
-            nextRunAtMs: 9000,
+        store.enqueueMailboxEntry({
+            mailboxKey: "telegram:42",
+            sourceKind: "telegram_update",
+            externalId: "100",
+            sender: "telegram:7",
+            body: "hello",
+            replyChannel: "telegram",
+            replyTarget: "42",
+            replyTopic: null,
             recordedAtMs: 1234,
         })
 
-        expect(store.listCronJobs()).toHaveLength(1)
+        expect(store.listPendingMailboxKeys()).toEqual(["telegram:42"])
     } finally {
         db.close()
     }
