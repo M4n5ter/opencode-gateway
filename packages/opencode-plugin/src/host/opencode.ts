@@ -1,6 +1,6 @@
 import type { PluginInput } from "@opencode-ai/plugin"
 
-import type { BindingOpencodeHost, BindingPromptRequest, BindingPromptResult } from "../binding"
+import type { BindingOpencodeHost, BindingPromptRequest, BindingPromptResult, ExecutionHandle } from "../binding"
 import type { OpencodeEventHub } from "../opencode/events"
 import { streamPromptText } from "../opencode/stream"
 import { failedPromptResult, okPromptResult } from "./result"
@@ -43,8 +43,9 @@ export class GatewayOpencodeHost implements BindingOpencodeHost {
 
     async runPrompt(request: BindingPromptRequest): Promise<BindingPromptResult> {
         try {
-            const result = await this.runPromptData(request)
-            return okPromptResult(result.sessionId, result.responseText)
+            const sessionId = await this.ensureSession(request.conversationKey, request.sessionId)
+            const responseText = await this.promptSession(sessionId, request.prompt)
+            return okPromptResult(sessionId, responseText)
         } catch (error) {
             return failedPromptResult(error)
         }
@@ -52,45 +53,48 @@ export class GatewayOpencodeHost implements BindingOpencodeHost {
 
     async runPromptWithSnapshots(
         request: BindingPromptRequest,
+        execution: ExecutionHandle,
         onSnapshot: GatewayPromptSnapshotHandler,
     ): Promise<GatewayPromptExecution> {
         const sessionId = await this.ensureSession(request.conversationKey, request.sessionId)
-        const responseText = await streamPromptText(
-            this.client,
-            this.directory,
-            this.events,
-            sessionId,
-            request.prompt,
-            onSnapshot,
-        )
+        const responseText = await this.promptSessionWithSnapshots(sessionId, request.prompt, execution, onSnapshot)
 
-        return {
-            sessionId,
-            responseText,
-        }
+        return { sessionId, responseText }
     }
 
-    private async runPromptData(request: BindingPromptRequest): Promise<GatewayPromptExecution> {
-        const sessionId = await this.ensureSession(request.conversationKey, request.sessionId)
+    async promptSession(sessionId: string, prompt: string): Promise<string> {
         const response = await this.client.session.prompt({
             path: { id: sessionId },
             query: { directory: this.directory },
             body: {
-                parts: [{ type: "text", text: request.prompt }],
+                parts: [{ type: "text", text: prompt }],
             },
             responseStyle: "data",
             throwOnError: true,
         })
 
         const payload = unwrapData<PromptResponse>(response)
-
-        return {
-            sessionId,
-            responseText: await this.readFinalResponseText(sessionId, payload),
-        }
+        return await this.readFinalResponseText(sessionId, payload)
     }
 
-    private async ensureSession(conversationKey: string, sessionId: string | null): Promise<string> {
+    async promptSessionWithSnapshots(
+        sessionId: string,
+        prompt: string,
+        execution: ExecutionHandle,
+        onSnapshot: GatewayPromptSnapshotHandler,
+    ): Promise<string> {
+        return await streamPromptText(
+            this.client,
+            this.directory,
+            this.events,
+            sessionId,
+            prompt,
+            execution,
+            onSnapshot,
+        )
+    }
+
+    async ensureSession(conversationKey: string, sessionId: string | null): Promise<string> {
         if (sessionId === null) {
             return await this.createSession(conversationKey)
         }
@@ -161,7 +165,7 @@ function extractAssistantText(parts: SessionPromptPart[], messageId: string | nu
         .filter((part): part is SessionPromptPart & { messageID: string; type: "text"; text: string } => {
             return (messageId === null || part.messageID === messageId) && isVisibleTextPart(part)
         })
-        .map((part) => part.text.trim())
+        .map((part) => part.text)
         .filter((text) => text.length > 0)
         .join("\n")
 }

@@ -170,7 +170,10 @@ mod tests {
         .expect("cron job");
 
         assert_eq!(
-            job.delivery_target.expect("delivery target").conversation_key().as_str(),
+            job.delivery_target
+                .expect("delivery target")
+                .conversation_key()
+                .as_str(),
             "telegram:123:topic:42"
         );
     }

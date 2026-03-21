@@ -103,6 +103,7 @@ fn run_serve() -> Result<(), Box<dyn Error>> {
     write_gateway_config_if_missing(&paths)?;
     write_managed_opencode_config(&paths)?;
     write_plugin_loader(&paths, &project_root)?;
+    build_binding(&project_root)?;
 
     let status = engine.status();
     println!("starting opencode gateway");
@@ -134,7 +135,11 @@ fn warm_project_instance(project_root: &Path) {
 
     for _ in 0..30 {
         match http_get("127.0.0.1", 4096, &request_path) {
-            Ok(response) if response.starts_with("HTTP/1.1 200") || response.starts_with("HTTP/1.0 200") => return,
+            Ok(response)
+                if response.starts_with("HTTP/1.1 200") || response.starts_with("HTTP/1.0 200") =>
+            {
+                return;
+            }
             Ok(_) | Err(_) => thread::sleep(Duration::from_millis(250)),
         }
     }
@@ -142,6 +147,23 @@ fn warm_project_instance(project_root: &Path) {
     eprintln!(
         "warning: failed to warm the project instance automatically; the plugin may stay idle until the first project-scoped request"
     );
+}
+
+fn build_binding(project_root: &Path) -> Result<(), Box<dyn Error>> {
+    let status = Command::new("bun")
+        .arg("run")
+        .arg("build:binding")
+        .current_dir(project_root)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()?;
+
+    if !status.success() {
+        return Err(format!("bun run build:binding exited with status {status}").into());
+    }
+
+    Ok(())
 }
 
 fn http_get(host: &str, port: u16, path: &str) -> Result<String, Box<dyn Error>> {

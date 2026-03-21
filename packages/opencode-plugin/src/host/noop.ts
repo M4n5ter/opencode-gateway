@@ -1,10 +1,4 @@
-import type { BindingClockHost, BindingLoggerHost } from "../binding"
-
-export class SystemClockHost implements BindingClockHost {
-    nowUnixMs(): bigint {
-        return BigInt(Date.now())
-    }
-}
+import type { BindingLoggerHost } from "../binding"
 
 export class ConsoleLoggerHost implements BindingLoggerHost {
     log(level: string, message: string): void {

@@ -67,8 +67,8 @@ export async function createGatewayRuntime(
     const opencode = new GatewayOpencodeHost(input.client, input.directory, opencodeEvents)
     const transport = new GatewayTransportHost(telegramClient, store)
     const progressiveSupport = new TelegramProgressiveSupport(telegramClient, store, logger)
-    const delivery = new GatewayTextDelivery(module, transport, store, progressiveSupport)
-    const executor = new GatewayExecutor(store, opencode, delivery, logger)
+    const delivery = new GatewayTextDelivery(transport, store, progressiveSupport)
+    const executor = new GatewayExecutor(module, store, opencode, delivery, logger)
     const cron = new GatewayCronRuntime(executor, module, store, logger, config.cron)
     const eventStream = new OpencodeEventStream(input.client, input.directory, opencodeEvents, logger)
     const telegramPolling =

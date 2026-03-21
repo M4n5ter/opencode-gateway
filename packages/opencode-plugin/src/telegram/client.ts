@@ -32,7 +32,7 @@ export class TelegramBotClient {
         })
     }
 
-    async sendMessage(chatId: string, text: string, messageThreadId: string | null): Promise<void> {
+    async sendMessage(chatId: string, text: string, messageThreadId: string | null | undefined): Promise<void> {
         await this.call("sendMessage", {
             chat_id: chatId,
             text,
@@ -40,7 +40,7 @@ export class TelegramBotClient {
         })
     }
 
-    async sendChatAction(chatId: string, action: string, messageThreadId: string | null): Promise<void> {
+    async sendChatAction(chatId: string, action: string, messageThreadId: string | null | undefined): Promise<void> {
         await this.call("sendChatAction", {
             chat_id: chatId,
             action,
@@ -52,7 +52,7 @@ export class TelegramBotClient {
         chatId: string,
         draftId: number,
         text: string,
-        messageThreadId: string | null,
+        messageThreadId: string | null | undefined,
     ): Promise<void> {
         if (!Number.isSafeInteger(draftId) || draftId === 0) {
             throw new Error(`invalid Telegram draft id: ${draftId}`)
@@ -103,19 +103,23 @@ export type TelegramProbeClientLike = Pick<TelegramBotClient, "getMe">
 export type TelegramChatClientLike = Pick<TelegramBotClient, "getChat">
 export type TelegramDraftClientLike = Pick<TelegramBotClient, "sendMessageDraft">
 export type TelegramOpsClientLike = TelegramSendClientLike & TelegramProbeClientLike
-export type TelegramDeliveryClientLike =
-    & TelegramSendClientLike
-    & TelegramDraftClientLike
-    & TelegramChatClientLike
-    & TelegramChatActionClientLike
+export type TelegramDeliveryClientLike = TelegramSendClientLike &
+    TelegramDraftClientLike &
+    TelegramChatClientLike &
+    TelegramChatActionClientLike
 export type TelegramRuntimeClientLike = TelegramOpsClientLike & TelegramDeliveryClientLike
 
-function parseMessageThreadId(value: string | null): number | undefined {
-    if (value === null) {
+function parseMessageThreadId(value: string | null | undefined): number | undefined {
+    if (value == null) {
         return undefined
     }
 
-    const parsed = Number.parseInt(value, 10)
+    const normalized = value.trim()
+    if (normalized.length === 0 || normalized === "undefined") {
+        return undefined
+    }
+
+    const parsed = Number.parseInt(normalized, 10)
     if (!Number.isSafeInteger(parsed) || parsed <= 0) {
         throw new Error(`invalid Telegram topic id: ${value}`)
     }

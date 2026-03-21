@@ -45,9 +45,7 @@ fn parse_js_timestamp(value: f64, field: &str) -> Result<u64, String> {
     }
 
     if value > JS_MAX_SAFE_INTEGER as f64 {
-        return Err(format!(
-            "{field} is out of range for JavaScript: {value}"
-        ));
+        return Err(format!("{field} is out of range for JavaScript: {value}"));
     }
 
     Ok(value as u64)

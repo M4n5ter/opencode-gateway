@@ -1,4 +1,4 @@
-import type { BindingHostAck, BindingPromptResult, BindingSessionBinding } from "../binding"
+import type { BindingHostAck, BindingPromptResult } from "../binding"
 import { formatError } from "../utils/error"
 
 export function okAck(): BindingHostAck {
@@ -7,20 +7,6 @@ export function okAck(): BindingHostAck {
 
 export function failedAck(error: unknown): BindingHostAck {
     return { errorMessage: formatErrorMessage(error) }
-}
-
-export function okSessionBinding(sessionId: string | null): BindingSessionBinding {
-    return {
-        sessionId,
-        errorMessage: null,
-    }
-}
-
-export function failedSessionBinding(error: unknown): BindingSessionBinding {
-    return {
-        sessionId: null,
-        errorMessage: formatErrorMessage(error),
-    }
 }
 
 export function okPromptResult(sessionId: string, responseText: string): BindingPromptResult {

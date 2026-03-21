@@ -1,5 +1,6 @@
 import type { PluginInput } from "@opencode-ai/plugin"
 
+import type { ExecutionHandle } from "../binding"
 import type { OpencodeEventHub } from "./events"
 
 type OpencodeClient = PluginInput["client"]
@@ -13,6 +14,7 @@ export async function streamPromptText(
     events: OpencodeEventHub,
     sessionId: string,
     prompt: string,
+    execution: ExecutionHandle,
     onSnapshot: TextSnapshotHandler,
 ): Promise<string> {
     let previewEstablished = false
@@ -20,7 +22,7 @@ export async function streamPromptText(
     const previewEstablishedPromise = new Promise<void>((resolve) => {
         resolvePreviewEstablished = resolve
     })
-    const pendingPrompt = events.registerPrompt(sessionId, async (text) => {
+    const pendingPrompt = events.registerPrompt(sessionId, execution, async (text) => {
         if (!previewEstablished) {
             previewEstablished = true
             resolvePreviewEstablished?.()
@@ -100,7 +102,7 @@ function extractVisibleTextParts(parts: PromptResponse["parts"], messageId: stri
                 part.ignored !== true
             )
         })
-        .map((part) => part.text.trim())
+        .map((part) => part.text)
         .filter((text) => text.length > 0)
         .join("\n")
 }

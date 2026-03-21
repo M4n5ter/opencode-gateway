@@ -35,7 +35,11 @@ impl ProgressiveTextState {
         }
     }
 
-    pub fn observe_snapshot(&mut self, text: impl Into<String>, now_ms: u64) -> ProgressiveDirective {
+    pub fn observe_snapshot(
+        &mut self,
+        text: impl Into<String>,
+        now_ms: u64,
+    ) -> ProgressiveDirective {
         if self.finished {
             return ProgressiveDirective::Noop;
         }
@@ -78,8 +82,9 @@ impl ProgressiveTextState {
     }
 
     fn should_flush(&self, now_ms: u64) -> bool {
-        self.last_preview_at_ms
-            .is_none_or(|last_preview_at_ms| now_ms.saturating_sub(last_preview_at_ms) >= self.flush_interval_ms)
+        self.last_preview_at_ms.is_none_or(|last_preview_at_ms| {
+            now_ms.saturating_sub(last_preview_at_ms) >= self.flush_interval_ms
+        })
     }
 }
 
@@ -91,8 +96,14 @@ mod tests {
     fn oneshot_mode_never_emits_preview() {
         let mut state = ProgressiveTextState::new(ProgressiveMode::Oneshot, 400);
 
-        assert_eq!(state.observe_snapshot("hello", 100), ProgressiveDirective::Noop);
-        assert_eq!(state.finish("hello", 500), ProgressiveDirective::Final("hello".to_owned()));
+        assert_eq!(
+            state.observe_snapshot("hello", 100),
+            ProgressiveDirective::Noop
+        );
+        assert_eq!(
+            state.finish("hello", 500),
+            ProgressiveDirective::Final("hello".to_owned())
+        );
     }
 
     #[test]
@@ -103,8 +114,14 @@ mod tests {
             state.observe_snapshot("hello", 100),
             ProgressiveDirective::Preview("hello".to_owned())
         );
-        assert_eq!(state.observe_snapshot("hello", 150), ProgressiveDirective::Noop);
-        assert_eq!(state.observe_snapshot("hello world", 200), ProgressiveDirective::Noop);
+        assert_eq!(
+            state.observe_snapshot("hello", 150),
+            ProgressiveDirective::Noop
+        );
+        assert_eq!(
+            state.observe_snapshot("hello world", 200),
+            ProgressiveDirective::Noop
+        );
         assert_eq!(
             state.observe_snapshot("hello world", 550),
             ProgressiveDirective::Preview("hello world".to_owned())
@@ -116,6 +133,9 @@ mod tests {
         let mut state = ProgressiveTextState::new(ProgressiveMode::Progressive, 400);
 
         assert_eq!(state.finish("", 100), ProgressiveDirective::Noop);
-        assert_eq!(state.observe_snapshot("ignored after finish", 600), ProgressiveDirective::Noop);
+        assert_eq!(
+            state.observe_snapshot("ignored after finish", 600),
+            ProgressiveDirective::Noop
+        );
     }
 }

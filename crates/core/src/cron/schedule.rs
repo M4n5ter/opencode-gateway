@@ -30,14 +30,16 @@ pub(super) fn next_run_at(schedule: &str, after_unix_ms: u64) -> Result<u64, Cro
         .next()
         .ok_or(CronValidationError::NextOccurrenceOutOfRange)?;
 
-    u64::try_from(next.timestamp_millis()).map_err(|_| CronValidationError::NextOccurrenceOutOfRange)
+    u64::try_from(next.timestamp_millis())
+        .map_err(|_| CronValidationError::NextOccurrenceOutOfRange)
 }
 
 fn parse_schedule(value: &str) -> Result<Schedule, CronValidationError> {
     validate_field_count(value)?;
     let normalized = normalize_for_cron_parser(value);
 
-    Schedule::from_str(&normalized).map_err(|error| CronValidationError::InvalidSchedule(error.to_string()))
+    Schedule::from_str(&normalized)
+        .map_err(|error| CronValidationError::InvalidSchedule(error.to_string()))
 }
 
 fn normalize_for_cron_parser(value: &str) -> String {

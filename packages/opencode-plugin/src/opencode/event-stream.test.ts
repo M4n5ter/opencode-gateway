@@ -1,14 +1,37 @@
 import { expect, test } from "bun:test"
 
+import type { BindingExecutionObservation } from "../binding"
 import { OpencodeEventStream } from "./event-stream"
 import { OpencodeEventHub } from "./events"
 
 test("OpencodeEventStream forwards SDK SSE events into the prompt hub", async () => {
     const hub = new OpencodeEventHub()
-    const snapshots: string[] = []
-    const registration = hub.registerPrompt("session-1", (text) => {
-        snapshots.push(text)
-    })
+    const observations: BindingExecutionObservation[] = []
+    const registration = hub.registerPrompt(
+        "session-1",
+        {
+            observeEvent(observation) {
+                observations.push(observation)
+                return {
+                    kind:
+                        observation.kind === "textPartUpdated" && observation.messageId === "msg_assistant_1"
+                            ? "preview"
+                            : "noop",
+                    text:
+                        observation.kind === "textPartUpdated" && observation.messageId === "msg_assistant_1"
+                            ? "hello"
+                            : null,
+                }
+            },
+            finish() {
+                return {
+                    kind: "noop",
+                    text: null,
+                }
+            },
+        },
+        () => {},
+    )
 
     const runtime = new OpencodeEventStream(
         {
@@ -34,7 +57,8 @@ test("OpencodeEventStream forwards SDK SSE events into the prompt hub", async ()
     runtime.stop()
     registration.dispose()
 
-    expect(snapshots).toEqual(["hello"])
+    expect(observations.some((observation) => observation.kind === "messageUpdated")).toBe(true)
+    expect(observations.some((observation) => observation.kind === "textPartUpdated")).toBe(true)
     expect(runtime.isConnected()).toBe(false)
     expect(runtime.lastStreamError()).toBeNull()
 })

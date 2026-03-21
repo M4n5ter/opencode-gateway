@@ -1,23 +1,20 @@
 import type {
     BindingCronJobSpec,
-    BindingDeliveryTarget,
     BindingInboundMessage,
     BindingLoggerHost,
-    BindingPromptRequest,
+    BindingPreparedExecution,
     BindingRuntimeReport,
+    GatewayBindingModule,
 } from "../binding"
 import type { GatewayTextDelivery, TextDeliverySession } from "../delivery/text"
 import type { GatewayOpencodeHost } from "../host/opencode"
 import type { RuntimeJournalEntry, SqliteStore } from "../store/sqlite"
 
-type PromptExecutionPlan = {
-    conversationKey: string
-    prompt: string
-    replyTarget: BindingDeliveryTarget | null
-}
+const DEFAULT_FLUSH_INTERVAL_MS = 400
 
 export class GatewayExecutor {
     constructor(
+        private readonly module: GatewayBindingModule,
         private readonly store: SqliteStore,
         private readonly opencode: GatewayOpencodeHostLike,
         private readonly delivery: GatewayTextDeliveryLike,
@@ -25,77 +22,69 @@ export class GatewayExecutor {
     ) {}
 
     async handleInboundMessage(message: BindingInboundMessage): Promise<BindingRuntimeReport> {
-        const normalizedTarget = normalizeDeliveryTarget(message.deliveryTarget)
+        const prepared = this.module.prepareInboundExecution(message)
         const sender = normalizeRequiredField(message.sender, "message sender")
-        const body = normalizeRequiredField(message.body, "message body")
         const recordedAtMs = Date.now()
 
         this.logger.log("info", "handling inbound gateway message")
         this.store.appendJournal(
-            createJournalEntry("inbound_message", recordedAtMs, conversationKeyForTarget(normalizedTarget), {
-                deliveryTarget: normalizedTarget,
+            createJournalEntry("inbound_message", recordedAtMs, prepared.conversationKey, {
+                deliveryTarget: prepared.replyTarget,
                 sender,
-                body,
+                body: prepared.prompt,
             }),
         )
 
-        return await this.executePlan(
-            {
-                conversationKey: conversationKeyForTarget(normalizedTarget),
-                prompt: body,
-                replyTarget: normalizedTarget,
-            },
-            recordedAtMs,
-        )
+        return await this.executePrepared(prepared, recordedAtMs)
     }
 
     async dispatchCronJob(job: BindingCronJobSpec): Promise<BindingRuntimeReport> {
-        const normalized = normalizeCronJob(job)
+        const prepared = this.module.prepareCronExecution(job)
+        const id = normalizeRequiredField(job.id, "cron job id")
+        const schedule = normalizeRequiredField(job.schedule, "cron schedule")
         const recordedAtMs = Date.now()
 
         this.logger.log("info", "dispatching cron gateway job")
         this.store.appendJournal(
-            createJournalEntry("cron_dispatch", recordedAtMs, normalized.conversationKey, {
-                id: normalized.id,
-                schedule: normalized.schedule,
-                prompt: normalized.prompt,
-                deliveryChannel: normalized.replyTarget?.channel ?? null,
-                deliveryTarget: normalized.replyTarget?.target ?? null,
-                deliveryTopic: normalized.replyTarget?.topic ?? null,
+            createJournalEntry("cron_dispatch", recordedAtMs, prepared.conversationKey, {
+                id,
+                schedule,
+                prompt: prepared.prompt,
+                deliveryChannel: prepared.replyTarget?.channel ?? null,
+                deliveryTarget: prepared.replyTarget?.target ?? null,
+                deliveryTopic: prepared.replyTarget?.topic ?? null,
             }),
         )
 
-        return await this.executePlan(
-            {
-                conversationKey: normalized.conversationKey,
-                prompt: normalized.prompt,
-                replyTarget: normalized.replyTarget,
-            },
-            recordedAtMs,
-        )
+        return await this.executePrepared(prepared, recordedAtMs)
     }
 
-    private async executePlan(plan: PromptExecutionPlan, recordedAtMs: number): Promise<BindingRuntimeReport> {
-        const persistedSessionId = this.store.getSessionBinding(plan.conversationKey)
-        const deliverySession = plan.replyTarget === null ? null : await this.delivery.open(plan.replyTarget, "auto")
-        const promptResult = await this.executePromptWithRecovery(plan, persistedSessionId, deliverySession)
+    private async executePrepared(
+        prepared: BindingPreparedExecution,
+        recordedAtMs: number,
+    ): Promise<BindingRuntimeReport> {
+        const persistedSessionId = this.store.getSessionBinding(prepared.conversationKey)
+        const deliverySession =
+            prepared.replyTarget === null ? null : await this.delivery.open(prepared.replyTarget, "auto")
+        const promptResult = await this.executePromptWithRecovery(prepared, persistedSessionId, deliverySession)
 
-        const nextSessionId = normalizeRequiredField(promptResult.sessionId, "opencode session id")
-        this.store.putSessionBinding(plan.conversationKey, nextSessionId, recordedAtMs)
+        this.store.putSessionBinding(prepared.conversationKey, promptResult.sessionId, recordedAtMs)
 
         let delivered = false
         if (deliverySession !== null) {
-            delivered = await deliverySession.finish(promptResult.responseText)
-            this.store.appendJournal(
-                createJournalEntry("delivery", recordedAtMs, plan.conversationKey, {
-                    deliveryTarget: plan.replyTarget,
-                    body: promptResult.responseText,
-                }),
-            )
+            delivered = await deliverySession.finish(promptResult.finalText)
+            if (promptResult.finalText !== null) {
+                this.store.appendJournal(
+                    createJournalEntry("delivery", recordedAtMs, prepared.conversationKey, {
+                        deliveryTarget: prepared.replyTarget,
+                        body: promptResult.finalText,
+                    }),
+                )
+            }
         }
 
         return {
-            conversationKey: plan.conversationKey,
+            conversationKey: prepared.conversationKey,
             responseText: promptResult.responseText,
             delivered,
             recordedAtMs: BigInt(recordedAtMs),
@@ -103,12 +92,14 @@ export class GatewayExecutor {
     }
 
     private async executePromptWithRecovery(
-        plan: PromptExecutionPlan,
+        prepared: BindingPreparedExecution,
         persistedSessionId: string | null,
         deliverySession: TextDeliverySessionLike | null,
-    ): Promise<{ sessionId: string; responseText: string }> {
+    ): Promise<PromptExecutionResult> {
+        const sessionId = await this.opencode.ensureSession(prepared.conversationKey, persistedSessionId)
+
         try {
-            return await this.executePrompt(plan, persistedSessionId, deliverySession)
+            return await this.executePrompt(prepared, sessionId, deliverySession)
         } catch (error) {
             if (persistedSessionId === null || !isMissingSessionBindingError(error)) {
                 throw error
@@ -116,104 +107,64 @@ export class GatewayExecutor {
 
             this.logger.log(
                 "warn",
-                `stale opencode session binding detected for ${plan.conversationKey}; recreating session`,
+                `stale opencode session binding detected for ${prepared.conversationKey}; recreating session`,
             )
-            this.store.deleteSessionBinding(plan.conversationKey)
+            this.store.deleteSessionBinding(prepared.conversationKey)
 
-            return await this.executePrompt(plan, null, deliverySession)
+            const freshSessionId = await this.opencode.ensureSession(prepared.conversationKey, null)
+            return await this.executePrompt(prepared, freshSessionId, deliverySession)
         }
     }
 
     private async executePrompt(
-        plan: PromptExecutionPlan,
-        sessionId: string | null,
+        prepared: BindingPreparedExecution,
+        sessionId: string,
         deliverySession: TextDeliverySessionLike | null,
-    ): Promise<{ sessionId: string; responseText: string }> {
-        const request: BindingPromptRequest = {
-            conversationKey: plan.conversationKey,
-            prompt: plan.prompt,
-            sessionId,
-        }
+    ): Promise<PromptExecutionResult> {
+        const execution =
+            deliverySession?.mode === "progressive"
+                ? this.module.ExecutionHandle.progressive(prepared, sessionId, DEFAULT_FLUSH_INTERVAL_MS)
+                : this.module.ExecutionHandle.oneshot(prepared, sessionId, DEFAULT_FLUSH_INTERVAL_MS)
 
-        return deliverySession?.mode === "progressive"
-            ? await this.opencode.runPromptWithSnapshots(request, async (snapshot) => {
-                  await deliverySession.preview(snapshot)
-              })
-            : await runPromptOnce(this.opencode, request)
+        try {
+            const responseText =
+                deliverySession?.mode === "progressive"
+                    ? await this.opencode.promptSessionWithSnapshots(
+                          sessionId,
+                          prepared.prompt,
+                          execution,
+                          async (snapshot) => {
+                              await deliverySession.preview(snapshot)
+                          },
+                      )
+                    : await this.opencode.promptSession(sessionId, prepared.prompt)
+            const finalDirective = execution.finish(responseText, monotonicNowMs())
+
+            return {
+                sessionId,
+                responseText,
+                finalText: finalDirective.kind === "final" ? finalDirective.text : null,
+            }
+        } finally {
+            execution.free?.()
+        }
     }
 }
 
 export type GatewayExecutorLike = Pick<GatewayExecutor, "handleInboundMessage" | "dispatchCronJob">
 
+type PromptExecutionResult = {
+    sessionId: string
+    responseText: string
+    finalText: string | null
+}
+
 type GatewayTextDeliveryLike = Pick<GatewayTextDelivery, "open">
-type GatewayOpencodeHostLike = Pick<GatewayOpencodeHost, "runPrompt" | "runPromptWithSnapshots">
-type TextDeliverySessionLike = Pick<TextDeliverySession, "mode" | "preview">
-
-type NormalizedCronJob = {
-    id: string
-    schedule: string
-    prompt: string
-    conversationKey: string
-    replyTarget: BindingDeliveryTarget | null
-}
-
-function normalizeCronJob(job: BindingCronJobSpec): NormalizedCronJob {
-    const id = normalizeRequiredField(job.id, "cron job id")
-    const schedule = normalizeRequiredField(job.schedule, "cron schedule")
-    const prompt = normalizeRequiredField(job.prompt, "cron prompt")
-    const replyTarget = normalizeOptionalDeliveryTarget(job.deliveryChannel, job.deliveryTarget, job.deliveryTopic)
-
-    return {
-        id,
-        schedule,
-        prompt,
-        conversationKey: `cron:${id}`,
-        replyTarget,
-    }
-}
-
-function normalizeOptionalDeliveryTarget(
-    channel: string | null,
-    target: string | null,
-    topic: string | null,
-): BindingDeliveryTarget | null {
-    if (channel === null && target === null) {
-        if (normalizeOptionalField(topic) !== null) {
-            throw new Error("cron deliveryTopic requires deliveryChannel and deliveryTarget")
-        }
-
-        return null
-    }
-
-    if (channel === null || target === null) {
-        throw new Error("cron deliveryChannel and deliveryTarget must be provided together")
-    }
-
-    return normalizeDeliveryTarget({
-        channel,
-        target,
-        topic,
-    })
-}
-
-function normalizeDeliveryTarget(target: BindingDeliveryTarget): BindingDeliveryTarget {
-    const channel = normalizeRequiredField(target.channel, "delivery channel")
-    if (channel !== "telegram") {
-        throw new Error(`unsupported channel kind: ${channel}`)
-    }
-
-    return {
-        channel,
-        target: normalizeRequiredField(target.target, "delivery target"),
-        topic: normalizeOptionalField(target.topic),
-    }
-}
-
-function conversationKeyForTarget(target: BindingDeliveryTarget): string {
-    return target.topic === null
-        ? `${target.channel}:${target.target}`
-        : `${target.channel}:${target.target}:topic:${target.topic}`
-}
+type GatewayOpencodeHostLike = Pick<
+    GatewayOpencodeHost,
+    "ensureSession" | "promptSession" | "promptSessionWithSnapshots"
+>
+type TextDeliverySessionLike = Pick<TextDeliverySession, "mode" | "preview" | "finish">
 
 function createJournalEntry(
     kind: RuntimeJournalEntry["kind"],
@@ -236,30 +187,6 @@ function normalizeRequiredField(value: string, field: string): string {
     }
 
     return trimmed
-}
-
-function normalizeOptionalField(value: string | null): string | null {
-    if (value === null) {
-        return null
-    }
-
-    const trimmed = value.trim()
-    return trimmed.length === 0 ? null : trimmed
-}
-
-async function runPromptOnce(
-    opencode: GatewayOpencodeHostLike,
-    request: BindingPromptRequest,
-): Promise<{ sessionId: string; responseText: string }> {
-    const promptResult = await opencode.runPrompt(request)
-    if (promptResult.errorMessage !== null) {
-        throw new Error(promptResult.errorMessage)
-    }
-
-    return {
-        sessionId: normalizeRequiredField(promptResult.sessionId ?? "", "opencode session id"),
-        responseText: promptResult.responseText,
-    }
 }
 
 function isMissingSessionBindingError(error: unknown): boolean {
@@ -287,4 +214,8 @@ function containsMissingSessionBinding(value: unknown, depth: number): boolean {
     }
 
     return false
+}
+
+function monotonicNowMs(): number {
+    return Math.trunc(performance.now())
 }

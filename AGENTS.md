@@ -68,7 +68,9 @@ This crate now exports only a small synchronous `wasm-bindgen` surface:
 
 - `gatewayStatus()`
 - `nextCronRunAt(...)`
-- `ProgressiveTextHandle`
+- `prepareInboundExecution(...)`
+- `prepareCronExecution(...)`
+- `ExecutionHandle`
 
 It no longer carries the old callback-heavy FFI runtime.
 
@@ -95,8 +97,8 @@ This package now:
 - runs Telegram long polling with explicit allowlists
 - runs the cron scheduler loop
 - executes OpenCode sessions through the plugin SDK
-- subscribes to the OpenCode SDK event stream and correlates preview events per session
-  while binding them to the assistant message selected for the current prompt
+- subscribes to the OpenCode SDK event stream and forwards normalized execution
+  observations into Rust-owned execution state
 - delivers Telegram replies and private-chat draft previews
 - exposes gateway, cron, and Telegram operational tools
 
@@ -112,8 +114,8 @@ opencode-gateway serve
   -> plugin builds host-side services
   -> Telegram updates and cron ticks enter the plugin-local executor
   -> plugin executes OpenCode sessions and outbound delivery
-  -> Rust remains responsible for typed contracts, cron next-run calculation,
-     and progressive delivery state
+  -> Rust remains responsible for typed contracts, prepared executions,
+     event aggregation, cron next-run calculation, and progressive delivery state
 ```
 
 ## Ownership Boundaries
@@ -123,6 +125,8 @@ opencode-gateway serve
 - canonical types and identifiers
 - validation and invariants
 - scheduling semantics
+- prepared inbound/cron execution plans
+- assistant-message binding and text-part aggregation
 - progressive text state and flush/finalize decisions
 - provider-agnostic gateway behavior
 
@@ -130,7 +134,7 @@ opencode-gateway serve
 
 - OpenCode plugin entrypoints
 - OpenCode SDK calls
-- OpenCode event correlation
+- event subscription and raw event normalization
 - SQLite reads and writes
 - Telegram HTTP transport and drafts
 - polling loops and timers
@@ -167,8 +171,10 @@ opencode-gateway doctor
 
 - `gatewayStatus()`
 - `nextCronRunAt(job, afterMs)`
-- `ProgressiveTextHandle.progressive(flushIntervalMs)`
-- `ProgressiveTextHandle.oneshot(flushIntervalMs)`
+- `prepareInboundExecution(message)`
+- `prepareCronExecution(job)`
+- `ExecutionHandle.progressive(prepared, sessionId, flushIntervalMs)`
+- `ExecutionHandle.oneshot(prepared, sessionId, flushIntervalMs)`
 
 ## Configuration Model
 
@@ -209,9 +215,10 @@ The repository already contains:
 - a Cargo workspace and Bun workspace root
 - a pure Rust core crate with typed contracts and progressive state
 - a sync `wasm-bindgen` bridge crate
+- Rust-owned prepared execution and event aggregation state
 - a launcher that can materialize managed config and warm the current project
 - a plugin package with Telegram, SQLite, and cron behavior
-- plugin-local execution for inbound messages and cron dispatch
+- plugin-local host orchestration for inbound messages and cron dispatch
 - SQLite-backed session bindings and runtime journaling
 - SQLite-backed Telegram health snapshots and update cursors
 - SQLite-backed cron catalogs and run history

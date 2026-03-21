@@ -56,6 +56,50 @@ test("GatewayOpencodeHost recreates a missing persisted session before prompting
     expect(result.errorMessage).toBeNull()
 })
 
+test("GatewayOpencodeHost preserves leading whitespace in final assistant text", async () => {
+    const host = new GatewayOpencodeHost(
+        {
+            session: {
+                async get() {
+                    return {
+                        data: {
+                            id: "ses_fresh",
+                        },
+                    }
+                },
+                async prompt() {
+                    return {
+                        data: {
+                            info: { id: "msg_assistant_2" },
+                            parts: [],
+                        },
+                    }
+                },
+                async message() {
+                    return {
+                        data: {
+                            parts: [
+                                {
+                                    messageID: "msg_assistant_2",
+                                    type: "text",
+                                    text: "    code line",
+                                },
+                            ],
+                        },
+                    }
+                },
+            },
+        } as never,
+        "/tmp",
+        new OpencodeEventHub(),
+    )
+
+    const result = await host.runPrompt(createRequest("ses_fresh"))
+
+    expect(result.responseText).toBe("    code line")
+    expect(result.errorMessage).toBeNull()
+})
+
 function createRequest(sessionId: string): BindingPromptRequest {
     return {
         conversationKey: "telegram:42",

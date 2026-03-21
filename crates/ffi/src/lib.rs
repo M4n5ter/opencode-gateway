@@ -3,6 +3,7 @@
 pub mod binding;
 
 pub use binding::{
-    gateway_status, next_cron_run_at, BindingCronJobSpec, BindingDeliveryTarget,
-    BindingGatewayStatus, BindingProgressiveDirective, ProgressiveTextHandle,
+    BindingCronJobSpec, BindingDeliveryTarget, BindingExecutionObservation, BindingGatewayStatus,
+    BindingInboundMessage, BindingPreparedExecution, BindingProgressiveDirective, ExecutionHandle,
+    gateway_status, next_cron_run_at, prepare_cron_execution, prepare_inbound_execution,
 };

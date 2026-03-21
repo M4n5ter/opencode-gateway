@@ -1,20 +1,17 @@
-import type { BindingDeliveryTarget, GatewayBindingModule, ProgressiveTextHandle } from "../binding"
+import type { BindingDeliveryTarget } from "../binding"
 import type { GatewayTransportHost } from "../host/transport"
 import type { SqliteStore } from "../store/sqlite"
 import { recordTelegramPreviewEmit, recordTelegramStreamFallback } from "../telegram/state"
 import { createDraftId, type DeliveryModePreference, type TelegramProgressiveSupport } from "./telegram"
 
-const DEFAULT_FLUSH_INTERVAL_MS = 400
-
 export type TextDeliverySession = {
     mode: "oneshot" | "progressive"
     preview(text: string): Promise<void>
-    finish(finalText: string): Promise<boolean>
+    finish(finalText: string | null): Promise<boolean>
 }
 
 export class GatewayTextDelivery {
     constructor(
-        private readonly module: GatewayBindingModule,
         private readonly transport: GatewayTransportHost,
         private readonly store: SqliteStore,
         private readonly telegramSupport: TelegramProgressiveSupport,
@@ -49,23 +46,9 @@ export class GatewayTextDelivery {
     }
 
     private openProgressiveSession(target: BindingDeliveryTarget): TextDeliverySession {
-        const state = this.createProgressiveHandle()
-        if (state === null) {
-            recordTelegramStreamFallback(this.store, "progressive_handle_unavailable", Date.now())
-            return new OneshotTextDeliverySession(target, this.transport)
-        }
-
-        const session = new ProgressiveTextDeliverySession(target, this.transport, this.telegramSupport, this.store, state)
+        const session = new ProgressiveTextDeliverySession(target, this.transport, this.telegramSupport, this.store)
         session.start()
         return session
-    }
-
-    private createProgressiveHandle(): ProgressiveTextHandle | null {
-        try {
-            return this.module.ProgressiveTextHandle.progressive(DEFAULT_FLUSH_INTERVAL_MS)
-        } catch {
-            return null
-        }
     }
 }
 
@@ -79,7 +62,11 @@ class OneshotTextDeliverySession implements TextDeliverySession {
 
     async preview(_text: string): Promise<void> {}
 
-    async finish(finalText: string): Promise<boolean> {
+    async finish(finalText: string | null): Promise<boolean> {
+        if (finalText === null || finalText.trim().length === 0) {
+            return false
+        }
+
         const ack = await this.transport.sendMessage({
             deliveryTarget: this.target,
             body: finalText,
@@ -107,7 +94,6 @@ class ProgressiveTextDeliverySession implements TextDeliverySession {
         private readonly transport: GatewayTransportHost,
         private readonly telegramSupport: TelegramProgressiveSupport,
         private readonly store: SqliteStore,
-        private readonly state: ProgressiveTextHandle,
     ) {}
 
     start(): void {
@@ -125,14 +111,9 @@ class ProgressiveTextDeliverySession implements TextDeliverySession {
                     return
                 }
 
-                const directive = this.state.observeSnapshot(text, monotonicNowMs())
-                if (directive.kind !== "preview" || directive.text === null) {
-                    return
-                }
-
                 try {
                     recordTelegramPreviewEmit(this.store, Date.now())
-                    await this.telegramSupport.sendDraft(this.target, this.draftId, directive.text)
+                    await this.telegramSupport.sendDraft(this.target, this.draftId, text)
                     this.previewDelivered = true
                 } catch {
                     this.previewFailed = true
@@ -147,34 +128,23 @@ class ProgressiveTextDeliverySession implements TextDeliverySession {
         await this.pendingPreview
     }
 
-    async finish(finalText: string): Promise<boolean> {
+    async finish(finalText: string | null): Promise<boolean> {
         this.closed = true
         if (this.pendingPreviewCount > 0) {
             await this.pendingPreview
         }
 
-        const body = this.resolveFinalBody(finalText)
-        if (body === null) {
+        if (finalText === null || finalText.trim().length === 0) {
             return false
         }
 
-        return await this.sendFinal(body)
-    }
-
-    private resolveFinalBody(finalText: string): string | null {
         if (!this.previewDelivered) {
             if (!this.previewFailed) {
                 recordTelegramStreamFallback(this.store, "preview_not_established", Date.now())
             }
-            return finalText.trim().length === 0 ? null : finalText
         }
 
-        const directive = this.state.finish(finalText, monotonicNowMs())
-        if (directive.kind !== "final" || directive.text === null) {
-            return null
-        }
-
-        return directive.text
+        return await this.sendFinal(finalText)
     }
 
     private async sendFinal(body: string): Promise<boolean> {
@@ -189,8 +159,4 @@ class ProgressiveTextDeliverySession implements TextDeliverySession {
 
         return true
     }
-}
-
-function monotonicNowMs(): number {
-    return Math.trunc(performance.now())
 }

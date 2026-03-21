@@ -7,8 +7,11 @@ if (typeof module.gatewayStatus !== "function") {
 if (typeof module.nextCronRunAt !== "function") {
     throw new Error("nextCronRunAt export is unavailable")
 }
-if (typeof module.ProgressiveTextHandle?.progressive !== "function") {
-    throw new Error("ProgressiveTextHandle progressive constructor is unavailable")
+if (typeof module.prepareInboundExecution !== "function") {
+    throw new Error("prepareInboundExecution export is unavailable")
+}
+if (typeof module.ExecutionHandle?.progressive !== "function") {
+    throw new Error("ExecutionHandle progressive constructor is unavailable")
 }
 
 module.gatewayStatus()
@@ -23,4 +26,13 @@ module.nextCronRunAt(
     },
     1_735_689_600_000,
 )
-module.ProgressiveTextHandle.progressive(400)
+const prepared = module.prepareInboundExecution({
+    deliveryTarget: {
+        channel: "telegram",
+        target: "42",
+        topic: null,
+    },
+    sender: "telegram:7",
+    body: "hello",
+})
+module.ExecutionHandle.progressive(prepared, "ses_smoke", 400)

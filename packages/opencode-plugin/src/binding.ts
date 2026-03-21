@@ -31,11 +31,6 @@ export type BindingHostAck = {
     errorMessage: string | null
 }
 
-export type BindingSessionBinding = {
-    sessionId: string | null
-    errorMessage: string | null
-}
-
 export type BindingPromptResult = {
     sessionId: string | null
     responseText: string
@@ -54,6 +49,36 @@ export type BindingInboundMessage = {
     body: string
 }
 
+export type BindingPreparedExecution = {
+    conversationKey: string
+    prompt: string
+    replyTarget: BindingDeliveryTarget | null
+}
+
+export type BindingExecutionObservation =
+    | {
+          kind: "messageUpdated"
+          sessionId: string
+          messageId: string
+          role: string
+          parentId: string | null
+      }
+    | {
+          kind: "textPartUpdated"
+          sessionId: string
+          messageId: string
+          partId: string
+          text: string | null
+          delta: string | null
+          ignored: boolean
+      }
+    | {
+          kind: "textPartDelta"
+          messageId: string
+          partId: string
+          delta: string
+      }
+
 export type BindingOutboundMessage = {
     deliveryTarget: BindingDeliveryTarget
     body: string
@@ -64,24 +89,12 @@ export type BindingProgressiveDirective = {
     text: string | null
 }
 
-export type BindingStoreHost = {
-    getSessionBinding(conversationKey: string): Promise<BindingSessionBinding>
-    putSessionBinding(conversationKey: string, sessionId: string, recordedAtMs: bigint): Promise<BindingHostAck>
-    recordInboundMessage(message: BindingInboundMessage, recordedAtMs: bigint): Promise<BindingHostAck>
-    recordCronDispatch(job: BindingCronJobSpec, recordedAtMs: bigint): Promise<BindingHostAck>
-    recordDelivery(message: BindingOutboundMessage, recordedAtMs: bigint): Promise<BindingHostAck>
-}
-
 export type BindingOpencodeHost = {
     runPrompt(request: BindingPromptRequest): Promise<BindingPromptResult>
 }
 
 export type BindingTransportHost = {
     sendMessage(message: BindingOutboundMessage): Promise<BindingHostAck>
-}
-
-export type BindingClockHost = {
-    nowUnixMs(): bigint
 }
 
 export type BindingLoggerHost = {
@@ -93,16 +106,18 @@ export type GatewayContract = {
     nextCronRunAt(job: BindingCronJobSpec, afterMs: number): number
 }
 
-export type ProgressiveTextHandle = {
-    observeSnapshot(text: string, nowMs: number): BindingProgressiveDirective
+export type ExecutionHandle = {
+    observeEvent(observation: BindingExecutionObservation, nowMs: number): BindingProgressiveDirective
     finish(finalText: string, nowMs: number): BindingProgressiveDirective
     free?(): void
 }
 
 export type GatewayBindingModule = GatewayContract & {
-    ProgressiveTextHandle: {
-        progressive: (flushIntervalMs: number) => ProgressiveTextHandle
-        oneshot: (flushIntervalMs: number) => ProgressiveTextHandle
+    prepareInboundExecution: (message: BindingInboundMessage) => BindingPreparedExecution
+    prepareCronExecution: (job: BindingCronJobSpec) => BindingPreparedExecution
+    ExecutionHandle: {
+        progressive: (prepared: BindingPreparedExecution, sessionId: string, flushIntervalMs: number) => ExecutionHandle
+        oneshot: (prepared: BindingPreparedExecution, sessionId: string, flushIntervalMs: number) => ExecutionHandle
     }
     initSync?: (module?: BufferSource | WebAssembly.Module) => unknown
     default?: (module?: BufferSource | WebAssembly.Module) => Promise<unknown>
