@@ -78,7 +78,7 @@ fn run_init() -> Result<(), Box<dyn Error>> {
 
     ensure_layout(&paths)?;
     write_gateway_config_if_missing(&paths)?;
-    write_managed_opencode_config(&paths)?;
+    write_managed_opencode_config_if_missing(&paths)?;
     write_plugin_loader(&paths, &project_root)?;
 
     println!("gateway config: {}", paths.config_file.display());
@@ -101,7 +101,7 @@ fn run_serve() -> Result<(), Box<dyn Error>> {
 
     ensure_layout(&paths)?;
     write_gateway_config_if_missing(&paths)?;
-    write_managed_opencode_config(&paths)?;
+    write_managed_opencode_config_if_missing(&paths)?;
     write_plugin_loader(&paths, &project_root)?;
     build_binding(&project_root)?;
 
@@ -269,7 +269,11 @@ fn write_gateway_config_if_missing(paths: &GatewayPaths) -> Result<(), Box<dyn E
     Ok(())
 }
 
-fn write_managed_opencode_config(paths: &GatewayPaths) -> Result<(), Box<dyn Error>> {
+fn write_managed_opencode_config_if_missing(paths: &GatewayPaths) -> Result<(), Box<dyn Error>> {
+    if paths.opencode_config_file.exists() {
+        return Ok(());
+    }
+
     fs::write(
         &paths.opencode_config_file,
         concat!(

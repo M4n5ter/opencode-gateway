@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite"
 import { expect, test } from "bun:test"
 
-import type { BindingInboundMessage, BindingLoggerHost, BindingPreparedExecution } from "../binding"
+import type { BindingInboundMessage, BindingLoggerHost, BindingPreparedExecution, BindingPromptPart } from "../binding"
 import { migrateGatewayDatabase } from "../store/migrations"
 import { SqliteStore } from "../store/sqlite"
 import { GatewayMailboxRuntime } from "./mailbox"
@@ -18,7 +18,7 @@ test("GatewayMailboxRuntime flushes queued entries one by one when batching is d
                 prepareInboundMessage(message: BindingInboundMessage): BindingPreparedExecution {
                     return {
                         conversationKey: message.mailboxKey ?? `telegram:${message.deliveryTarget.target}`,
-                        prompt: message.body,
+                        promptParts: createTextPromptParts(message.text ?? ""),
                         replyTarget: message.deliveryTarget,
                     }
                 },
@@ -40,10 +40,15 @@ test("GatewayMailboxRuntime flushes queued entries one by one when batching is d
                 batchWindowMs: 1_500,
                 routes: [],
             },
+            {
+                async tryHandleInboundMessage() {
+                    return false
+                },
+            },
         )
 
-        runtime.enqueueInboundMessage(createMessage("first"), "telegram_update", "100")
-        runtime.enqueueInboundMessage(createMessage("second"), "telegram_update", "101")
+        await runtime.enqueueInboundMessage(createMessage("first"), "telegram_update", "100")
+        await runtime.enqueueInboundMessage(createMessage("second"), "telegram_update", "101")
 
         await waitFor(() => batches.length === 2 && store.listMailboxEntries("telegram:42").length === 0)
 
@@ -66,7 +71,7 @@ test("GatewayMailboxRuntime merges queued entries in the same mailbox when batch
                 prepareInboundMessage(message: BindingInboundMessage): BindingPreparedExecution {
                     return {
                         conversationKey: message.mailboxKey ?? `telegram:${message.deliveryTarget.target}`,
-                        prompt: message.body,
+                        promptParts: createTextPromptParts(message.text ?? ""),
                         replyTarget: message.deliveryTarget,
                     }
                 },
@@ -87,10 +92,15 @@ test("GatewayMailboxRuntime merges queued entries in the same mailbox when batch
                 batchWindowMs: 30,
                 routes: [],
             },
+            {
+                async tryHandleInboundMessage() {
+                    return false
+                },
+            },
         )
 
-        runtime.enqueueInboundMessage(createMessage("first"), "telegram_update", "100")
-        runtime.enqueueInboundMessage(createMessage("second"), "telegram_update", "101")
+        await runtime.enqueueInboundMessage(createMessage("first"), "telegram_update", "100")
+        await runtime.enqueueInboundMessage(createMessage("second"), "telegram_update", "101")
 
         await waitFor(() => batches.length === 1)
 
@@ -101,16 +111,21 @@ test("GatewayMailboxRuntime merges queued entries in the same mailbox when batch
     }
 })
 
-function createMessage(body: string): BindingInboundMessage {
+function createMessage(text: string): BindingInboundMessage {
     return {
         sender: "telegram:7",
-        body,
+        text,
+        attachments: [],
         deliveryTarget: {
             channel: "telegram",
             target: "42",
             topic: null,
         },
     }
+}
+
+function createTextPromptParts(text: string): BindingPromptPart[] {
+    return [{ kind: "text", text }]
 }
 
 async function waitFor(predicate: () => boolean): Promise<void> {

@@ -5,16 +5,21 @@ import { loadGatewayConfig } from "./config/gateway"
 import { GatewayCronRuntime } from "./cron/runtime"
 import { TelegramProgressiveSupport } from "./delivery/telegram"
 import { GatewayTextDelivery } from "./delivery/text"
+import { ChannelFileSender } from "./host/file-sender"
 import { ConsoleLoggerHost } from "./host/noop"
 import { GatewayTransportHost } from "./host/transport"
 import { GatewayMailboxRouter } from "./mailbox/router"
 import { OpencodeSdkAdapter } from "./opencode/adapter"
 import { OpencodeEventStream } from "./opencode/event-stream"
 import { OpencodeEventHub } from "./opencode/events"
+import { createQuestionClient } from "./questions/client"
+import { GatewayQuestionRuntime } from "./questions/runtime"
 import { GatewayExecutor } from "./runtime/executor"
 import { GatewayMailboxRuntime } from "./runtime/mailbox"
+import { GatewaySessionContext } from "./session/context"
 import { openSqliteStore } from "./store/sqlite"
 import { TelegramBotClient } from "./telegram/client"
+import { TelegramInboundMediaStore } from "./telegram/media"
 import { TelegramPollingService } from "./telegram/poller"
 import { GatewayTelegramRuntime } from "./telegram/runtime"
 
@@ -38,6 +43,8 @@ export class GatewayPluginRuntime {
         readonly executor: GatewayExecutor,
         readonly cron: GatewayCronRuntime,
         readonly telegram: GatewayTelegramRuntime,
+        readonly files: ChannelFileSender,
+        readonly sessionContext: GatewaySessionContext,
     ) {}
 
     status(): GatewayPluginStatus {
@@ -72,20 +79,45 @@ export async function createGatewayRuntime(
 
     const effectiveCronTimeZone = resolveEffectiveCronTimeZone(module, config)
     const store = await openSqliteStore(config.stateDbPath)
+    const sessionContext = new GatewaySessionContext(store)
     const telegramClient = config.telegram.enabled ? new TelegramBotClient(config.telegram.botToken) : null
+    const telegramMediaStore =
+        config.telegram.enabled && telegramClient !== null
+            ? new TelegramInboundMediaStore(telegramClient, config.mediaRootPath)
+            : null
     const mailboxRouter = new GatewayMailboxRouter(config.mailbox.routes)
     const opencodeEvents = new OpencodeEventHub()
     const opencode = new OpencodeSdkAdapter(input.client, input.directory)
+    const questionClient = createQuestionClient(input.client, input.serverUrl, input.directory)
     const transport = new GatewayTransportHost(telegramClient, store)
+    const files = new ChannelFileSender(telegramClient)
+    const questions = new GatewayQuestionRuntime(
+        questionClient,
+        input.directory,
+        store,
+        sessionContext,
+        transport,
+        telegramClient,
+        logger,
+    )
     const progressiveSupport = new TelegramProgressiveSupport(telegramClient, store, logger)
     const delivery = new GatewayTextDelivery(transport, store, progressiveSupport)
     const executor = new GatewayExecutor(module, store, opencode, opencodeEvents, delivery, logger)
-    const mailbox = new GatewayMailboxRuntime(executor, store, logger, config.mailbox)
+    const mailbox = new GatewayMailboxRuntime(executor, store, logger, config.mailbox, questions)
     const cron = new GatewayCronRuntime(executor, module, store, logger, config.cron, effectiveCronTimeZone)
-    const eventStream = new OpencodeEventStream(input.client, input.directory, opencodeEvents, logger)
+    const eventStream = new OpencodeEventStream(input.client, input.directory, opencodeEvents, [questions], logger)
     const telegramPolling =
-        config.telegram.enabled && telegramClient !== null
-            ? new TelegramPollingService(telegramClient, mailbox, store, logger, config.telegram, mailboxRouter)
+        config.telegram.enabled && telegramClient !== null && telegramMediaStore !== null
+            ? new TelegramPollingService(
+                  telegramClient,
+                  mailbox,
+                  store,
+                  logger,
+                  config.telegram,
+                  mailboxRouter,
+                  telegramMediaStore,
+                  questions,
+              )
             : null
     const telegram = new GatewayTelegramRuntime(
         telegramClient,
@@ -101,7 +133,7 @@ export async function createGatewayRuntime(
     mailbox.start()
     telegram.start()
 
-    return new GatewayPluginRuntime(module, executor, cron, telegram)
+    return new GatewayPluginRuntime(module, executor, cron, telegram, files, sessionContext)
 }
 
 function resolveEffectiveCronTimeZone(

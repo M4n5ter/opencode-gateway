@@ -9,14 +9,24 @@ use crate::{ChannelKind, ConversationKey, CronJobId, TargetKey};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MessageValidationError {
     EmptySender,
-    EmptyBody,
+    EmptyContent,
+    EmptyAttachmentMimeType,
+    EmptyAttachmentLocalPath,
 }
 
 impl Display for MessageValidationError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::EmptySender => f.write_str("message sender must not be empty"),
-            Self::EmptyBody => f.write_str("message body must not be empty"),
+            Self::EmptyContent => {
+                f.write_str("message must include non-empty text or at least one attachment")
+            }
+            Self::EmptyAttachmentMimeType => {
+                f.write_str("message attachment mime type must not be empty")
+            }
+            Self::EmptyAttachmentLocalPath => {
+                f.write_str("message attachment local path must not be empty")
+            }
         }
     }
 }
@@ -48,11 +58,48 @@ impl DeliveryTarget {
 }
 
 /// A normalized inbound chat message received from an IM channel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InboundAttachmentKind {
+    Image,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InboundAttachment {
+    pub kind: InboundAttachmentKind,
+    pub mime_type: String,
+    pub file_name: Option<String>,
+    pub local_path: String,
+}
+
+impl InboundAttachment {
+    pub fn image(
+        mime_type: impl Into<String>,
+        file_name: Option<String>,
+        local_path: impl Into<String>,
+    ) -> Result<Self, MessageValidationError> {
+        Ok(Self {
+            kind: InboundAttachmentKind::Image,
+            mime_type: normalize_attachment_mime_type(&mime_type.into())?,
+            file_name: normalize_optional_text(file_name),
+            local_path: normalize_attachment_local_path(&local_path.into())?,
+        })
+    }
+
+    pub fn to_prompt_part(&self) -> PromptPart {
+        PromptPart::File {
+            mime_type: self.mime_type.clone(),
+            file_name: self.file_name.clone(),
+            local_path: self.local_path.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InboundMessage {
     pub delivery_target: DeliveryTarget,
     pub sender: String,
-    pub body: String,
+    pub text: Option<String>,
+    pub attachments: Vec<InboundAttachment>,
     conversation_key_override: Option<ConversationKey>,
 }
 
@@ -61,24 +108,29 @@ impl InboundMessage {
     ///
     /// # Errors
     ///
-    /// Returns [`MessageValidationError::EmptySender`] or
-    /// [`MessageValidationError::EmptyBody`] when the trimmed values are empty.
+    /// Returns [`MessageValidationError::EmptySender`] when the sender is empty,
+    /// or [`MessageValidationError::EmptyContent`] when both text and attachments
+    /// are absent after normalization.
     pub fn new(
         channel: ChannelKind,
         target: TargetKey,
         topic: Option<String>,
         sender: impl Into<String>,
-        body: impl Into<String>,
+        text: Option<String>,
+        attachments: Vec<InboundAttachment>,
     ) -> Result<Self, MessageValidationError> {
         let sender = sender.into();
-        let body = body.into();
         let sender = normalize_sender(&sender)?;
-        let body = normalize_body(&body)?;
+        let text = normalize_optional_text(text);
+        if text.is_none() && attachments.is_empty() {
+            return Err(MessageValidationError::EmptyContent);
+        }
 
         Ok(Self {
             delivery_target: DeliveryTarget::new(channel, target, topic),
             sender,
-            body,
+            text,
+            attachments,
             conversation_key_override: None,
         })
     }
@@ -113,26 +165,68 @@ pub enum PromptSource {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PromptPart {
+    Text(String),
+    File {
+        mime_type: String,
+        file_name: Option<String>,
+        local_path: String,
+    },
+}
+
+impl PromptPart {
+    pub fn text(text: impl Into<String>) -> Result<Self, MessageValidationError> {
+        let text = normalize_body(&text.into())?;
+        Ok(Self::Text(text))
+    }
+
+    pub fn file(
+        mime_type: impl Into<String>,
+        file_name: Option<String>,
+        local_path: impl Into<String>,
+    ) -> Result<Self, MessageValidationError> {
+        Ok(Self::File {
+            mime_type: normalize_attachment_mime_type(&mime_type.into())?,
+            file_name: normalize_optional_text(file_name),
+            local_path: normalize_attachment_local_path(&local_path.into())?,
+        })
+    }
+}
+
 /// A single `OpenCode` prompt to execute against a logical conversation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PromptRequest {
     pub conversation_key: ConversationKey,
-    pub prompt: String,
+    pub parts: Vec<PromptPart>,
     pub source: PromptSource,
 }
 
 impl PromptRequest {
-    /// Creates a prompt request with a normalized prompt body.
-    pub fn new(
+    /// Creates a prompt request with normalized prompt parts.
+    pub fn with_parts(
         conversation_key: ConversationKey,
-        prompt: impl Into<String>,
+        parts: Vec<PromptPart>,
         source: PromptSource,
     ) -> Self {
         Self {
             conversation_key,
-            prompt: prompt.into().trim().to_owned(),
+            parts,
             source,
         }
+    }
+
+    /// Creates a prompt request from a single text prompt.
+    pub fn from_text(
+        conversation_key: ConversationKey,
+        prompt: impl Into<String>,
+        source: PromptSource,
+    ) -> Result<Self, MessageValidationError> {
+        Ok(Self::with_parts(
+            conversation_key,
+            vec![PromptPart::text(prompt)?],
+            source,
+        ))
     }
 }
 
@@ -165,33 +259,81 @@ fn normalize_sender(value: &str) -> Result<String, MessageValidationError> {
 fn normalize_body(value: &str) -> Result<String, MessageValidationError> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        return Err(MessageValidationError::EmptyBody);
+        return Err(MessageValidationError::EmptyContent);
+    }
+
+    Ok(trimmed.to_owned())
+}
+
+fn normalize_attachment_mime_type(value: &str) -> Result<String, MessageValidationError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(MessageValidationError::EmptyAttachmentMimeType);
+    }
+
+    Ok(trimmed.to_owned())
+}
+
+fn normalize_attachment_local_path(value: &str) -> Result<String, MessageValidationError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(MessageValidationError::EmptyAttachmentLocalPath);
     }
 
     Ok(trimmed.to_owned())
 }
 
 fn normalize_topic(value: Option<String>) -> Option<String> {
-    value.and_then(|topic| {
-        let trimmed = topic.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_owned())
-        }
+    normalize_optional_text(value)
+}
+
+fn normalize_optional_text(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_owned())
     })
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::{ChannelKind, InboundMessage, MessageValidationError, TargetKey};
+    use crate::{
+        ChannelKind, InboundAttachment, InboundMessage, MessageValidationError, TargetKey,
+    };
 
     #[test]
     fn inbound_message_rejects_empty_sender() {
         let target = TargetKey::new("123").expect("target key");
-        let error = InboundMessage::new(ChannelKind::Telegram, target, None, "   ", "hello")
-            .expect_err("expected empty sender");
+        let error = InboundMessage::new(
+            ChannelKind::Telegram,
+            target,
+            None,
+            "   ",
+            Some("hello".to_owned()),
+            vec![],
+        )
+        .expect_err("expected empty sender");
 
         assert_eq!(error, MessageValidationError::EmptySender);
+    }
+
+    #[test]
+    fn inbound_message_accepts_image_without_text() {
+        let target = TargetKey::new("123").expect("target key");
+        let attachment =
+            InboundAttachment::image("image/png", Some("photo.png".to_owned()), "/tmp/photo.png")
+                .expect("attachment");
+
+        let message = InboundMessage::new(
+            ChannelKind::Telegram,
+            target,
+            None,
+            "alice",
+            None,
+            vec![attachment],
+        )
+        .expect("message");
+
+        assert!(message.text.is_none());
+        assert_eq!(message.attachments.len(), 1);
     }
 }

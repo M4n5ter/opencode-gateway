@@ -15,8 +15,8 @@ pub use cron::{CronJobId, CronJobSpec, CronValidationError, normalize_cron_time_
 pub use engine::{GatewayEngine, GatewayPlan};
 pub use execution::{ExecutionObservation, ExecutionRole, ExecutionState, PreparedExecution};
 pub use message::{
-    DeliveryTarget, InboundMessage, MessageValidationError, OutboundMessage, PromptRequest,
-    PromptSource,
+    DeliveryTarget, InboundAttachment, InboundAttachmentKind, InboundMessage,
+    MessageValidationError, OutboundMessage, PromptPart, PromptRequest, PromptSource,
 };
 pub use progressive::{ProgressiveDirective, ProgressiveMode, ProgressiveTextState};
 pub use status::GatewayStatus;

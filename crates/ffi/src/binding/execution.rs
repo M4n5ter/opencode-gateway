@@ -55,7 +55,7 @@ fn js_error(message: impl Into<String>) -> JsValue {
 
 #[cfg(test)]
 mod tests {
-    use crate::binding::{BindingDeliveryTarget, BindingInboundMessage};
+    use crate::binding::{BindingDeliveryTarget, BindingInboundMessage, BindingPromptPart};
 
     use super::{BindingCronJobSpec, BindingPreparedExecution};
     use super::{prepare_cron_execution_value, prepare_inbound_execution_value};
@@ -69,7 +69,8 @@ mod tests {
                 topic: None,
             },
             sender: "telegram:7".to_owned(),
-            body: "hello".to_owned(),
+            text: Some("hello".to_owned()),
+            attachments: vec![],
             mailbox_key: None,
         })
         .expect("prepared");
@@ -78,7 +79,9 @@ mod tests {
             prepared,
             BindingPreparedExecution {
                 conversation_key: "telegram:42".to_owned(),
-                prompt: "hello".to_owned(),
+                prompt_parts: vec![BindingPromptPart::Text {
+                    text: "hello".to_owned(),
+                }],
                 reply_target: Some(BindingDeliveryTarget {
                     channel: "telegram".to_owned(),
                     target: "42".to_owned(),
@@ -101,7 +104,12 @@ mod tests {
         .expect("prepared");
 
         assert_eq!(prepared.conversation_key, "cron:nightly");
-        assert_eq!(prepared.prompt, "summarize");
+        assert_eq!(
+            prepared.prompt_parts,
+            vec![BindingPromptPart::Text {
+                text: "summarize".to_owned(),
+            }]
+        );
         assert!(prepared.reply_target.is_none());
     }
 
@@ -114,7 +122,8 @@ mod tests {
                 topic: None,
             },
             sender: "telegram:7".to_owned(),
-            body: "hello".to_owned(),
+            text: Some("hello".to_owned()),
+            attachments: vec![],
             mailbox_key: Some("shared:mailbox".to_owned()),
         })
         .expect("prepared");

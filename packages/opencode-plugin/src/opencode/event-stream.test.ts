@@ -46,6 +46,7 @@ test("OpencodeEventStream forwards SDK SSE events into the prompt hub", async ()
         } as never,
         "/workspace",
         hub,
+        [],
         createLogger(),
     )
 

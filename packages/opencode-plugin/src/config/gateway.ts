@@ -46,6 +46,7 @@ export type GatewayMailboxConfig = {
 export type GatewayConfig = {
     configPath: string
     stateDbPath: string
+    mediaRootPath: string
     hasLegacyGatewayTimezone: boolean
     legacyGatewayTimezone: string | null
     mailbox: GatewayMailboxConfig
@@ -64,9 +65,12 @@ export async function loadGatewayConfig(env: EnvSource = process.env): Promise<G
         throw new Error("gateway.state_db must be a string when present")
     }
 
+    const stateDbPath = resolveStateDbPath(stateDbValue, configPath, env)
+
     return {
         configPath,
-        stateDbPath: resolveStateDbPath(stateDbValue, configPath, env),
+        stateDbPath,
+        mediaRootPath: resolveMediaRootPath(stateDbPath),
         hasLegacyGatewayTimezone: rawConfig?.gateway?.timezone !== undefined,
         legacyGatewayTimezone: readLegacyGatewayTimezone(rawConfig?.gateway?.timezone),
         mailbox: parseMailboxConfig(rawConfig?.gateway?.mailbox),
@@ -242,6 +246,10 @@ function defaultGatewayConfigPath(env: EnvSource): string {
 
 function defaultStateDbPath(env: EnvSource): string {
     return join(resolveDataHome(env), "opencode-gateway", "state.db")
+}
+
+function resolveMediaRootPath(stateDbPath: string): string {
+    return join(dirname(stateDbPath), "media")
 }
 
 function resolveConfigHome(env: EnvSource): string {

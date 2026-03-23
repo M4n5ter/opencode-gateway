@@ -1,23 +1,89 @@
 use opencode_gateway_runtime::{
-    OpencodeCommand, OpencodeCommandError, OpencodeCommandResult, OpencodeDriverStep,
-    OpencodeExecutionInput, OpencodeMessage, OpencodeMessagePart, OpencodePrompt,
+    OpencodeCommand, OpencodeCommandError, OpencodeCommandPart, OpencodeCommandResult,
+    OpencodeDriverStep, OpencodeExecutionInput, OpencodeMessage, OpencodeMessagePart,
+    OpencodePrompt, OpencodePromptPart,
 };
 use serde::{Deserialize, Serialize};
 
-use super::{parse_command_error_code, parse_progressive_mode, parse_required};
+use super::{
+    gateway::BindingPromptPart, parse_command_error_code, parse_progressive_mode, parse_required,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BindingOpencodePrompt {
     pub prompt_key: String,
-    pub prompt: String,
+    pub parts: Vec<BindingPromptPart>,
 }
 
 impl TryFrom<BindingOpencodePrompt> for OpencodePrompt {
     type Error = String;
 
     fn try_from(value: BindingOpencodePrompt) -> Result<Self, Self::Error> {
-        OpencodePrompt::new(value.prompt_key, value.prompt)
+        OpencodePrompt::new(
+            value.prompt_key,
+            value
+                .parts
+                .into_iter()
+                .map(opencode_prompt_part_from_binding)
+                .collect::<Result<Vec<_>, _>>()?,
+        )
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum BindingOpencodeCommandPart {
+    Text {
+        part_id: String,
+        text: String,
+    },
+    File {
+        part_id: String,
+        mime_type: String,
+        file_name: Option<String>,
+        local_path: String,
+    },
+}
+
+impl TryFrom<BindingOpencodeCommandPart> for OpencodeCommandPart {
+    type Error = String;
+
+    fn try_from(value: BindingOpencodeCommandPart) -> Result<Self, Self::Error> {
+        match value {
+            BindingOpencodeCommandPart::Text { part_id, text } => {
+                OpencodeCommandPart::text(part_id, text)
+            }
+            BindingOpencodeCommandPart::File {
+                part_id,
+                mime_type,
+                file_name,
+                local_path,
+            } => OpencodeCommandPart::file(part_id, mime_type, file_name, local_path),
+        }
+    }
+}
+
+impl From<OpencodeCommandPart> for BindingOpencodeCommandPart {
+    fn from(value: OpencodeCommandPart) -> Self {
+        match value {
+            OpencodeCommandPart::Text { part_id, text } => Self::Text { part_id, text },
+            OpencodeCommandPart::File {
+                part_id,
+                mime_type,
+                file_name,
+                local_path,
+            } => Self::File {
+                part_id,
+                mime_type,
+                file_name,
+                local_path,
+            },
+        }
     }
 }
 
@@ -149,14 +215,12 @@ pub enum BindingOpencodeCommand {
     AppendPrompt {
         session_id: String,
         message_id: String,
-        text_part_id: String,
-        prompt: String,
+        parts: Vec<BindingOpencodeCommandPart>,
     },
     SendPromptAsync {
         session_id: String,
         message_id: String,
-        text_part_id: String,
-        prompt: String,
+        parts: Vec<BindingOpencodeCommandPart>,
     },
     AwaitPromptResponse {
         session_id: String,
@@ -180,24 +244,26 @@ impl From<OpencodeCommand> for BindingOpencodeCommand {
             OpencodeCommand::AppendPrompt {
                 session_id,
                 message_id,
-                text_part_id,
-                prompt,
+                parts,
             } => Self::AppendPrompt {
                 session_id,
                 message_id,
-                text_part_id,
-                prompt,
+                parts: parts
+                    .into_iter()
+                    .map(BindingOpencodeCommandPart::from)
+                    .collect(),
             },
             OpencodeCommand::SendPromptAsync {
                 session_id,
                 message_id,
-                text_part_id,
-                prompt,
+                parts,
             } => Self::SendPromptAsync {
                 session_id,
                 message_id,
-                text_part_id,
-                prompt,
+                parts: parts
+                    .into_iter()
+                    .map(BindingOpencodeCommandPart::from)
+                    .collect(),
             },
             OpencodeCommand::AwaitPromptResponse {
                 session_id,
@@ -334,6 +400,19 @@ impl TryFrom<BindingOpencodeCommandResult> for OpencodeCommandResult {
                 message: parse_required(message, "commandResult message")?,
             }),
         })
+    }
+}
+
+fn opencode_prompt_part_from_binding(
+    value: BindingPromptPart,
+) -> Result<OpencodePromptPart, String> {
+    match value {
+        BindingPromptPart::Text { text } => OpencodePromptPart::text(text),
+        BindingPromptPart::File {
+            mime_type,
+            file_name,
+            local_path,
+        } => OpencodePromptPart::file(mime_type, file_name, local_path),
     }
 }
 

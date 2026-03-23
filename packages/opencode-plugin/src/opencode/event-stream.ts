@@ -15,6 +15,7 @@ export class OpencodeEventStream {
         private readonly client: OpencodeClient,
         private readonly directory: string,
         private readonly hub: OpencodeEventHub,
+        private readonly consumers: OpencodeEventConsumerLike[],
         private readonly logger: BindingLoggerHost,
     ) {}
 
@@ -54,7 +55,11 @@ export class OpencodeEventStream {
                 this.lastError = null
 
                 for await (const event of events.stream) {
-                    this.hub.handleEvent(event as OpencodeRuntimeEvent)
+                    const runtimeEvent = event as OpencodeRuntimeEvent
+                    this.hub.handleEvent(runtimeEvent)
+                    for (const consumer of this.consumers) {
+                        consumer.handleEvent(runtimeEvent)
+                    }
                 }
             } catch (error) {
                 this.lastError = formatError(error)
@@ -66,4 +71,8 @@ export class OpencodeEventStream {
             await Bun.sleep(RECONNECT_DELAY_MS)
         }
     }
+}
+
+type OpencodeEventConsumerLike = {
+    handleEvent(event: OpencodeRuntimeEvent): void
 }

@@ -24,7 +24,8 @@ test("sqlite store persists session bindings, offsets, and cron catalog state", 
             sourceKind: "telegram_update",
             externalId: "100",
             sender: "telegram:7",
-            body: "hello",
+            text: "hello",
+            attachments: [],
             replyChannel: "telegram",
             replyTarget: "42",
             replyTopic: null,
@@ -52,7 +53,8 @@ test("sqlite store persists session bindings, offsets, and cron catalog state", 
                 sourceKind: "telegram_update",
                 externalId: "100",
                 sender: "telegram:7",
-                body: "hello",
+                text: "hello",
+                attachments: [],
                 replyChannel: "telegram",
                 replyTarget: "42",
                 replyTopic: null,
@@ -104,7 +106,8 @@ test("sqlite store deduplicates mailbox entries by source identity", () => {
             sourceKind: "telegram_update",
             externalId: "100",
             sender: "telegram:7",
-            body: "hello",
+            text: "hello",
+            attachments: [],
             replyChannel: "telegram",
             replyTarget: "42",
             replyTopic: null,
@@ -115,7 +118,8 @@ test("sqlite store deduplicates mailbox entries by source identity", () => {
             sourceKind: "telegram_update",
             externalId: "100",
             sender: "telegram:7",
-            body: "hello again",
+            text: "hello again",
+            attachments: [],
             replyChannel: "telegram",
             replyTarget: "42",
             replyTopic: null,
@@ -123,6 +127,151 @@ test("sqlite store deduplicates mailbox entries by source identity", () => {
         })
 
         expect(store.listMailboxEntries("telegram:42")).toHaveLength(1)
+    } finally {
+        db.close()
+    }
+})
+
+test("sqlite store persists mailbox entry attachments alongside text", () => {
+    const db = new Database(":memory:")
+
+    try {
+        migrateGatewayDatabase(db)
+        const store = new SqliteStore(db)
+
+        store.enqueueMailboxEntry({
+            mailboxKey: "telegram:42",
+            sourceKind: "telegram_update",
+            externalId: "200",
+            sender: "telegram:7",
+            text: null,
+            attachments: [
+                {
+                    kind: "image",
+                    mimeType: "image/png",
+                    fileName: "photo.png",
+                    localPath: "/tmp/photo.png",
+                },
+            ],
+            replyChannel: "telegram",
+            replyTarget: "42",
+            replyTopic: null,
+            recordedAtMs: 1,
+        })
+
+        expect(store.listMailboxEntries("telegram:42")).toEqual([
+            {
+                id: 1,
+                mailboxKey: "telegram:42",
+                sourceKind: "telegram_update",
+                externalId: "200",
+                sender: "telegram:7",
+                text: null,
+                attachments: [
+                    {
+                        kind: "image",
+                        ordinal: 0,
+                        mimeType: "image/png",
+                        fileName: "photo.png",
+                        localPath: "/tmp/photo.png",
+                    },
+                ],
+                replyChannel: "telegram",
+                replyTarget: "42",
+                replyTopic: null,
+                createdAtMs: 1,
+            },
+        ])
+    } finally {
+        db.close()
+    }
+})
+
+test("sqlite store persists session reply targets and pending questions", () => {
+    const db = new Database(":memory:")
+
+    try {
+        migrateGatewayDatabase(db)
+        const store = new SqliteStore(db)
+
+        store.replaceSessionReplyTargets({
+            sessionId: "session-1",
+            conversationKey: "telegram:42",
+            targets: [
+                {
+                    channel: "telegram",
+                    target: "42",
+                    topic: null,
+                },
+            ],
+            recordedAtMs: 10,
+        })
+        store.replacePendingQuestion({
+            requestId: "question-1",
+            sessionId: "session-1",
+            questions: [
+                {
+                    header: "Target",
+                    question: "Where should the file go?",
+                    options: [
+                        {
+                            label: "Telegram",
+                            description: "Send it to Telegram",
+                        },
+                    ],
+                    multiple: false,
+                    custom: true,
+                },
+            ],
+            targets: [
+                {
+                    deliveryTarget: {
+                        channel: "telegram",
+                        target: "42",
+                        topic: null,
+                    },
+                    telegramMessageId: 99,
+                },
+            ],
+            recordedAtMs: 20,
+        })
+
+        expect(store.getDefaultSessionReplyTarget("session-1")).toEqual({
+            channel: "telegram",
+            target: "42",
+            topic: null,
+        })
+        expect(
+            store.getPendingQuestionForTarget({
+                channel: "telegram",
+                target: "42",
+                topic: null,
+            }),
+        ).toEqual({
+            requestId: "question-1",
+            sessionId: "session-1",
+            questions: [
+                {
+                    header: "Target",
+                    question: "Where should the file go?",
+                    options: [
+                        {
+                            label: "Telegram",
+                            description: "Send it to Telegram",
+                        },
+                    ],
+                    multiple: false,
+                    custom: true,
+                },
+            ],
+            deliveryTarget: {
+                channel: "telegram",
+                target: "42",
+                topic: null,
+            },
+            telegramMessageId: 99,
+            createdAtMs: 20,
+        })
     } finally {
         db.close()
     }
@@ -200,7 +349,8 @@ test("sqlite migration upgrades a v3 database to include mailbox tables", () => 
             sourceKind: "telegram_update",
             externalId: "100",
             sender: "telegram:7",
-            body: "hello",
+            text: "hello",
+            attachments: [],
             replyChannel: "telegram",
             replyTarget: "42",
             replyTopic: null,

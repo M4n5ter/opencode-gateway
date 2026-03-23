@@ -3,8 +3,9 @@ use opencode_gateway_core::{
 };
 
 use crate::{
-    OpencodeCommand, OpencodeCommandErrorCode, OpencodeCommandResult, OpencodeExecutionDriver,
-    OpencodeExecutionInput, OpencodeMessagePart, OpencodePrompt,
+    OpencodeCommand, OpencodeCommandErrorCode, OpencodeCommandPart, OpencodeCommandResult,
+    OpencodeExecutionDriver, OpencodeExecutionInput, OpencodeMessagePart, OpencodePrompt,
+    OpencodePromptPart,
 };
 
 #[test]
@@ -12,8 +13,8 @@ fn stale_persisted_session_recreates_once_and_replays_batch() {
     let mut driver = create_driver(
         Some("ses_stale"),
         vec![
-            OpencodePrompt::new("mailbox:1", "first").expect("prompt"),
-            OpencodePrompt::new("mailbox:2", "second").expect("prompt"),
+            create_text_prompt("mailbox:1", "first"),
+            create_text_prompt("mailbox:2", "second"),
         ],
     );
 
@@ -50,8 +51,9 @@ fn stale_persisted_session_recreates_once_and_replays_batch() {
         command(OpencodeCommand::AppendPrompt {
             session_id: "ses_fresh".to_owned(),
             message_id: "msg_gateway_mailbox_1".to_owned(),
-            text_part_id: "prt_gateway_mailbox_1".to_owned(),
-            prompt: "first".to_owned(),
+            parts: vec![
+                OpencodeCommandPart::text("prt_gateway_mailbox_1_0", "first").expect("part")
+            ],
         })
     );
 
@@ -62,8 +64,9 @@ fn stale_persisted_session_recreates_once_and_replays_batch() {
         command(OpencodeCommand::SendPromptAsync {
             session_id: "ses_fresh".to_owned(),
             message_id: "msg_gateway_mailbox_2".to_owned(),
-            text_part_id: "prt_gateway_mailbox_2".to_owned(),
-            prompt: "second".to_owned(),
+            parts: vec![
+                OpencodeCommandPart::text("prt_gateway_mailbox_2_0", "second").expect("part")
+            ],
         })
     );
 }
@@ -72,7 +75,7 @@ fn stale_persisted_session_recreates_once_and_replays_batch() {
 fn missing_session_error_retries_once_from_persisted_binding() {
     let mut driver = create_driver(
         Some("ses_stale"),
-        vec![OpencodePrompt::new("mailbox:1", "hello").expect("prompt")],
+        vec![create_text_prompt("mailbox:1", "hello")],
     );
 
     let _ = driver.start();
@@ -96,10 +99,7 @@ fn missing_session_error_retries_once_from_persisted_binding() {
 
 #[test]
 fn observe_emits_preview_for_matching_assistant_events() {
-    let mut driver = create_driver(
-        None,
-        vec![OpencodePrompt::new("mailbox:1", "hello").expect("prompt")],
-    );
+    let mut driver = create_driver(None, vec![create_text_prompt("mailbox:1", "hello")]);
 
     let _ = driver.start();
     let _ = driver.resume(OpencodeCommandResult::CreateSession {
@@ -148,10 +148,7 @@ fn observe_emits_preview_for_matching_assistant_events() {
 
 #[test]
 fn send_prompt_async_awaits_response_and_completes() {
-    let mut driver = create_driver(
-        None,
-        vec![OpencodePrompt::new("mailbox:1", "hello").expect("prompt")],
-    );
+    let mut driver = create_driver(None, vec![create_text_prompt("mailbox:1", "hello")]);
 
     assert_eq!(
         driver.start(),
@@ -174,8 +171,9 @@ fn send_prompt_async_awaits_response_and_completes() {
         command(OpencodeCommand::SendPromptAsync {
             session_id: "session-1".to_owned(),
             message_id: "msg_gateway_mailbox_1".to_owned(),
-            text_part_id: "prt_gateway_mailbox_1".to_owned(),
-            prompt: "hello".to_owned(),
+            parts: vec![
+                OpencodeCommandPart::text("prt_gateway_mailbox_1_0", "hello").expect("part")
+            ],
         })
     );
 
@@ -212,11 +210,55 @@ fn send_prompt_async_awaits_response_and_completes() {
 }
 
 #[test]
-fn await_prompt_response_completes_without_assistant_event_binding() {
+fn send_prompt_async_preserves_text_and_file_part_order() {
     let mut driver = create_driver(
         None,
-        vec![OpencodePrompt::new("mailbox:1", "hello").expect("prompt")],
+        vec![
+            OpencodePrompt::new(
+                "mailbox:1",
+                vec![
+                    OpencodePromptPart::text("describe").expect("text part"),
+                    OpencodePromptPart::file(
+                        "image/png",
+                        Some("photo.png".to_owned()),
+                        "/tmp/photo.png",
+                    )
+                    .expect("file part"),
+                ],
+            )
+            .expect("prompt"),
+        ],
     );
+
+    let _ = driver.start();
+    let _ = driver.resume(OpencodeCommandResult::CreateSession {
+        session_id: "session-1".to_owned(),
+    });
+
+    assert_eq!(
+        driver.resume(OpencodeCommandResult::WaitUntilIdle {
+            session_id: "session-1".to_owned(),
+        }),
+        command(OpencodeCommand::SendPromptAsync {
+            session_id: "session-1".to_owned(),
+            message_id: "msg_gateway_mailbox_1".to_owned(),
+            parts: vec![
+                OpencodeCommandPart::text("prt_gateway_mailbox_1_0", "describe").expect("part"),
+                OpencodeCommandPart::file(
+                    "prt_gateway_mailbox_1_1",
+                    "image/png",
+                    Some("photo.png".to_owned()),
+                    "/tmp/photo.png",
+                )
+                .expect("part"),
+            ],
+        })
+    );
+}
+
+#[test]
+fn await_prompt_response_completes_without_assistant_event_binding() {
+    let mut driver = create_driver(None, vec![create_text_prompt("mailbox:1", "hello")]);
 
     let _ = driver.start();
     let _ = driver.resume(OpencodeCommandResult::CreateSession {
@@ -276,4 +318,12 @@ fn create_driver(
 
 fn command(command: OpencodeCommand) -> crate::OpencodeDriverStep {
     crate::OpencodeDriverStep::Command(command)
+}
+
+fn create_text_prompt(prompt_key: &str, text: &str) -> OpencodePrompt {
+    OpencodePrompt::new(
+        prompt_key,
+        vec![OpencodePromptPart::text(text).expect("text part")],
+    )
+    .expect("prompt")
 }

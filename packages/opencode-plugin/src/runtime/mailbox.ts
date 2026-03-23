@@ -1,7 +1,9 @@
 import type { BindingInboundMessage, BindingLoggerHost } from "../binding"
 import type { GatewayMailboxConfig } from "../config/gateway"
+import type { GatewayQuestionRuntime } from "../questions/runtime"
 import type { RuntimeJournalEntry, SqliteStore } from "../store/sqlite"
 import { formatError } from "../utils/error"
+import { deleteInboundAttachmentFiles } from "./attachments"
 import type { GatewayExecutor } from "./executor"
 
 const RETRY_DELAY_MS = 1_000
@@ -15,6 +17,7 @@ export class GatewayMailboxRuntime {
         private readonly store: SqliteStore,
         private readonly logger: BindingLoggerHost,
         private readonly config: GatewayMailboxConfig,
+        private readonly questions: GatewayQuestionRuntimeLike,
     ) {}
 
     start(): void {
@@ -23,7 +26,11 @@ export class GatewayMailboxRuntime {
         }
     }
 
-    enqueueInboundMessage(message: BindingInboundMessage, sourceKind: string, externalId: string): void {
+    async enqueueInboundMessage(message: BindingInboundMessage, sourceKind: string, externalId: string): Promise<void> {
+        if (await this.questions.tryHandleInboundMessage(message)) {
+            return
+        }
+
         const prepared = this.executor.prepareInboundMessage(message)
         const recordedAtMs = Date.now()
 
@@ -32,7 +39,8 @@ export class GatewayMailboxRuntime {
             sourceKind,
             externalId,
             sender: message.sender,
-            body: message.body,
+            text: message.text,
+            attachments: message.attachments,
             replyChannel: message.deliveryTarget.channel,
             replyTarget: message.deliveryTarget.target,
             replyTopic: message.deliveryTarget.topic,
@@ -43,7 +51,8 @@ export class GatewayMailboxRuntime {
                 sourceKind,
                 externalId,
                 sender: message.sender,
-                body: message.body,
+                text: message.text,
+                attachments: message.attachments,
                 deliveryTarget: message.deliveryTarget,
             }),
         )
@@ -99,6 +108,7 @@ export class GatewayMailboxRuntime {
             const batch = this.config.batchReplies ? entries : [entries[0]]
             await this.executor.executeMailboxEntries(batch)
             this.store.deleteMailboxEntries(batch.map((entry) => entry.id))
+            await deleteInboundAttachmentFiles(batch, this.logger)
         } catch (error) {
             this.logger.log("warn", `mailbox flush failed for ${mailboxKey}: ${formatError(error)}`)
             this.scheduleRetry(mailboxKey)
@@ -114,6 +124,7 @@ export class GatewayMailboxRuntime {
 }
 
 type GatewayExecutorLike = Pick<GatewayExecutor, "executeMailboxEntries" | "prepareInboundMessage">
+type GatewayQuestionRuntimeLike = Pick<GatewayQuestionRuntime, "tryHandleInboundMessage">
 
 function createJournalEntry(
     kind: RuntimeJournalEntry["kind"],

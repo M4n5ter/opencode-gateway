@@ -31,16 +31,36 @@ export type BindingDeliveryTarget = {
     topic: string | null
 }
 
+export type BindingInboundAttachment = {
+    kind: "image"
+    mimeType: string
+    fileName: string | null
+    localPath: string
+}
+
 export type BindingInboundMessage = {
     deliveryTarget: BindingDeliveryTarget
     sender: string
-    body: string
+    text: string | null
+    attachments: BindingInboundAttachment[]
     mailboxKey?: string | null
 }
 
+export type BindingPromptPart =
+    | {
+          kind: "text"
+          text: string
+      }
+    | {
+          kind: "file"
+          mimeType: string
+          fileName: string | null
+          localPath: string
+      }
+
 export type BindingPreparedExecution = {
     conversationKey: string
-    prompt: string
+    promptParts: BindingPromptPart[]
     replyTarget: BindingDeliveryTarget | null
 }
 

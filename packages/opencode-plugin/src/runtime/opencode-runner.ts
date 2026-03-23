@@ -1,6 +1,7 @@
 import type {
     BindingOpencodeCommand,
     BindingOpencodeCommandResult,
+    BindingPromptPart,
     GatewayBindingModule,
     OpencodeExecutionDriver,
 } from "../binding"
@@ -12,7 +13,7 @@ const DEFAULT_FLUSH_INTERVAL_MS = 400
 
 export type OpencodeDriverPrompt = {
     promptKey: string
-    prompt: string
+    parts: BindingPromptPart[]
 }
 
 export type PromptExecutionResult = {
@@ -33,6 +34,7 @@ export async function runOpencodeDriver(options: {
     persistedSessionId: string | null
     deliverySession: TextDeliverySessionLike | null
     prompts: OpencodeDriverPrompt[]
+    onSessionAvailable?: (sessionId: string) => Promise<void> | void
 }): Promise<PromptExecutionResult> {
     const driver = new options.module.OpencodeExecutionDriver({
         conversationKey: options.conversationKey,
@@ -42,13 +44,16 @@ export async function runOpencodeDriver(options: {
         prompts: options.prompts,
     })
     let registration: DriverRegistrationLike | null = null
+    let activeSessionId: string | null = null
 
     try {
         let step = driver.start()
         for (;;) {
             if (step.kind === "command") {
+                activeSessionId = await syncSessionContext(activeSessionId, step.command, options.onSessionAvailable)
                 registration = syncDriverRegistration(registration, step.command, driver, options)
                 const result = await options.opencode.execute(step.command)
+                activeSessionId = await syncSessionContext(activeSessionId, result, options.onSessionAvailable)
                 registration = syncDriverRegistration(registration, result, driver, options)
                 step = driver.resume(result)
                 continue
@@ -68,6 +73,20 @@ export async function runOpencodeDriver(options: {
         registration?.dispose()
         driver.free?.()
     }
+}
+
+async function syncSessionContext(
+    currentSessionId: string | null,
+    value: BindingOpencodeCommand | BindingOpencodeCommandResult,
+    onSessionAvailable: ((sessionId: string) => Promise<void> | void) | undefined,
+): Promise<string | null> {
+    const sessionId = sessionIdFromCommandOrResult(value)
+    if (sessionId === null || sessionId === currentSessionId) {
+        return currentSessionId
+    }
+
+    await onSessionAvailable?.(sessionId)
+    return sessionId
 }
 
 function syncDriverRegistration(

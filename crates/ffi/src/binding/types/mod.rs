@@ -9,13 +9,13 @@ use opencode_gateway_runtime::OpencodeCommandErrorCode;
 
 pub use execution::{BindingExecutionObservation, BindingProgressiveDirective};
 pub use gateway::{
-    BindingCronJobSpec, BindingDeliveryTarget, BindingGatewayStatus, BindingInboundMessage,
-    BindingPreparedExecution,
+    BindingCronJobSpec, BindingDeliveryTarget, BindingGatewayStatus, BindingInboundAttachment,
+    BindingInboundMessage, BindingPreparedExecution, BindingPromptPart,
 };
 pub use opencode::{
-    BindingOpencodeCommand, BindingOpencodeCommandResult, BindingOpencodeDriverStep,
-    BindingOpencodeExecutionInput, BindingOpencodeMessage, BindingOpencodeMessagePart,
-    BindingOpencodePrompt,
+    BindingOpencodeCommand, BindingOpencodeCommandPart, BindingOpencodeCommandResult,
+    BindingOpencodeDriverStep, BindingOpencodeExecutionInput, BindingOpencodeMessage,
+    BindingOpencodeMessagePart, BindingOpencodePrompt,
 };
 
 pub(crate) fn parse_channel_kind(value: &str) -> Result<ChannelKind, String> {

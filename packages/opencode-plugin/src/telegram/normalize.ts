@@ -1,6 +1,28 @@
 import type { BindingInboundMessage } from "../binding"
 import type { TelegramConfig } from "../config/telegram"
-import type { TelegramChatType, TelegramUpdate } from "./types"
+import type {
+    TelegramCallbackQuery,
+    TelegramChatType,
+    TelegramDocument,
+    TelegramPhotoSize,
+    TelegramUpdate,
+} from "./types"
+
+export type TelegramPendingAttachment = {
+    kind: "image"
+    fileId: string
+    fileUniqueId: string | null
+    mimeType: string | null
+    fileName: string | null
+}
+
+export type TelegramNormalizedInboundMessage = {
+    mailboxKey: string | null
+    deliveryTarget: BindingInboundMessage["deliveryTarget"]
+    sender: string
+    text: string | null
+    attachments: TelegramPendingAttachment[]
+}
 
 export type TelegramNormalizedUpdate =
     | {
@@ -10,8 +32,20 @@ export type TelegramNormalizedUpdate =
     | {
           kind: "message"
           chatType: TelegramChatType
-          message: BindingInboundMessage
+          message: TelegramNormalizedInboundMessage
       }
+    | {
+          kind: "callbackQuery"
+          callbackQuery: TelegramNormalizedCallbackQuery
+      }
+
+export type TelegramNormalizedCallbackQuery = {
+    callbackQueryId: string
+    sender: string
+    deliveryTarget: BindingInboundMessage["deliveryTarget"]
+    messageId: number
+    data: string | null
+}
 
 type TelegramAllowlist = {
     allowedChats: ReadonlySet<string>
@@ -34,13 +68,13 @@ export function normalizeTelegramUpdate(
     allowlist: TelegramAllowlist,
     mailboxRouter?: MailboxRouterLike,
 ): TelegramNormalizedUpdate {
+    if (update.callback_query) {
+        return normalizeTelegramCallbackQuery(update.callback_query, allowlist)
+    }
+
     const message = update.message
     if (!message) {
         return ignored("unsupported update type")
-    }
-
-    if (typeof message.text !== "string" || message.text.trim().length === 0) {
-        return ignored("message has no text body")
     }
 
     if (!message.from) {
@@ -63,6 +97,12 @@ export function normalizeTelegramUpdate(
         topic: message.message_thread_id === undefined ? null : String(message.message_thread_id),
     } satisfies BindingInboundMessage["deliveryTarget"]
 
+    const attachments = extractAttachments(message.photo, message.document)
+    const text = normalizeOptionalText(message.text ?? message.caption ?? null)
+    if (text === null && attachments.length === 0) {
+        return ignored("message has no supported content")
+    }
+
     return {
         kind: "message",
         chatType: message.chat.type,
@@ -70,8 +110,79 @@ export function normalizeTelegramUpdate(
             mailboxKey: mailboxRouter?.resolve(deliveryTarget) ?? null,
             deliveryTarget,
             sender: `telegram:${userId}`,
-            body: message.text,
+            text,
+            attachments,
         },
+    }
+}
+
+function normalizeTelegramCallbackQuery(
+    callbackQuery: TelegramCallbackQuery,
+    allowlist: TelegramAllowlist,
+): TelegramNormalizedUpdate {
+    const message = callbackQuery.message
+    if (!message) {
+        return ignored("callback query message is missing")
+    }
+
+    const chatId = String(message.chat.id)
+    const userId = String(callbackQuery.from.id)
+    if (!isAllowed(chatId, userId, allowlist)) {
+        return ignored("callback query is not allowlisted")
+    }
+
+    return {
+        kind: "callbackQuery",
+        callbackQuery: {
+            callbackQueryId: callbackQuery.id,
+            sender: `telegram:${userId}`,
+            deliveryTarget: {
+                channel: "telegram",
+                target: chatId,
+                topic: message.message_thread_id === undefined ? null : String(message.message_thread_id),
+            },
+            messageId: message.message_id,
+            data: normalizeOptionalText(callbackQuery.data ?? null),
+        },
+    }
+}
+
+function extractAttachments(
+    photo: TelegramPhotoSize[] | undefined,
+    document: TelegramDocument | undefined,
+): TelegramPendingAttachment[] {
+    const photoAttachment = selectLargestPhoto(photo)
+    if (photoAttachment !== null) {
+        return [photoAttachment]
+    }
+
+    if (document?.mime_type?.startsWith("image/") === true) {
+        return [
+            {
+                kind: "image",
+                fileId: document.file_id,
+                fileUniqueId: document.file_unique_id ?? null,
+                mimeType: document.mime_type,
+                fileName: normalizeOptionalText(document.file_name ?? null),
+            },
+        ]
+    }
+
+    return []
+}
+
+function selectLargestPhoto(photo: TelegramPhotoSize[] | undefined): TelegramPendingAttachment | null {
+    if (!Array.isArray(photo) || photo.length === 0) {
+        return null
+    }
+
+    const largest = photo[photo.length - 1]
+    return {
+        kind: "image",
+        fileId: largest.file_id,
+        fileUniqueId: largest.file_unique_id ?? null,
+        mimeType: null,
+        fileName: null,
     }
 }
 
@@ -84,4 +195,13 @@ function ignored(reason: string): TelegramNormalizedUpdate {
         kind: "ignore",
         reason,
     }
+}
+
+function normalizeOptionalText(value: string | null): string | null {
+    if (value === null) {
+        return null
+    }
+
+    const trimmed = value.trim()
+    return trimmed.length === 0 ? null : trimmed
 }

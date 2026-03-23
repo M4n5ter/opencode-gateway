@@ -10,8 +10,9 @@ pub use execution::{prepare_cron_execution, prepare_inbound_execution};
 pub use export::{gateway_status, next_cron_run_at, normalize_cron_time_zone};
 pub use types::{
     BindingCronJobSpec, BindingDeliveryTarget, BindingExecutionObservation, BindingGatewayStatus,
-    BindingInboundMessage, BindingOpencodeCommand, BindingOpencodeCommandResult,
-    BindingOpencodeDriverStep, BindingOpencodeExecutionInput, BindingOpencodeMessage,
-    BindingOpencodeMessagePart, BindingOpencodePrompt, BindingPreparedExecution,
-    BindingProgressiveDirective,
+    BindingInboundAttachment, BindingInboundMessage, BindingOpencodeCommand,
+    BindingOpencodeCommandPart, BindingOpencodeCommandResult, BindingOpencodeDriverStep,
+    BindingOpencodeExecutionInput, BindingOpencodeMessage, BindingOpencodeMessagePart,
+    BindingOpencodePrompt, BindingPreparedExecution, BindingProgressiveDirective,
+    BindingPromptPart,
 };

@@ -6,9 +6,11 @@ import type {
     BindingInboundMessage,
     BindingLoggerHost,
     BindingOpencodeCommand,
+    BindingOpencodeCommandPart,
     BindingOpencodeCommandResult,
     BindingPreparedExecution,
     BindingProgressiveDirective,
+    BindingPromptPart,
 } from "../binding"
 import { OpencodeEventHub } from "../opencode/events"
 import { migrateGatewayDatabase } from "../store/migrations"
@@ -182,7 +184,7 @@ test("GatewayExecutor appends earlier prompts and forwards progressive previews 
                 switch (command.kind) {
                     case "appendPrompt":
                     case "sendPromptAsync":
-                        return { kind: command.kind, prompt: command.prompt, messageId: command.messageId }
+                        return { kind: command.kind, parts: command.parts, messageId: command.messageId }
                     case "awaitPromptResponse":
                         return { kind: command.kind, messageId: command.messageId }
                     default:
@@ -192,8 +194,16 @@ test("GatewayExecutor appends earlier prompts and forwards progressive previews 
         ).toEqual([
             { kind: "createSession" },
             { kind: "waitUntilIdle" },
-            { kind: "appendPrompt", prompt: "first", messageId: `msg_gateway_mailbox_1_${now}` },
-            { kind: "sendPromptAsync", prompt: "second", messageId: `msg_gateway_mailbox_2_${now}` },
+            {
+                kind: "appendPrompt",
+                parts: createTextCommandParts(`mailbox:1:${now}`, "first"),
+                messageId: `msg_gateway_mailbox_1_${now}`,
+            },
+            {
+                kind: "sendPromptAsync",
+                parts: createTextCommandParts(`mailbox:2:${now}`, "second"),
+                messageId: `msg_gateway_mailbox_2_${now}`,
+            },
             { kind: "awaitPromptResponse", messageId: `msg_gateway_mailbox_2_${now}` },
         ])
         expect(previewSnapshots).toEqual(["preview"])
@@ -208,7 +218,8 @@ test("GatewayExecutor appends earlier prompts and forwards progressive previews 
 function createMessage(): BindingInboundMessage {
     return {
         sender: "telegram:7",
-        body: "hello",
+        text: "hello",
+        attachments: [],
         deliveryTarget: {
             channel: "telegram",
             target: "42",
@@ -217,14 +228,15 @@ function createMessage(): BindingInboundMessage {
     }
 }
 
-function createMailboxEntry(id: number, body: string): MailboxEntryRecord {
+function createMailboxEntry(id: number, text: string): MailboxEntryRecord {
     return {
         id,
         mailboxKey: "telegram:42",
         sourceKind: "telegram_update",
         externalId: `update:${id}`,
         sender: "telegram:7",
-        body,
+        text,
+        attachments: [],
         replyChannel: "telegram",
         replyTarget: "42",
         replyTopic: null,
@@ -251,7 +263,7 @@ function createModule() {
         prepareInboundExecution(message: BindingInboundMessage): BindingPreparedExecution {
             return {
                 conversationKey: `telegram:${message.deliveryTarget.target}`,
-                prompt: message.body,
+                promptParts: createTextPromptParts(message.text ?? ""),
                 replyTarget: message.deliveryTarget,
             }
         },
@@ -263,7 +275,7 @@ function createModule() {
 }
 
 class FakeOpencodeExecutionDriver {
-    private readonly prompts: Array<{ promptKey: string; prompt: string }>
+    private readonly prompts: Array<{ promptKey: string; parts: BindingPromptPart[] }>
     private readonly persistedSessionId: string | null
     private sessionId: string | null = null
     private phase:
@@ -277,7 +289,7 @@ class FakeOpencodeExecutionDriver {
         | "done" = "initial"
     private appendIndex = 0
     constructor(input: {
-        prompts: Array<{ promptKey: string; prompt: string }>
+        prompts: Array<{ promptKey: string; parts: BindingPromptPart[] }>
         persistedSessionId: string | null
     }) {
         this.prompts = input.prompts
@@ -428,28 +440,54 @@ function createWaitUntilIdleCommand(sessionId: string) {
     }
 }
 
-function createAppendCommand(sessionId: string, prompt: { promptKey: string; prompt: string }) {
+function createAppendCommand(sessionId: string, prompt: { promptKey: string; parts: BindingPromptPart[] }) {
     return {
         kind: "appendPrompt" as const,
         sessionId,
         messageId: `msg_gateway_${prompt.promptKey.replaceAll(":", "_")}`,
-        textPartId: `prt_gateway_${prompt.promptKey.replaceAll(":", "_")}`,
-        prompt: prompt.prompt,
+        parts: toCommandParts(prompt),
     }
 }
 
-function createSendPromptAsyncCommand(sessionId: string, prompt: { promptKey: string; prompt: string }) {
+function createSendPromptAsyncCommand(sessionId: string, prompt: { promptKey: string; parts: BindingPromptPart[] }) {
     return {
         kind: "sendPromptAsync" as const,
         sessionId,
         messageId: createPromptMessageId(prompt),
-        textPartId: `prt_gateway_${prompt.promptKey.replaceAll(":", "_")}`,
-        prompt: prompt.prompt,
+        parts: toCommandParts(prompt),
     }
 }
 
 function createPromptMessageId(prompt: { promptKey: string }) {
     return `msg_gateway_${prompt.promptKey.replaceAll(":", "_")}`
+}
+
+function createTextPromptParts(text: string): BindingPromptPart[] {
+    return [{ kind: "text", text }]
+}
+
+function createTextCommandParts(promptKey: string, text: string): BindingOpencodeCommandPart[] {
+    return [{ kind: "text", partId: `prt_gateway_${promptKey.replaceAll(":", "_")}_0`, text }]
+}
+
+function toCommandParts(prompt: { promptKey: string; parts: BindingPromptPart[] }): BindingOpencodeCommandPart[] {
+    return prompt.parts.map((part, index) => {
+        if (part.kind === "text") {
+            return {
+                kind: "text",
+                partId: `prt_gateway_${prompt.promptKey.replaceAll(":", "_")}_${index}`,
+                text: part.text,
+            }
+        }
+
+        return {
+            kind: "file",
+            partId: `prt_gateway_${prompt.promptKey.replaceAll(":", "_")}_${index}`,
+            mimeType: part.mimeType,
+            fileName: part.fileName,
+            localPath: part.localPath,
+        }
+    })
 }
 
 function createAwaitPromptResponseResult(

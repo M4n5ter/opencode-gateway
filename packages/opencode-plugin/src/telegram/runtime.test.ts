@@ -31,6 +31,18 @@ test("telegram status performs a live getMe probe and persists bot metadata", as
                 async getChat() {
                     throw new Error("unused")
                 },
+                async getFile() {
+                    throw new Error("unused")
+                },
+                async downloadFile() {
+                    throw new Error("unused")
+                },
+                async sendPhoto() {
+                    throw new Error("unused")
+                },
+                async sendDocument() {
+                    throw new Error("unused")
+                },
                 async sendMessageDraft() {
                     throw new Error("unused")
                 },
@@ -89,6 +101,18 @@ test("telegram sendTest uses explicit targets and records send health", async ()
                     throw new Error("unused")
                 },
                 async getChat() {
+                    throw new Error("unused")
+                },
+                async getFile() {
+                    throw new Error("unused")
+                },
+                async downloadFile() {
+                    throw new Error("unused")
+                },
+                async sendPhoto() {
+                    throw new Error("unused")
+                },
+                async sendDocument() {
                     throw new Error("unused")
                 },
                 async sendMessageDraft() {

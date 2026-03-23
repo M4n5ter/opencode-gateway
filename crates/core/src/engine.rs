@@ -2,7 +2,7 @@
 
 use crate::{
     CronJobSpec, CronValidationError, DeliveryTarget, GatewayStatus, InboundMessage,
-    OutboundMessage, PromptRequest, PromptSource,
+    OutboundMessage, PromptPart, PromptRequest, PromptSource,
 };
 
 /// A pure plan that tells the host what prompt to run and whether a reply should be sent.
@@ -48,9 +48,20 @@ impl GatewayEngine {
 
     /// Plans how an inbound IM message should be executed against `OpenCode`.
     pub fn plan_inbound_message(&self, message: &InboundMessage) -> GatewayPlan {
-        let request = PromptRequest::new(
+        let mut parts = Vec::new();
+        if let Some(text) = &message.text {
+            parts.push(PromptPart::Text(text.clone()));
+        }
+        parts.extend(
+            message
+                .attachments
+                .iter()
+                .map(|attachment| attachment.to_prompt_part()),
+        );
+
+        let request = PromptRequest::with_parts(
             message.conversation_key(),
-            message.body.clone(),
+            parts,
             PromptSource::InboundMessage {
                 channel: message.delivery_target.channel,
                 sender: message.sender.clone(),
@@ -68,11 +79,12 @@ impl GatewayEngine {
     pub fn plan_cron_job(&self, job: &CronJobSpec) -> Result<GatewayPlan, CronValidationError> {
         job.validate()?;
 
-        let request = PromptRequest::new(
+        let request = PromptRequest::from_text(
             job.conversation_key.clone(),
             job.prompt.clone(),
             PromptSource::CronJob { id: job.id.clone() },
-        );
+        )
+        .map_err(|_error| CronValidationError::EmptyPrompt)?;
 
         Ok(GatewayPlan::new(request, job.delivery_target.clone()))
     }
@@ -80,19 +92,28 @@ impl GatewayEngine {
 
 #[cfg(test)]
 mod tests {
-    use crate::{ChannelKind, CronJobSpec, GatewayEngine, InboundMessage, TargetKey};
+    use crate::{ChannelKind, CronJobSpec, GatewayEngine, InboundMessage, PromptPart, TargetKey};
 
     #[test]
     fn inbound_message_creates_reply_plan() {
         let engine = GatewayEngine::new();
         let target = TargetKey::new("123").expect("target key");
-        let message =
-            InboundMessage::new(ChannelKind::Telegram, target, None, "alice", "hello world")
-                .expect("message");
+        let message = InboundMessage::new(
+            ChannelKind::Telegram,
+            target,
+            None,
+            "alice",
+            Some("hello world".to_owned()),
+            vec![],
+        )
+        .expect("message");
 
         let plan = engine.plan_inbound_message(&message);
 
-        assert_eq!(plan.request.prompt, "hello world");
+        assert_eq!(
+            plan.request.parts,
+            vec![PromptPart::Text("hello world".to_owned())]
+        );
         assert!(plan.reply_target.is_some());
     }
 

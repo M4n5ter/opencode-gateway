@@ -6,10 +6,12 @@ export type {
     BindingCronJobSpec,
     BindingDeliveryTarget,
     BindingHostAck,
+    BindingInboundAttachment,
     BindingInboundMessage,
     BindingLoggerHost,
     BindingOutboundMessage,
     BindingPreparedExecution,
+    BindingPromptPart,
     BindingRuntimeReport,
     BindingTransportHost,
     GatewayContract,
@@ -17,6 +19,7 @@ export type {
 } from "./gateway"
 export type {
     BindingOpencodeCommand,
+    BindingOpencodeCommandPart,
     BindingOpencodeCommandResult,
     BindingOpencodeDriverStep,
     BindingOpencodeExecutionInput,

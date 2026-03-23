@@ -4,13 +4,13 @@ use std::collections::HashMap;
 
 use crate::{
     CronJobSpec, CronValidationError, DeliveryTarget, GatewayEngine, InboundMessage,
-    ProgressiveDirective, ProgressiveMode, ProgressiveTextState,
+    ProgressiveDirective, ProgressiveMode, ProgressiveTextState, PromptPart,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreparedExecution {
     pub conversation_key: String,
-    pub prompt: String,
+    pub prompt_parts: Vec<PromptPart>,
     pub reply_target: Option<DeliveryTarget>,
 }
 
@@ -26,7 +26,7 @@ impl PreparedExecution {
     fn from_plan(plan: crate::GatewayPlan) -> Self {
         Self {
             conversation_key: plan.request.conversation_key.as_str().to_owned(),
-            prompt: plan.request.prompt,
+            prompt_parts: plan.request.parts,
             reply_target: plan.reply_target,
         }
     }
@@ -242,7 +242,8 @@ impl TrackedTextPart {
 #[cfg(test)]
 mod tests {
     use crate::{
-        ChannelKind, CronJobSpec, InboundMessage, ProgressiveDirective, ProgressiveMode, TargetKey,
+        ChannelKind, CronJobSpec, InboundMessage, ProgressiveDirective, ProgressiveMode,
+        PromptPart, TargetKey,
     };
 
     use super::{ExecutionObservation, ExecutionRole, ExecutionState, PreparedExecution};
@@ -250,14 +251,23 @@ mod tests {
     #[test]
     fn prepared_execution_for_inbound_uses_conversation_key_and_reply_target() {
         let target = TargetKey::new("42").expect("target");
-        let message =
-            InboundMessage::new(ChannelKind::Telegram, target, None, "telegram:7", "hello")
-                .expect("message");
+        let message = InboundMessage::new(
+            ChannelKind::Telegram,
+            target,
+            None,
+            "telegram:7",
+            Some("hello".to_owned()),
+            vec![],
+        )
+        .expect("message");
 
         let prepared = PreparedExecution::for_inbound_message(&message);
 
         assert_eq!(prepared.conversation_key, "telegram:42");
-        assert_eq!(prepared.prompt, "hello");
+        assert_eq!(
+            prepared.prompt_parts,
+            vec![PromptPart::Text("hello".to_owned())]
+        );
         assert!(prepared.reply_target.is_some());
     }
 
@@ -268,7 +278,10 @@ mod tests {
         let prepared = PreparedExecution::for_cron_job(&job).expect("prepared");
 
         assert_eq!(prepared.conversation_key, "cron:nightly");
-        assert_eq!(prepared.prompt, "summarize");
+        assert_eq!(
+            prepared.prompt_parts,
+            vec![PromptPart::Text("summarize".to_owned())]
+        );
         assert!(prepared.reply_target.is_none());
     }
 

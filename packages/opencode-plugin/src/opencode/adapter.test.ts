@@ -33,11 +33,13 @@ test("OpencodeSdkAdapter reports missing sessions through lookupSession without 
 
 test("OpencodeSdkAdapter maps sendPromptAsync to session.promptAsync", async () => {
     const seenMessageIds: string[] = []
+    const seenParts: unknown[] = []
     const adapter = new OpencodeSdkAdapter(
         {
             session: {
-                async promptAsync(input: { body: { messageID: string } }) {
+                async promptAsync(input: { body: { messageID: string; parts: unknown[] } }) {
                     seenMessageIds.push(input.body.messageID)
+                    seenParts.push(...input.body.parts)
                     return undefined
                 },
             },
@@ -50,14 +52,40 @@ test("OpencodeSdkAdapter maps sendPromptAsync to session.promptAsync", async () 
             kind: "sendPromptAsync",
             sessionId: "ses_1",
             messageId: "msg_gateway_mailbox_1",
-            textPartId: "prt_gateway_mailbox_1",
-            prompt: "hello",
+            parts: [
+                {
+                    kind: "text",
+                    partId: "prt_gateway_mailbox_1_0",
+                    text: "hello",
+                },
+                {
+                    kind: "file",
+                    partId: "prt_gateway_mailbox_1_1",
+                    mimeType: "image/png",
+                    fileName: "photo.png",
+                    localPath: "/tmp/photo.png",
+                },
+            ],
         }),
     ).toEqual({
         kind: "sendPromptAsync",
         sessionId: "ses_1",
     })
     expect(seenMessageIds).toEqual(["msg_gateway_mailbox_1"])
+    expect(seenParts).toEqual([
+        {
+            id: "prt_gateway_mailbox_1_0",
+            type: "text",
+            text: "hello",
+        },
+        {
+            id: "prt_gateway_mailbox_1_1",
+            type: "file",
+            mime: "image/png",
+            url: "file:///tmp/photo.png",
+            filename: "photo.png",
+        },
+    ])
 })
 
 test("OpencodeSdkAdapter waits for the final assistant child message", async () => {

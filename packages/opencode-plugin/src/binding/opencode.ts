@@ -1,8 +1,9 @@
 import type { BindingExecutionObservation, BindingProgressiveDirective } from "./execution"
+import type { BindingPromptPart } from "./gateway"
 
 export type BindingOpencodePrompt = {
     promptKey: string
-    prompt: string
+    parts: BindingPromptPart[]
 }
 
 export type BindingOpencodeExecutionInput = {
@@ -45,15 +46,13 @@ export type BindingOpencodeCommand =
           kind: "appendPrompt"
           sessionId: string
           messageId: string
-          textPartId: string
-          prompt: string
+          parts: BindingOpencodeCommandPart[]
       }
     | {
           kind: "sendPromptAsync"
           sessionId: string
           messageId: string
-          textPartId: string
-          prompt: string
+          parts: BindingOpencodeCommandPart[]
       }
     | {
           kind: "awaitPromptResponse"
@@ -115,6 +114,20 @@ export type BindingOpencodeCommandResult =
           sessionId: string | null
           code: "missingSession" | "unknown"
           message: string
+      }
+
+export type BindingOpencodeCommandPart =
+    | {
+          kind: "text"
+          partId: string
+          text: string
+      }
+    | {
+          kind: "file"
+          partId: string
+          mimeType: string
+          fileName: string | null
+          localPath: string
       }
 
 export type BindingOpencodeDriverStep =

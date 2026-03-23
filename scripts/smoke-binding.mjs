@@ -38,14 +38,15 @@ const prepared = module.prepareInboundExecution({
         topic: null,
     },
     sender: "telegram:7",
-    body: "hello",
+    text: "hello",
+    attachments: [],
 })
 const driver = new module.OpencodeExecutionDriver({
     conversationKey: prepared.conversationKey,
     persistedSessionId: null,
     mode: "progressive",
     flushIntervalMs: 400,
-    prompts: [{ promptKey: "synthetic:smoke:0", prompt: prepared.prompt }],
+    prompts: [{ promptKey: "synthetic:smoke:0", parts: prepared.promptParts }],
 })
 const firstStep = driver.start()
 if (firstStep.kind !== "command" || firstStep.command.kind !== "createSession") {

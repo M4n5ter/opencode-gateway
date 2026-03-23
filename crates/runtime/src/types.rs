@@ -3,17 +3,90 @@
 use opencode_gateway_core::ProgressiveMode;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OpencodePromptPart {
+    Text {
+        text: String,
+    },
+    File {
+        mime_type: String,
+        file_name: Option<String>,
+        local_path: String,
+    },
+}
+
+impl OpencodePromptPart {
+    pub fn text(text: impl Into<String>) -> Result<Self, String> {
+        Ok(Self::Text {
+            text: parse_required(text.into(), "promptPart text")?,
+        })
+    }
+
+    pub fn file(
+        mime_type: impl Into<String>,
+        file_name: Option<String>,
+        local_path: impl Into<String>,
+    ) -> Result<Self, String> {
+        Ok(Self::File {
+            mime_type: parse_required(mime_type.into(), "promptPart mimeType")?,
+            file_name: parse_optional(file_name),
+            local_path: parse_required(local_path.into(), "promptPart localPath")?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpencodePrompt {
     pub prompt_key: String,
-    pub prompt: String,
+    pub parts: Vec<OpencodePromptPart>,
 }
 
 impl OpencodePrompt {
-    pub fn new(prompt_key: impl Into<String>, prompt: impl Into<String>) -> Result<Self, String> {
+    pub fn new(
+        prompt_key: impl Into<String>,
+        parts: Vec<OpencodePromptPart>,
+    ) -> Result<Self, String> {
         let prompt_key = parse_required(prompt_key.into(), "promptKey")?;
-        Ok(Self {
-            prompt_key,
-            prompt: prompt.into(),
+        if parts.is_empty() {
+            return Err("opencode prompt requires at least one part".to_owned());
+        }
+
+        Ok(Self { prompt_key, parts })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OpencodeCommandPart {
+    Text {
+        part_id: String,
+        text: String,
+    },
+    File {
+        part_id: String,
+        mime_type: String,
+        file_name: Option<String>,
+        local_path: String,
+    },
+}
+
+impl OpencodeCommandPart {
+    pub fn text(part_id: impl Into<String>, text: impl Into<String>) -> Result<Self, String> {
+        Ok(Self::Text {
+            part_id: parse_required(part_id.into(), "commandPart partId")?,
+            text: parse_required(text.into(), "commandPart text")?,
+        })
+    }
+
+    pub fn file(
+        part_id: impl Into<String>,
+        mime_type: impl Into<String>,
+        file_name: Option<String>,
+        local_path: impl Into<String>,
+    ) -> Result<Self, String> {
+        Ok(Self::File {
+            part_id: parse_required(part_id.into(), "commandPart partId")?,
+            mime_type: parse_required(mime_type.into(), "commandPart mimeType")?,
+            file_name: parse_optional(file_name),
+            local_path: parse_required(local_path.into(), "commandPart localPath")?,
         })
     }
 }
@@ -119,14 +192,12 @@ pub enum OpencodeCommand {
     AppendPrompt {
         session_id: String,
         message_id: String,
-        text_part_id: String,
-        prompt: String,
+        parts: Vec<OpencodeCommandPart>,
     },
     SendPromptAsync {
         session_id: String,
         message_id: String,
-        text_part_id: String,
-        prompt: String,
+        parts: Vec<OpencodeCommandPart>,
     },
     AwaitPromptResponse {
         session_id: String,
@@ -238,4 +309,11 @@ pub(crate) fn parse_required(value: String, field: &str) -> Result<String, Strin
     }
 
     Ok(trimmed.to_owned())
+}
+
+pub(crate) fn parse_optional(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_owned())
+    })
 }

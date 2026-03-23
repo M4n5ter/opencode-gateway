@@ -10,7 +10,10 @@ use crate::types::{
     OpencodeExecutionInput,
 };
 
-use self::{prompt_ids::prompt_ids, render::render_visible_text};
+use self::{
+    prompt_ids::{prompt_command_parts, prompt_message_id},
+    render::render_visible_text,
+};
 
 #[derive(Debug)]
 pub struct OpencodeExecutionDriver {
@@ -191,14 +194,17 @@ impl OpencodeExecutionDriver {
         let Some(prompt) = self.input.prompts.get(index) else {
             return self.fail(format!("appendPrompt index is out of range: {index}"));
         };
-        let (message_id, text_part_id) = prompt_ids(prompt);
+        let message_id = prompt_message_id(prompt);
+        let parts = match prompt_command_parts(prompt) {
+            Ok(parts) => parts,
+            Err(error) => return self.fail(error),
+        };
 
         self.phase = DriverPhase::AwaitingAppend { index };
         OpencodeDriverStep::Command(OpencodeCommand::AppendPrompt {
             session_id,
             message_id,
-            text_part_id,
-            prompt: prompt.prompt.clone(),
+            parts,
         })
     }
 
@@ -209,14 +215,17 @@ impl OpencodeExecutionDriver {
         let Some(prompt) = self.input.prompts.get(index) else {
             return self.fail(format!("sendPromptAsync index is out of range: {index}"));
         };
-        let (message_id, text_part_id) = prompt_ids(prompt);
+        let message_id = prompt_message_id(prompt);
+        let parts = match prompt_command_parts(prompt) {
+            Ok(parts) => parts,
+            Err(error) => return self.fail(error),
+        };
 
         self.phase = DriverPhase::AwaitingSend;
         OpencodeDriverStep::Command(OpencodeCommand::SendPromptAsync {
             session_id,
             message_id,
-            text_part_id,
-            prompt: prompt.prompt.clone(),
+            parts,
         })
     }
 
@@ -263,7 +272,7 @@ impl OpencodeExecutionDriver {
     }
 
     fn final_prompt_message_id(&self) -> Option<String> {
-        self.input.prompts.last().map(|prompt| prompt_ids(prompt).0)
+        self.input.prompts.last().map(prompt_message_id)
     }
 
     fn fail(&mut self, message: impl Into<String>) -> OpencodeDriverStep {

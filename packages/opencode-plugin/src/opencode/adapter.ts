@@ -1,7 +1,10 @@
+import { basename } from "node:path"
+import { pathToFileURL } from "node:url"
 import type { PluginInput } from "@opencode-ai/plugin"
 
 import type {
     BindingOpencodeCommand,
+    BindingOpencodeCommandPart,
     BindingOpencodeCommandResult,
     BindingOpencodeMessage,
     BindingOpencodeMessagePart,
@@ -23,8 +26,25 @@ type SessionPromptPart = {
     messageID?: string
     type: string
     text?: string
+    mime?: string
+    url?: string
+    filename?: string
     ignored?: boolean
 }
+
+type PromptInputPart =
+    | {
+          id: string
+          type: "text"
+          text: string
+      }
+    | {
+          id: string
+          type: "file"
+          mime: string
+          url: string
+          filename: string
+      }
 
 type MessageResponse = {
     info?: {
@@ -144,7 +164,7 @@ export class OpencodeSdkAdapter {
             body: {
                 messageID: command.messageId,
                 noReply: true,
-                parts: [{ id: command.textPartId, type: "text", text: command.prompt }],
+                parts: command.parts.map(toSessionPromptPart),
             },
             responseStyle: "data",
             throwOnError: true,
@@ -164,7 +184,7 @@ export class OpencodeSdkAdapter {
             query: { directory: this.directory },
             body: {
                 messageID: command.messageId,
-                parts: [{ id: command.textPartId, type: "text", text: command.prompt }],
+                parts: command.parts.map(toSessionPromptPart),
             },
             throwOnError: true,
         })
@@ -255,6 +275,25 @@ export class OpencodeSdkAdapter {
 
 function unwrapData<T>(value: MaybeWrapped<T>): T {
     return typeof value === "object" && value !== null && "data" in value ? value.data : value
+}
+
+function toSessionPromptPart(part: BindingOpencodeCommandPart): PromptInputPart {
+    switch (part.kind) {
+        case "text":
+            return {
+                id: part.partId,
+                type: "text",
+                text: part.text,
+            }
+        case "file":
+            return {
+                id: part.partId,
+                type: "file",
+                mime: part.mimeType,
+                url: pathToFileURL(part.localPath).href,
+                filename: part.fileName ?? basename(part.localPath),
+            }
+    }
 }
 
 function selectAssistantResponse(messages: MessageResponse[], userMessageId: string): AssistantMessageResponse | null {

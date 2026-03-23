@@ -1,10 +1,12 @@
 import type { BindingLoggerHost } from "../binding"
 import type { TelegramConfig } from "../config/telegram"
 import type { GatewayMailboxRouter } from "../mailbox/router"
+import type { GatewayQuestionRuntime } from "../questions/runtime"
 import type { GatewayMailboxRuntime } from "../runtime/mailbox"
 import type { SqliteStore } from "../store/sqlite"
 import { formatError } from "../utils/error"
 import { TelegramApiError, type TelegramPollingClientLike } from "./client"
+import type { TelegramInboundMediaStore } from "./media"
 import { buildTelegramAllowlist, normalizeTelegramUpdate } from "./normalize"
 import { recordTelegramChatType, recordTelegramPollFailure, recordTelegramPollSuccess } from "./state"
 
@@ -19,6 +21,8 @@ export class TelegramPollingService {
         private readonly logger: BindingLoggerHost,
         private readonly config: Extract<TelegramConfig, { enabled: true }>,
         private readonly mailboxRouter: GatewayMailboxRouter,
+        private readonly mediaStore: TelegramInboundMediaStore,
+        private readonly questions: GatewayQuestionRuntime,
     ) {
         this.allowlist = buildTelegramAllowlist(config)
     }
@@ -57,13 +61,32 @@ export class TelegramPollingService {
                         continue
                     }
 
+                    if (this.store.hasMailboxEntry("telegram_update", String(update.update_id))) {
+                        offset = this.advanceOffset(nextOffset)
+                        continue
+                    }
+
+                    if (normalized.kind === "callbackQuery") {
+                        await this.questions.handleTelegramCallbackQuery(normalized.callbackQuery)
+                        offset = this.advanceOffset(nextOffset)
+                        continue
+                    }
+
                     recordTelegramChatType(
                         this.store,
                         normalized.message.deliveryTarget.target,
                         normalized.chatType,
                         Date.now(),
                     )
-                    this.mailbox.enqueueInboundMessage(normalized.message, "telegram_update", String(update.update_id))
+                    await this.mailbox.enqueueInboundMessage(
+                        await this.mediaStore.materializeInboundMessage(
+                            normalized.message,
+                            "telegram_update",
+                            String(update.update_id),
+                        ),
+                        "telegram_update",
+                        String(update.update_id),
+                    )
                     offset = this.advanceOffset(nextOffset)
                 }
 

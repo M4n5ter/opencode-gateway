@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite"
 
-const LATEST_SCHEMA_VERSION = 4
+const LATEST_SCHEMA_VERSION = 6
 
 export function migrateGatewayDatabase(db: Database): void {
     db.exec("PRAGMA journal_mode = WAL;")
@@ -28,6 +28,16 @@ export function migrateGatewayDatabase(db: Database): void {
 
     if (currentVersion === 3) {
         migrateToV4(db)
+        currentVersion = 4
+    }
+
+    if (currentVersion === 4) {
+        migrateToV5(db)
+        currentVersion = 5
+    }
+
+    if (currentVersion === 5) {
+        migrateToV6(db)
     }
 }
 
@@ -127,6 +137,64 @@ function migrateToV4(db: Database): void {
 
         CREATE INDEX mailbox_entries_mailbox_key_id_idx
             ON mailbox_entries (mailbox_key, id);
+    `)
+    db.exec("PRAGMA user_version = 4;")
+}
+
+function migrateToV5(db: Database): void {
+    db.exec(`
+        CREATE TABLE mailbox_entry_attachments (
+            mailbox_entry_id INTEGER NOT NULL REFERENCES mailbox_entries(id) ON DELETE CASCADE,
+            ordinal INTEGER NOT NULL,
+            kind TEXT NOT NULL,
+            mime_type TEXT NOT NULL,
+            file_name TEXT,
+            local_path TEXT NOT NULL,
+            PRIMARY KEY (mailbox_entry_id, ordinal)
+        );
+
+        CREATE INDEX mailbox_entry_attachments_entry_id_ordinal_idx
+            ON mailbox_entry_attachments (mailbox_entry_id, ordinal);
+    `)
+    db.exec("PRAGMA user_version = 5;")
+}
+
+function migrateToV6(db: Database): void {
+    db.exec(`
+        CREATE TABLE session_reply_targets (
+            session_id TEXT NOT NULL,
+            ordinal INTEGER NOT NULL,
+            conversation_key TEXT NOT NULL,
+            delivery_channel TEXT NOT NULL,
+            delivery_target TEXT NOT NULL,
+            delivery_topic TEXT NOT NULL,
+            updated_at_ms INTEGER NOT NULL,
+            PRIMARY KEY (session_id, ordinal)
+        );
+
+        CREATE INDEX session_reply_targets_conversation_key_updated_at_ms_idx
+            ON session_reply_targets (conversation_key, updated_at_ms DESC);
+
+        CREATE TABLE pending_questions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            request_id TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            delivery_channel TEXT NOT NULL,
+            delivery_target TEXT NOT NULL,
+            delivery_topic TEXT NOT NULL,
+            question_json TEXT NOT NULL,
+            telegram_message_id INTEGER,
+            created_at_ms INTEGER NOT NULL
+        );
+
+        CREATE UNIQUE INDEX pending_questions_request_target_topic_idx
+            ON pending_questions (request_id, delivery_channel, delivery_target, delivery_topic);
+
+        CREATE INDEX pending_questions_target_topic_created_at_ms_idx
+            ON pending_questions (delivery_channel, delivery_target, delivery_topic, created_at_ms);
+
+        CREATE INDEX pending_questions_session_id_created_at_ms_idx
+            ON pending_questions (session_id, created_at_ms);
     `)
     db.exec(`PRAGMA user_version = ${LATEST_SCHEMA_VERSION};`)
 }

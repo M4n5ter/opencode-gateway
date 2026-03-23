@@ -34,7 +34,8 @@ export class GatewayExecutor {
             sourceKind: "direct_runtime",
             externalId: `direct:${Date.now()}`,
             sender: normalizeRequiredField(message.sender, "message sender"),
-            body: message.body,
+            text: message.text,
+            attachments: withAttachmentOrdinals(message.attachments),
             replyChannel: message.deliveryTarget.channel,
             replyTarget: message.deliveryTarget.target,
             replyTopic: message.deliveryTarget.topic,
@@ -77,7 +78,8 @@ export class GatewayExecutor {
                 createJournalEntry("inbound_message", entry.entry.createdAtMs, conversationKey, {
                     deliveryTarget: entry.prepared.replyTarget,
                     sender: entry.message.sender,
-                    body: entry.prepared.prompt,
+                    text: entry.message.text,
+                    attachments: entry.message.attachments,
                 }),
             )
         }
@@ -96,7 +98,7 @@ export class GatewayExecutor {
             createJournalEntry("cron_dispatch", recordedAtMs, prepared.conversationKey, {
                 id,
                 schedule,
-                prompt: prepared.prompt,
+                promptParts: prepared.promptParts,
                 deliveryChannel: prepared.replyTarget?.channel ?? null,
                 deliveryTarget: prepared.replyTarget?.target ?? null,
                 deliveryTopic: prepared.replyTarget?.topic ?? null,
@@ -126,7 +128,13 @@ export class GatewayExecutor {
         )
         const [deliverySession] =
             replyTargets.length === 0 ? [null] : await this.delivery.openMany(replyTargets, "auto")
-        const promptResult = await this.executeDriver(entries, recordedAtMs, persistedSessionId, deliverySession)
+        const promptResult = await this.executeDriver(
+            entries,
+            recordedAtMs,
+            persistedSessionId,
+            deliverySession,
+            replyTargets,
+        )
 
         this.store.putSessionBinding(conversationKey, promptResult.sessionId, recordedAtMs)
 
@@ -156,6 +164,7 @@ export class GatewayExecutor {
         recordedAtMs: number,
         persistedSessionId: string | null,
         deliverySession: TextDeliverySessionLike | null,
+        replyTargets: NonNullable<BindingPreparedExecution["replyTarget"]>[],
     ): Promise<PromptExecutionResult> {
         return await runOpencodeDriver({
             module: this.module,
@@ -166,8 +175,16 @@ export class GatewayExecutor {
             deliverySession,
             prompts: entries.map((entry, index) => ({
                 promptKey: createPromptKey(entry, recordedAtMs, index),
-                prompt: entry.prepared.prompt,
+                parts: entry.prepared.promptParts,
             })),
+            onSessionAvailable: async (sessionId) => {
+                this.store.replaceSessionReplyTargets({
+                    sessionId,
+                    conversationKey: entries[0].prepared.conversationKey,
+                    targets: replyTargets,
+                    recordedAtMs,
+                })
+            },
         })
     }
 }
@@ -209,7 +226,8 @@ function mailboxEntryToInboundMessage(entry: MailboxEntryRecord): BindingInbound
             topic: entry.replyTopic,
         },
         sender: entry.sender,
-        body: entry.body,
+        text: entry.text,
+        attachments: entry.attachments,
         mailboxKey: entry.mailboxKey,
     }
 }
@@ -244,4 +262,13 @@ function createPromptKey(entry: PreparedMailboxEntry, recordedAtMs: number, inde
     }
 
     return `synthetic:${recordedAtMs}:${index}`
+}
+
+function withAttachmentOrdinals(
+    messageAttachments: BindingInboundMessage["attachments"],
+): MailboxEntryRecord["attachments"] {
+    return messageAttachments.map((attachment, ordinal) => ({
+        ...attachment,
+        ordinal,
+    }))
 }

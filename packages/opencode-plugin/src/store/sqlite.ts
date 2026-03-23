@@ -2,6 +2,8 @@ import { Database } from "bun:sqlite"
 import { mkdir } from "node:fs/promises"
 import { dirname } from "node:path"
 
+import type { BindingDeliveryTarget } from "../binding"
+import type { GatewayQuestionInfo, PendingQuestionRecord } from "../questions/types"
 import { migrateGatewayDatabase } from "./migrations"
 
 export type RuntimeJournalKind = "inbound_message" | "cron_dispatch" | "delivery" | "mailbox_enqueue" | "mailbox_flush"
@@ -33,11 +35,20 @@ export type MailboxEntryRecord = {
     sourceKind: string
     externalId: string
     sender: string
-    body: string
+    text: string | null
+    attachments: MailboxEntryAttachmentRecord[]
     replyChannel: string | null
     replyTarget: string | null
     replyTopic: string | null
     createdAtMs: number
+}
+
+export type MailboxEntryAttachmentRecord = {
+    kind: "image"
+    ordinal: number
+    mimeType: string
+    fileName: string | null
+    localPath: string
 }
 
 export type PersistCronJobInput = {
@@ -57,10 +68,36 @@ export type PersistMailboxEntryInput = {
     sourceKind: string
     externalId: string
     sender: string
-    body: string
+    text: string | null
+    attachments: PersistMailboxEntryAttachmentInput[]
     replyChannel: string | null
     replyTarget: string | null
     replyTopic: string | null
+    recordedAtMs: number
+}
+
+export type PersistMailboxEntryAttachmentInput = {
+    kind: "image"
+    mimeType: string
+    fileName: string | null
+    localPath: string
+}
+
+export type PersistSessionReplyTargetsInput = {
+    sessionId: string
+    conversationKey: string
+    targets: BindingDeliveryTarget[]
+    recordedAtMs: number
+}
+
+export type PersistPendingQuestionInput = {
+    requestId: string
+    sessionId: string
+    questions: GatewayQuestionInfo[]
+    targets: Array<{
+        deliveryTarget: BindingDeliveryTarget
+        telegramMessageId: number | null
+    }>
     recordedAtMs: number
 }
 
@@ -95,6 +132,86 @@ export class SqliteStore {
         this.db.query("DELETE FROM session_bindings WHERE conversation_key = ?1;").run(conversationKey)
     }
 
+    replaceSessionReplyTargets(input: PersistSessionReplyTargetsInput): void {
+        assertSafeInteger(input.recordedAtMs, "session reply-target recordedAtMs")
+        const deleteTargets = this.db.query("DELETE FROM session_reply_targets WHERE session_id = ?1;")
+        const insertTarget = this.db.query(
+            `
+                INSERT INTO session_reply_targets (
+                    session_id,
+                    ordinal,
+                    conversation_key,
+                    delivery_channel,
+                    delivery_target,
+                    delivery_topic,
+                    updated_at_ms
+                )
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);
+            `,
+        )
+
+        this.db.transaction((payload: PersistSessionReplyTargetsInput) => {
+            deleteTargets.run(payload.sessionId)
+
+            for (const [ordinal, target] of payload.targets.entries()) {
+                insertTarget.run(
+                    payload.sessionId,
+                    ordinal,
+                    payload.conversationKey,
+                    target.channel,
+                    target.target,
+                    normalizeKeyField(target.topic),
+                    payload.recordedAtMs,
+                )
+            }
+        })(input)
+    }
+
+    listSessionReplyTargets(sessionId: string): BindingDeliveryTarget[] {
+        const rows = this.db
+            .query<SessionReplyTargetRow, [string]>(
+                `
+                    SELECT
+                        session_id,
+                        ordinal,
+                        conversation_key,
+                        delivery_channel,
+                        delivery_target,
+                        delivery_topic,
+                        updated_at_ms
+                    FROM session_reply_targets
+                    WHERE session_id = ?1
+                    ORDER BY ordinal ASC;
+                `,
+            )
+            .all(sessionId)
+
+        return rows.map(mapSessionReplyTargetRow)
+    }
+
+    getDefaultSessionReplyTarget(sessionId: string): BindingDeliveryTarget | null {
+        const row = this.db
+            .query<SessionReplyTargetRow, [string]>(
+                `
+                    SELECT
+                        session_id,
+                        ordinal,
+                        conversation_key,
+                        delivery_channel,
+                        delivery_target,
+                        delivery_topic,
+                        updated_at_ms
+                    FROM session_reply_targets
+                    WHERE session_id = ?1
+                    ORDER BY ordinal ASC
+                    LIMIT 1;
+                `,
+            )
+            .get(sessionId)
+
+        return row ? mapSessionReplyTargetRow(row) : null
+    }
+
     appendJournal(entry: RuntimeJournalEntry): void {
         this.db
             .query(
@@ -106,38 +223,183 @@ export class SqliteStore {
             .run(entry.kind, entry.recordedAtMs, entry.conversationKey, JSON.stringify(entry.payload))
     }
 
-    enqueueMailboxEntry(input: PersistMailboxEntryInput): void {
-        assertSafeInteger(input.recordedAtMs, "mailbox recordedAtMs")
+    replacePendingQuestion(input: PersistPendingQuestionInput): void {
+        assertSafeInteger(input.recordedAtMs, "pending question recordedAtMs")
+        const deleteQuestion = this.db.query("DELETE FROM pending_questions WHERE request_id = ?1;")
+        const insertQuestion = this.db.query(
+            `
+                INSERT INTO pending_questions (
+                    request_id,
+                    session_id,
+                    delivery_channel,
+                    delivery_target,
+                    delivery_topic,
+                    question_json,
+                    telegram_message_id,
+                    created_at_ms
+                )
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8);
+            `,
+        )
 
-        this.db
-            .query(
+        this.db.transaction((payload: PersistPendingQuestionInput) => {
+            deleteQuestion.run(payload.requestId)
+
+            for (const target of payload.targets) {
+                insertQuestion.run(
+                    payload.requestId,
+                    payload.sessionId,
+                    target.deliveryTarget.channel,
+                    target.deliveryTarget.target,
+                    normalizeKeyField(target.deliveryTarget.topic),
+                    JSON.stringify(payload.questions),
+                    target.telegramMessageId,
+                    payload.recordedAtMs,
+                )
+            }
+        })(input)
+    }
+
+    deletePendingQuestion(requestId: string): void {
+        this.db.query("DELETE FROM pending_questions WHERE request_id = ?1;").run(requestId)
+    }
+
+    getPendingQuestionForTarget(target: BindingDeliveryTarget): PendingQuestionRecord | null {
+        const row = this.db
+            .query<PendingQuestionRow, [string, string, string]>(
                 `
-                    INSERT INTO mailbox_entries (
-                        mailbox_key,
-                        source_kind,
-                        external_id,
-                        sender,
-                        body,
-                        reply_channel,
-                        reply_target,
-                        reply_topic,
+                    SELECT
+                        id,
+                        request_id,
+                        session_id,
+                        delivery_channel,
+                        delivery_target,
+                        delivery_topic,
+                        question_json,
+                        telegram_message_id,
                         created_at_ms
-                    )
-                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-                    ON CONFLICT(source_kind, external_id) DO NOTHING;
+                    FROM pending_questions
+                    WHERE delivery_channel = ?1
+                      AND delivery_target = ?2
+                      AND delivery_topic = ?3
+                    ORDER BY created_at_ms ASC, id ASC
+                    LIMIT 1;
                 `,
             )
-            .run(
-                input.mailboxKey,
-                input.sourceKind,
-                input.externalId,
-                input.sender,
-                input.body,
-                input.replyChannel,
-                input.replyTarget,
-                input.replyTopic,
-                input.recordedAtMs,
+            .get(target.channel, target.target, normalizeKeyField(target.topic))
+
+        return row ? mapPendingQuestionRow(row) : null
+    }
+
+    getPendingQuestionForTelegramMessage(
+        target: BindingDeliveryTarget,
+        telegramMessageId: number,
+    ): PendingQuestionRecord | null {
+        assertSafeInteger(telegramMessageId, "pending question telegramMessageId")
+        const row = this.db
+            .query<PendingQuestionRow, [string, string, string, number]>(
+                `
+                    SELECT
+                        id,
+                        request_id,
+                        session_id,
+                        delivery_channel,
+                        delivery_target,
+                        delivery_topic,
+                        question_json,
+                        telegram_message_id,
+                        created_at_ms
+                    FROM pending_questions
+                    WHERE delivery_channel = ?1
+                      AND delivery_target = ?2
+                      AND delivery_topic = ?3
+                      AND telegram_message_id = ?4
+                    ORDER BY created_at_ms ASC, id ASC
+                    LIMIT 1;
+                `,
             )
+            .get(target.channel, target.target, normalizeKeyField(target.topic), telegramMessageId)
+
+        return row ? mapPendingQuestionRow(row) : null
+    }
+
+    hasMailboxEntry(sourceKind: string, externalId: string): boolean {
+        const row = this.db
+            .query<{ present: number }, [string, string]>(
+                `
+                    SELECT 1 AS present
+                    FROM mailbox_entries
+                    WHERE source_kind = ?1 AND external_id = ?2
+                    LIMIT 1;
+                `,
+            )
+            .get(sourceKind, externalId)
+
+        return row?.present === 1
+    }
+
+    enqueueMailboxEntry(input: PersistMailboxEntryInput): void {
+        assertSafeInteger(input.recordedAtMs, "mailbox recordedAtMs")
+        const insertEntry = this.db.query(
+            `
+                INSERT INTO mailbox_entries (
+                    mailbox_key,
+                    source_kind,
+                    external_id,
+                    sender,
+                    body,
+                    reply_channel,
+                    reply_target,
+                    reply_topic,
+                    created_at_ms
+                )
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                ON CONFLICT(source_kind, external_id) DO NOTHING;
+            `,
+        )
+        const insertAttachment = this.db.query(
+            `
+                INSERT INTO mailbox_entry_attachments (
+                    mailbox_entry_id,
+                    ordinal,
+                    kind,
+                    mime_type,
+                    file_name,
+                    local_path
+                )
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6);
+            `,
+        )
+
+        this.db.transaction((payload: PersistMailboxEntryInput) => {
+            const result = insertEntry.run(
+                payload.mailboxKey,
+                payload.sourceKind,
+                payload.externalId,
+                payload.sender,
+                payload.text ?? "",
+                payload.replyChannel,
+                payload.replyTarget,
+                payload.replyTopic,
+                payload.recordedAtMs,
+            )
+
+            if (result.changes === 0) {
+                return
+            }
+
+            const entryId = Number(result.lastInsertRowid)
+            for (const [index, attachment] of payload.attachments.entries()) {
+                insertAttachment.run(
+                    entryId,
+                    index,
+                    attachment.kind,
+                    attachment.mimeType,
+                    attachment.fileName,
+                    attachment.localPath,
+                )
+            }
+        })(input)
     }
 
     listPendingMailboxKeys(): string[] {
@@ -176,7 +438,12 @@ export class SqliteStore {
             )
             .all(mailboxKey)
 
-        return rows.map(mapMailboxEntryRow)
+        const attachments = listMailboxAttachments(
+            this.db,
+            rows.map((row) => row.id),
+        )
+
+        return rows.map((row) => mapMailboxEntryRow(row, attachments.get(row.id) ?? []))
     }
 
     deleteMailboxEntries(ids: number[]): void {
@@ -493,6 +760,37 @@ type MailboxEntryRow = {
     created_at_ms: number
 }
 
+type MailboxEntryAttachmentRow = {
+    mailbox_entry_id: number
+    ordinal: number
+    kind: string
+    mime_type: string
+    file_name: string | null
+    local_path: string
+}
+
+type SessionReplyTargetRow = {
+    session_id: string
+    ordinal: number
+    conversation_key: string
+    delivery_channel: string
+    delivery_target: string
+    delivery_topic: string
+    updated_at_ms: number
+}
+
+type PendingQuestionRow = {
+    id: number
+    request_id: string
+    session_id: string
+    delivery_channel: string
+    delivery_target: string
+    delivery_topic: string
+    question_json: string
+    telegram_message_id: number | null
+    created_at_ms: number
+}
+
 function mapCronJobRow(row: CronJobRow): CronJobRecord {
     return {
         id: row.id,
@@ -508,19 +806,129 @@ function mapCronJobRow(row: CronJobRow): CronJobRecord {
     }
 }
 
-function mapMailboxEntryRow(row: MailboxEntryRow): MailboxEntryRecord {
+function mapMailboxEntryRow(row: MailboxEntryRow, attachments: MailboxEntryAttachmentRecord[]): MailboxEntryRecord {
     return {
         id: row.id,
         mailboxKey: row.mailbox_key,
         sourceKind: row.source_kind,
         externalId: row.external_id,
         sender: row.sender,
-        body: row.body,
+        text: normalizeStoredMailboxText(row.body),
+        attachments,
         replyChannel: row.reply_channel,
         replyTarget: row.reply_target,
         replyTopic: row.reply_topic,
         createdAtMs: row.created_at_ms,
     }
+}
+
+function listMailboxAttachments(db: Database, entryIds: number[]): Map<number, MailboxEntryAttachmentRecord[]> {
+    if (entryIds.length === 0) {
+        return new Map()
+    }
+
+    for (const entryId of entryIds) {
+        assertSafeInteger(entryId, "mailbox entry id")
+    }
+    const placeholders = entryIds.map((_, index) => `?${index + 1}`).join(", ")
+    const rows = db
+        .query<MailboxEntryAttachmentRow, number[]>(
+            `
+                SELECT
+                    mailbox_entry_id,
+                    ordinal,
+                    kind,
+                    mime_type,
+                    file_name,
+                    local_path
+                FROM mailbox_entry_attachments
+                WHERE mailbox_entry_id IN (${placeholders})
+                ORDER BY mailbox_entry_id ASC, ordinal ASC;
+            `,
+        )
+        .all(...entryIds)
+
+    const attachments = new Map<number, MailboxEntryAttachmentRecord[]>()
+    for (const row of rows) {
+        const records = attachments.get(row.mailbox_entry_id) ?? []
+        records.push(mapMailboxEntryAttachmentRow(row))
+        attachments.set(row.mailbox_entry_id, records)
+    }
+
+    return attachments
+}
+
+function mapMailboxEntryAttachmentRow(row: MailboxEntryAttachmentRow): MailboxEntryAttachmentRecord {
+    switch (row.kind) {
+        case "image":
+            return {
+                kind: "image",
+                ordinal: row.ordinal,
+                mimeType: row.mime_type,
+                fileName: row.file_name,
+                localPath: row.local_path,
+            }
+        default:
+            throw new Error(`unsupported mailbox attachment kind: ${row.kind}`)
+    }
+}
+
+function mapSessionReplyTargetRow(row: SessionReplyTargetRow): BindingDeliveryTarget {
+    return {
+        channel: row.delivery_channel,
+        target: row.delivery_target,
+        topic: normalizeStoredKeyField(row.delivery_topic),
+    }
+}
+
+function mapPendingQuestionRow(row: PendingQuestionRow): PendingQuestionRecord {
+    return {
+        requestId: row.request_id,
+        sessionId: row.session_id,
+        questions: parsePendingQuestions(row.question_json),
+        deliveryTarget: {
+            channel: row.delivery_channel,
+            target: row.delivery_target,
+            topic: normalizeStoredKeyField(row.delivery_topic),
+        },
+        telegramMessageId: row.telegram_message_id,
+        createdAtMs: row.created_at_ms,
+    }
+}
+
+function parsePendingQuestions(value: string): GatewayQuestionInfo[] {
+    const parsed = JSON.parse(value) as unknown
+    if (!Array.isArray(parsed)) {
+        throw new Error("stored pending question payload is invalid")
+    }
+
+    return parsed.map((question, index) => {
+        if (typeof question !== "object" || question === null) {
+            throw new Error(`stored pending question ${index} is invalid`)
+        }
+
+        const header = readRequiredStringField(question, "header")
+        const prompt = readRequiredStringField(question, "question")
+        const rawOptions = readArrayField(question, "options")
+        const options = rawOptions.map((option, optionIndex) => {
+            if (typeof option !== "object" || option === null) {
+                throw new Error(`stored pending question option ${index}:${optionIndex} is invalid`)
+            }
+
+            return {
+                label: readRequiredStringField(option, "label"),
+                description: readRequiredStringField(option, "description"),
+            }
+        })
+
+        return {
+            header,
+            question: prompt,
+            options,
+            multiple: readBooleanField(question, "multiple", false),
+            custom: readBooleanField(question, "custom", true),
+        }
+    })
 }
 
 function assertSafeInteger(value: number, field: string): void {
@@ -536,6 +944,56 @@ function parseStoredInteger(value: string, field: string): number {
     }
 
     return parsed
+}
+
+function normalizeStoredMailboxText(value: string): string | null {
+    const trimmed = value.trim()
+    return trimmed.length === 0 ? null : trimmed
+}
+
+function normalizeKeyField(value: string | null): string {
+    if (value === null) {
+        return ""
+    }
+
+    const trimmed = value.trim()
+    return trimmed.length === 0 ? "" : trimmed
+}
+
+function normalizeStoredKeyField(value: string): string | null {
+    const trimmed = value.trim()
+    return trimmed.length === 0 ? null : trimmed
+}
+
+function readRequiredStringField(value: object, field: string): string {
+    const raw = (value as Record<string, unknown>)[field]
+    if (typeof raw !== "string" || raw.trim().length === 0) {
+        throw new Error(`stored field ${field} is invalid`)
+    }
+
+    return raw
+}
+
+function readArrayField(value: object, field: string): unknown[] {
+    const raw = (value as Record<string, unknown>)[field]
+    if (!Array.isArray(raw)) {
+        throw new Error(`stored field ${field} is invalid`)
+    }
+
+    return raw
+}
+
+function readBooleanField(value: object, field: string, fallback: boolean): boolean {
+    const raw = (value as Record<string, unknown>)[field]
+    if (raw === undefined) {
+        return fallback
+    }
+
+    if (typeof raw !== "boolean") {
+        throw new Error(`stored field ${field} is invalid`)
+    }
+
+    return raw
 }
 
 export async function openSqliteStore(path: string): Promise<SqliteStore> {

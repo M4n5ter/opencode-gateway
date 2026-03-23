@@ -1,9 +1,10 @@
 use opencode_gateway_core::{
-    CronJobSpec, DeliveryTarget, GatewayStatus, InboundMessage, PreparedExecution, TargetKey,
+    CronJobSpec, DeliveryTarget, GatewayStatus, InboundAttachment, InboundMessage,
+    PreparedExecution, PromptPart, TargetKey,
 };
 use serde::{Deserialize, Serialize};
 
-use super::{parse_channel_kind, parse_required};
+use super::{normalize_optional_identifier, parse_channel_kind, parse_required};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -80,7 +81,7 @@ impl TryFrom<BindingCronJobSpec> for CronJobSpec {
 #[serde(rename_all = "camelCase")]
 pub struct BindingPreparedExecution {
     pub conversation_key: String,
-    pub prompt: String,
+    pub prompt_parts: Vec<BindingPromptPart>,
     pub reply_target: Option<BindingDeliveryTarget>,
 }
 
@@ -88,8 +89,46 @@ impl From<PreparedExecution> for BindingPreparedExecution {
     fn from(value: PreparedExecution) -> Self {
         Self {
             conversation_key: value.conversation_key,
-            prompt: value.prompt,
+            prompt_parts: value
+                .prompt_parts
+                .into_iter()
+                .map(BindingPromptPart::from)
+                .collect(),
             reply_target: value.reply_target.map(BindingDeliveryTarget::from),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum BindingPromptPart {
+    Text {
+        text: String,
+    },
+    File {
+        mime_type: String,
+        file_name: Option<String>,
+        local_path: String,
+    },
+}
+
+impl From<PromptPart> for BindingPromptPart {
+    fn from(value: PromptPart) -> Self {
+        match value {
+            PromptPart::Text(text) => Self::Text { text },
+            PromptPart::File {
+                mime_type,
+                file_name,
+                local_path,
+            } => Self::File {
+                mime_type,
+                file_name,
+                local_path,
+            },
         }
     }
 }
@@ -129,7 +168,8 @@ impl TryFrom<BindingDeliveryTarget> for DeliveryTarget {
 pub struct BindingInboundMessage {
     pub delivery_target: BindingDeliveryTarget,
     pub sender: String,
-    pub body: String,
+    pub text: Option<String>,
+    pub attachments: Vec<BindingInboundAttachment>,
     pub mailbox_key: Option<String>,
 }
 
@@ -139,14 +179,19 @@ impl TryFrom<BindingInboundMessage> for InboundMessage {
     fn try_from(value: BindingInboundMessage) -> Result<Self, Self::Error> {
         let delivery_target: DeliveryTarget = value.delivery_target.try_into()?;
         let sender = parse_required(value.sender, "message sender")?;
-        let body = parse_required(value.body, "message body")?;
+        let attachments = value
+            .attachments
+            .into_iter()
+            .map(InboundAttachment::try_from)
+            .collect::<Result<Vec<_>, _>>()?;
 
         let mut message = InboundMessage::new(
             delivery_target.channel,
             delivery_target.target,
             delivery_target.topic,
             sender,
-            body,
+            normalize_optional_identifier(value.text),
+            attachments,
         )
         .map_err(|error| error.to_string())?;
 
@@ -157,5 +202,34 @@ impl TryFrom<BindingInboundMessage> for InboundMessage {
         }
 
         Ok(message)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum BindingInboundAttachment {
+    Image {
+        mime_type: String,
+        file_name: Option<String>,
+        local_path: String,
+    },
+}
+
+impl TryFrom<BindingInboundAttachment> for InboundAttachment {
+    type Error = String;
+
+    fn try_from(value: BindingInboundAttachment) -> Result<Self, Self::Error> {
+        match value {
+            BindingInboundAttachment::Image {
+                mime_type,
+                file_name,
+                local_path,
+            } => InboundAttachment::image(mime_type, file_name, local_path)
+                .map_err(|error| error.to_string()),
+        }
     }
 }

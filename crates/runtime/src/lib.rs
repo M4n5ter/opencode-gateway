@@ -5,7 +5,7 @@ mod types;
 
 pub use driver::OpencodeExecutionDriver;
 pub use types::{
-    OpencodeCommand, OpencodeCommandError, OpencodeCommandErrorCode, OpencodeCommandResult,
-    OpencodeDriverStep, OpencodeExecutionInput, OpencodeMessage, OpencodeMessagePart,
-    OpencodePrompt,
+    OpencodeCommand, OpencodeCommandError, OpencodeCommandErrorCode, OpencodeCommandPart,
+    OpencodeCommandResult, OpencodeDriverStep, OpencodeExecutionInput, OpencodeMessage,
+    OpencodeMessagePart, OpencodePrompt, OpencodePromptPart,
 };
