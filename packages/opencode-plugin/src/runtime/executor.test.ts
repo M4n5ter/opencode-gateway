@@ -215,6 +215,86 @@ test("GatewayExecutor appends earlier prompts and forwards progressive previews 
     }
 })
 
+test("GatewayExecutor preserves a session binding that changed during execution", async () => {
+    const db = new Database(":memory:")
+    const now = 1_735_689_600_000
+    const restoreNow = mockDateNow(now)
+
+    try {
+        migrateGatewayDatabase(db)
+        const store = new SqliteStore(db)
+        store.putSessionBinding("telegram:42", "ses_old", 0)
+        const events = new OpencodeEventHub()
+
+        const commands: BindingOpencodeCommand[] = []
+        const executor = new GatewayExecutor(
+            createModule(),
+            store,
+            {
+                async execute(command: BindingOpencodeCommand): Promise<BindingOpencodeCommandResult> {
+                    commands.push(command)
+
+                    switch (command.kind) {
+                        case "lookupSession":
+                            return { kind: "lookupSession", sessionId: command.sessionId, found: true }
+                        case "sendPromptAsync":
+                            store.putSessionBinding("telegram:42", "ses_switched", now + 1)
+                            events.handleEvent(
+                                createAssistantMessageUpdatedEvent(
+                                    command.sessionId,
+                                    "msg_assistant_final",
+                                    command.messageId,
+                                ),
+                            )
+                            return { kind: "sendPromptAsync", sessionId: command.sessionId }
+                        case "awaitPromptResponse":
+                            return createAwaitPromptResponseResult(
+                                command.sessionId,
+                                "msg_assistant_final",
+                                "hello back",
+                            )
+                        case "waitUntilIdle":
+                            return { kind: "waitUntilIdle", sessionId: command.sessionId }
+                        case "appendPrompt":
+                        case "createSession":
+                            throw new Error("unused")
+                    }
+
+                    throw new Error(`unexpected command: ${command.kind}`)
+                },
+            },
+            events,
+            {
+                async openMany() {
+                    return [
+                        {
+                            mode: "oneshot" as const,
+                            async preview(): Promise<void> {},
+                            async finish(): Promise<boolean> {
+                                return true
+                            },
+                        },
+                    ]
+                },
+            },
+            new MemoryLogger(),
+        )
+
+        await executor.handleInboundMessage(createMessage())
+
+        expect(commands.map((command) => command.kind)).toEqual([
+            "lookupSession",
+            "waitUntilIdle",
+            "sendPromptAsync",
+            "awaitPromptResponse",
+        ])
+        expect(store.getSessionBinding("telegram:42")).toBe("ses_switched")
+    } finally {
+        restoreNow()
+        db.close()
+    }
+})
+
 function createMessage(): BindingInboundMessage {
     return {
         sender: "telegram:7",
@@ -253,6 +333,11 @@ function createModule() {
                 supportsCron: true,
                 hasWebUi: false,
             }
+        },
+        conversationKeyForDeliveryTarget(target: { channel: string; target: string; topic: string | null }) {
+            return target.topic === null
+                ? `${target.channel}:${target.target}`
+                : `${target.channel}:${target.target}:topic:${target.topic}`
         },
         nextCronRunAt() {
             return 1_735_722_000_000

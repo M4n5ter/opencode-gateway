@@ -136,7 +136,12 @@ export class GatewayExecutor {
             replyTargets,
         )
 
-        this.store.putSessionBinding(conversationKey, promptResult.sessionId, recordedAtMs)
+        this.store.putSessionBindingIfUnchanged(
+            conversationKey,
+            persistedSessionId,
+            promptResult.sessionId,
+            recordedAtMs,
+        )
 
         let delivered = false
         if (deliverySession !== null) {

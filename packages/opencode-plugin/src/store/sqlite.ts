@@ -128,8 +128,44 @@ export class SqliteStore {
             .run(conversationKey, sessionId, recordedAtMs)
     }
 
+    putSessionBindingIfUnchanged(
+        conversationKey: string,
+        expectedSessionId: string | null,
+        nextSessionId: string,
+        recordedAtMs: number,
+    ): boolean {
+        const result =
+            expectedSessionId === null
+                ? this.db
+                      .query(
+                          `
+                              INSERT INTO session_bindings (conversation_key, session_id, updated_at_ms)
+                              VALUES (?1, ?2, ?3)
+                              ON CONFLICT(conversation_key) DO NOTHING;
+                          `,
+                      )
+                      .run(conversationKey, nextSessionId, recordedAtMs)
+                : this.db
+                      .query(
+                          `
+                              UPDATE session_bindings
+                              SET session_id = ?2,
+                                  updated_at_ms = ?3
+                              WHERE conversation_key = ?1
+                                AND session_id = ?4;
+                          `,
+                      )
+                      .run(conversationKey, nextSessionId, recordedAtMs, expectedSessionId)
+
+        return result.changes > 0
+    }
+
     deleteSessionBinding(conversationKey: string): void {
         this.db.query("DELETE FROM session_bindings WHERE conversation_key = ?1;").run(conversationKey)
+    }
+
+    clearSessionReplyTargets(sessionId: string): void {
+        this.db.query("DELETE FROM session_reply_targets WHERE session_id = ?1;").run(sessionId)
     }
 
     replaceSessionReplyTargets(input: PersistSessionReplyTargetsInput): void {
@@ -262,6 +298,10 @@ export class SqliteStore {
 
     deletePendingQuestion(requestId: string): void {
         this.db.query("DELETE FROM pending_questions WHERE request_id = ?1;").run(requestId)
+    }
+
+    deletePendingQuestionsForSession(sessionId: string): void {
+        this.db.query("DELETE FROM pending_questions WHERE session_id = ?1;").run(sessionId)
     }
 
     getPendingQuestionForTarget(target: BindingDeliveryTarget): PendingQuestionRecord | null {

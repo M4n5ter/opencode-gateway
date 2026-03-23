@@ -40,6 +40,7 @@ export class GatewaySessionContext {
                 `- Current reply target id: ${target.target}`,
                 `- Current reply topic: ${target.topic ?? "none"}`,
                 "- Unless the user explicitly asks otherwise, channel-aware actions should default to this target.",
+                "- If the user asks to start a fresh channel session, use channel_new_session.",
             ].join("\n")
         }
 
@@ -51,6 +52,7 @@ export class GatewaySessionContext {
                     `- Target ${index + 1}: channel=${target.channel}, id=${target.target}, topic=${target.topic ?? "none"}`,
             ),
             "- If a tool needs a single explicit target, do not guess; ask the user or use explicit tool arguments.",
+            "- If the user asks to start a fresh channel session for this route, use channel_new_session.",
         ].join("\n")
     }
 }

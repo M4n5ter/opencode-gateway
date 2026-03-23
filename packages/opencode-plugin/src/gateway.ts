@@ -17,6 +17,7 @@ import { GatewayQuestionRuntime } from "./questions/runtime"
 import { GatewayExecutor } from "./runtime/executor"
 import { GatewayMailboxRuntime } from "./runtime/mailbox"
 import { GatewaySessionContext } from "./session/context"
+import { ChannelSessionSwitcher } from "./session/switcher"
 import { openSqliteStore } from "./store/sqlite"
 import { TelegramBotClient } from "./telegram/client"
 import { TelegramInboundMediaStore } from "./telegram/media"
@@ -44,6 +45,7 @@ export class GatewayPluginRuntime {
         readonly cron: GatewayCronRuntime,
         readonly telegram: GatewayTelegramRuntime,
         readonly files: ChannelFileSender,
+        readonly channelSessions: ChannelSessionSwitcher,
         readonly sessionContext: GatewaySessionContext,
     ) {}
 
@@ -91,6 +93,14 @@ export async function createGatewayRuntime(
     const questionClient = createQuestionClient(input.client, input.serverUrl, input.directory)
     const transport = new GatewayTransportHost(telegramClient, store)
     const files = new ChannelFileSender(telegramClient)
+    const channelSessions = new ChannelSessionSwitcher(
+        store,
+        sessionContext,
+        mailboxRouter,
+        module,
+        opencode,
+        config.telegram.enabled,
+    )
     const questions = new GatewayQuestionRuntime(
         questionClient,
         input.directory,
@@ -133,7 +143,7 @@ export async function createGatewayRuntime(
     mailbox.start()
     telegram.start()
 
-    return new GatewayPluginRuntime(module, executor, cron, telegram, files, sessionContext)
+    return new GatewayPluginRuntime(module, executor, cron, telegram, files, channelSessions, sessionContext)
 }
 
 function resolveEffectiveCronTimeZone(

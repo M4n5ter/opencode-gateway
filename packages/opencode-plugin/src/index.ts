@@ -2,6 +2,7 @@ import type { Plugin, ToolDefinition } from "@opencode-ai/plugin"
 
 import { loadGatewayBindingModule } from "./binding"
 import { createGatewayRuntime } from "./gateway"
+import { createChannelNewSessionTool } from "./tools/channel-new-session"
 import { createChannelSendFileTool } from "./tools/channel-send-file"
 import { createCronListTool } from "./tools/cron-list"
 import { createCronRemoveTool } from "./tools/cron-remove"
@@ -30,6 +31,10 @@ export const OpencodeGatewayPlugin: Plugin = async (input) => {
 
     if (runtime.files.hasEnabledChannel()) {
         tools.channel_send_file = createChannelSendFileTool(runtime.files, runtime.sessionContext)
+    }
+
+    if (runtime.channelSessions.hasEnabledChannel()) {
+        tools.channel_new_session = createChannelNewSessionTool(runtime.channelSessions, runtime.sessionContext)
     }
 
     if (runtime.telegram.isEnabled()) {

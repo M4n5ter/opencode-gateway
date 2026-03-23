@@ -3,7 +3,7 @@
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
-use crate::binding::{BindingCronJobSpec, BindingGatewayStatus};
+use crate::binding::{BindingCronJobSpec, BindingDeliveryTarget, BindingGatewayStatus};
 
 const JS_MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 
@@ -19,6 +19,13 @@ pub fn next_cron_run_at(job: JsValue, after_ms: f64, time_zone: String) -> Resul
     let after_ms = parse_js_timestamp(after_ms, "afterMs").map_err(js_error)?;
     let next = next_cron_run_at_value(job, after_ms, &time_zone).map_err(js_error)?;
     Ok(next as f64)
+}
+
+#[wasm_bindgen(js_name = conversationKeyForDeliveryTarget)]
+pub fn conversation_key_for_delivery_target(target: JsValue) -> Result<String, JsValue> {
+    let target: BindingDeliveryTarget =
+        serde_wasm_bindgen::from_value(target).map_err(|error| js_error(error.to_string()))?;
+    conversation_key_for_delivery_target_value(target).map_err(js_error)
 }
 
 #[wasm_bindgen(js_name = normalizeCronTimeZone)]
@@ -46,6 +53,13 @@ fn next_cron_run_at_value(
     }
 
     Ok(next)
+}
+
+fn conversation_key_for_delivery_target_value(
+    target: BindingDeliveryTarget,
+) -> Result<String, String> {
+    let target: opencode_gateway_core::DeliveryTarget = target.try_into()?;
+    Ok(target.conversation_key().as_str().to_owned())
 }
 
 fn normalize_cron_time_zone_value(time_zone: &str) -> Result<String, String> {
@@ -79,8 +93,11 @@ fn js_error(message: impl Into<String>) -> JsValue {
 
 #[cfg(test)]
 mod tests {
-    use super::{next_cron_run_at_value, normalize_cron_time_zone_value};
-    use crate::binding::BindingCronJobSpec;
+    use super::{
+        conversation_key_for_delivery_target_value, next_cron_run_at_value,
+        normalize_cron_time_zone_value,
+    };
+    use crate::binding::{BindingCronJobSpec, BindingDeliveryTarget};
 
     #[test]
     fn next_cron_run_at_computes_future_occurrence() {
@@ -115,5 +132,17 @@ mod tests {
             normalize_cron_time_zone_value("Mars/Olympus").expect_err("expected invalid time zone");
 
         assert!(error.contains("invalid cron time zone"));
+    }
+
+    #[test]
+    fn conversation_key_for_delivery_target_is_stable() {
+        let key = conversation_key_for_delivery_target_value(BindingDeliveryTarget {
+            channel: "telegram".to_owned(),
+            target: "-100123456".to_owned(),
+            topic: Some("42".to_owned()),
+        })
+        .expect("conversation key");
+
+        assert_eq!(key, "telegram:-100123456:topic:42");
     }
 }

@@ -1,9 +1,9 @@
 import type { ToolDefinition } from "@opencode-ai/plugin"
 import { tool } from "@opencode-ai/plugin"
 
-import type { BindingDeliveryTarget } from "../binding"
 import type { ChannelFileSendResult } from "../host/file-sender"
 import type { GatewaySessionContext } from "../session/context"
+import { resolveToolDeliveryTarget } from "./channel-target"
 
 export function createChannelSendFileTool(
     sender: ChannelFileSenderLike,
@@ -22,7 +22,7 @@ export function createChannelSendFileTool(
         async execute(args, context) {
             return formatChannelFileSendResult(
                 await sender.sendFile(
-                    resolveDeliveryTarget(args, context.sessionID, sessions),
+                    resolveToolDeliveryTarget(args, context.sessionID, sessions),
                     args.file_path,
                     args.caption ?? null,
                 ),
@@ -42,49 +42,10 @@ function formatChannelFileSendResult(result: ChannelFileSendResult): string {
     ].join("\n")
 }
 
-function resolveDeliveryTarget(
-    args: {
-        channel?: string
-        target?: string
-        topic?: string
-    },
-    sessionId: string,
-    sessions: GatewaySessionContext,
-): BindingDeliveryTarget {
-    const fallback = sessions.getDefaultReplyTarget(sessionId)
-    const channel = normalizeRequired(args.channel ?? fallback?.channel ?? null, "channel")
-    const target = normalizeRequired(args.target ?? fallback?.target ?? null, "target")
-    const topic = normalizeOptional(args.topic ?? fallback?.topic ?? null)
-
-    return {
-        channel,
-        target,
-        topic,
-    }
-}
-
-function normalizeRequired(value: string | null, field: string): string {
-    if (value === null) {
-        throw new Error(`${field} is required when the current session has no default reply target`)
-    }
-
-    const trimmed = value.trim()
-    if (trimmed.length === 0) {
-        throw new Error(`${field} must not be empty`)
-    }
-
-    return trimmed
-}
-
-function normalizeOptional(value: string | null): string | null {
-    if (value === null) {
-        return null
-    }
-
-    const trimmed = value.trim()
-    return trimmed.length === 0 ? null : trimmed
-}
-
 type ChannelFileSenderLike = {
-    sendFile(target: BindingDeliveryTarget, filePath: string, caption: string | null): Promise<ChannelFileSendResult>
+    sendFile(
+        target: ReturnType<typeof resolveToolDeliveryTarget>,
+        filePath: string,
+        caption: string | null,
+    ): Promise<ChannelFileSendResult>
 }

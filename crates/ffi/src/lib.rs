@@ -8,6 +8,6 @@ pub use binding::{
     BindingOpencodeCommandPart, BindingOpencodeCommandResult, BindingOpencodeDriverStep,
     BindingOpencodeExecutionInput, BindingOpencodeMessage, BindingOpencodeMessagePart,
     BindingOpencodePrompt, BindingPreparedExecution, BindingProgressiveDirective,
-    BindingPromptPart, OpencodeExecutionDriver, gateway_status, next_cron_run_at,
-    prepare_cron_execution, prepare_inbound_execution,
+    BindingPromptPart, OpencodeExecutionDriver, conversation_key_for_delivery_target,
+    gateway_status, next_cron_run_at, prepare_cron_execution, prepare_inbound_execution,
 };

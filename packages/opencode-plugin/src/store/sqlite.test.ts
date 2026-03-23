@@ -272,6 +272,18 @@ test("sqlite store persists session reply targets and pending questions", () => 
             telegramMessageId: 99,
             createdAtMs: 20,
         })
+
+        store.deletePendingQuestionsForSession("session-1")
+        store.clearSessionReplyTargets("session-1")
+
+        expect(store.getDefaultSessionReplyTarget("session-1")).toBeNull()
+        expect(
+            store.getPendingQuestionForTarget({
+                channel: "telegram",
+                target: "42",
+                topic: null,
+            }),
+        ).toBeNull()
     } finally {
         db.close()
     }

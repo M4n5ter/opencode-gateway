@@ -79,6 +79,7 @@ export type BindingLoggerHost = {
 
 export type GatewayContract = {
     gatewayStatus(): GatewayStatusSnapshot
+    conversationKeyForDeliveryTarget(target: BindingDeliveryTarget): string
     nextCronRunAt(job: BindingCronJobSpec, afterMs: number, timeZone: string): number
     normalizeCronTimeZone(timeZone: string): string
 }

@@ -155,6 +155,11 @@ function createBindingStub(): GatewayContract {
                 hasWebUi: false,
             }
         },
+        conversationKeyForDeliveryTarget(target) {
+            return target.topic === null
+                ? `${target.channel}:${target.target}`
+                : `${target.channel}:${target.target}:topic:${target.topic}`
+        },
         nextCronRunAt(_job: BindingCronJobSpec, afterMs: number, timeZone: string): number {
             if (timeZone === "Asia/Shanghai") {
                 return 1_735_786_800_000

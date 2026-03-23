@@ -70,6 +70,17 @@ export class OpencodeSdkAdapter {
         private readonly directory: string,
     ) {}
 
+    async createFreshSession(title: string): Promise<string> {
+        const session = await this.client.session.create({
+            body: { title },
+            query: { directory: this.directory },
+            responseStyle: "data",
+            throwOnError: true,
+        })
+
+        return unwrapData<SessionRecord>(session).id
+    }
+
     async execute(command: BindingOpencodeCommand): Promise<BindingOpencodeCommandResult> {
         try {
             switch (command.kind) {
@@ -123,16 +134,9 @@ export class OpencodeSdkAdapter {
     }
 
     private async createSession(title: string): Promise<BindingOpencodeCommandResult> {
-        const session = await this.client.session.create({
-            body: { title },
-            query: { directory: this.directory },
-            responseStyle: "data",
-            throwOnError: true,
-        })
-
         return {
             kind: "createSession",
-            sessionId: unwrapData<SessionRecord>(session).id,
+            sessionId: await this.createFreshSession(title),
         }
     }
 
