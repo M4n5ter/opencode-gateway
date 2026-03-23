@@ -1,12 +1,55 @@
 {
   "name": "opencode-gateway",
-  "private": true,
   "version": "0.1.0",
+  "description": "Gateway plugin for OpenCode",
+  "license": "MIT",
   "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "opencode-gateway": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "generated/wasm/pkg",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
-    "build": "tsc --project tsconfig.json",
+    "build": "node ./scripts/build.mjs",
+    "build:wasm": "node ../../scripts/build-binding.mjs",
     "check": "tsc --noEmit --project tsconfig.json && bun test src",
+    "prepack": "npm run build:wasm && npm run build",
     "test": "bun test src"
+  },
+  "keywords": [
+    "opencode",
+    "plugin",
+    "gateway",
+    "telegram",
+    "automation"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/M4n5ter/aI.git",
+    "directory": "packages/opencode-plugin"
+  },
+  "bugs": {
+    "url": "https://github.com/M4n5ter/aI/issues"
+  },
+  "homepage": "https://github.com/M4n5ter/aI",
+  "publishConfig": {
+    "access": "public"
   },
   "dependencies": {
     "@opencode-ai/plugin": "~1.3.0",

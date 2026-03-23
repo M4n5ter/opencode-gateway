@@ -39,7 +39,7 @@ export type GatewayBindingModule = GatewayContract & {
     default?: (module?: BufferSource | WebAssembly.Module) => Promise<unknown>
 }
 
-const GENERATED_NODE_ENTRYPOINT = new URL("../../../../dist/wasm/pkg/opencode_gateway_ffi.js", import.meta.url)
+const GENERATED_NODE_ENTRYPOINT = new URL("../../generated/wasm/pkg/opencode_gateway_ffi.js", import.meta.url)
 
 export async function loadGatewayBindingModule(): Promise<GatewayBindingModule> {
     return (await import(GENERATED_NODE_ENTRYPOINT.href)) as GatewayBindingModule

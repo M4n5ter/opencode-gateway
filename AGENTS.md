@@ -203,8 +203,10 @@ opencode-gateway doctor
 
 Default paths:
 
-- gateway config: `~/.config/opencode-gateway/config.toml`
+- default OpenCode config: `~/.config/opencode/opencode.json`
+- default gateway config: `~/.config/opencode/opencode-gateway.toml`
 - managed OpenCode config directory: `~/.config/opencode-gateway/opencode/`
+- managed gateway config: `~/.config/opencode-gateway/opencode/opencode-gateway.toml`
 - SQLite state: `~/.local/share/opencode-gateway/state.db`
 
 The launcher is responsible for creating and wiring these managed paths without

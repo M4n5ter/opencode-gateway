@@ -18,6 +18,7 @@ node_modules
 dist
 coverage
 *.tsbuildinfo
+packages/opencode-plugin/generated/
 
 # Local runtime state
 .opencode/

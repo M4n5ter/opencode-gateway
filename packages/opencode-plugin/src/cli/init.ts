@@ -1,0 +1,55 @@
+import { mkdir, readFile, writeFile } from "node:fs/promises"
+import { dirname, join } from "node:path"
+
+import {
+    defaultGatewayStateDbPath,
+    GATEWAY_CONFIG_FILE,
+    OPENCODE_CONFIG_FILE,
+} from "../config/paths"
+import {
+    createDefaultOpencodeConfig,
+    ensureGatewayPlugin,
+    parseOpencodeConfig,
+    stringifyOpencodeConfig,
+} from "./opencode-config"
+import { pathExists, resolveCliConfigDir } from "./paths"
+import { buildGatewayConfigTemplate } from "./templates"
+
+type InitOptions = {
+    managed: boolean
+    configDir: string | null
+}
+
+export async function runInit(options: InitOptions, env: Record<string, string | undefined>): Promise<void> {
+    const configDir = resolveCliConfigDir(options, env)
+    const opencodeConfigPath = join(configDir, OPENCODE_CONFIG_FILE)
+    const gatewayConfigPath = join(configDir, GATEWAY_CONFIG_FILE)
+
+    await mkdir(configDir, { recursive: true })
+
+    let opencodeStatus = "already present"
+    if (!(await pathExists(opencodeConfigPath))) {
+        await writeFile(opencodeConfigPath, stringifyOpencodeConfig(createDefaultOpencodeConfig(options.managed)))
+        opencodeStatus = "created"
+    } else {
+        const source = await readFile(opencodeConfigPath, "utf8")
+        const parsed = parseOpencodeConfig(source, opencodeConfigPath)
+        const next = ensureGatewayPlugin(parsed)
+
+        if (next.changed) {
+            await writeFile(opencodeConfigPath, stringifyOpencodeConfig(next.document))
+            opencodeStatus = "updated"
+        }
+    }
+
+    let gatewayStatus = "already present"
+    if (!(await pathExists(gatewayConfigPath))) {
+        await mkdir(dirname(gatewayConfigPath), { recursive: true })
+        await writeFile(gatewayConfigPath, buildGatewayConfigTemplate(defaultGatewayStateDbPath(env)))
+        gatewayStatus = "created"
+    }
+
+    console.log(`config dir: ${configDir}`)
+    console.log(`opencode config: ${opencodeConfigPath} (${opencodeStatus})`)
+    console.log(`gateway config: ${gatewayConfigPath} (${gatewayStatus})`)
+}

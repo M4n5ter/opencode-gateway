@@ -6,13 +6,14 @@
         "packages/*"
     ],
     "scripts": {
-        "build:binding": "cargo build --target wasm32-unknown-unknown --release -p opencode-gateway-ffi && wasm-bindgen --target nodejs --out-dir dist/wasm/pkg target/wasm32-unknown-unknown/release/opencode_gateway_ffi.wasm",
+        "build:binding": "node ./scripts/build-binding.mjs",
         "build:plugin": "bun run --cwd packages/opencode-plugin build",
         "check:biome": "bunx @biomejs/biome check .",
         "check:binding": "bun run build:binding && bun scripts/smoke-binding.mjs",
         "check:plugin": "bun run --cwd packages/opencode-plugin check",
         "check:rust": "cargo test && cargo clippy --all-targets --all-features",
         "check:all": "bun run check:biome && bun run check:binding && bun run check:plugin && bun run check:rust",
+        "publish:npm": "node ./scripts/publish-npm.mjs",
         "smoke:opencode": "bun scripts/smoke-opencode-server.mjs",
         "format:biome": "bunx @biomejs/biome format --write ."
     },

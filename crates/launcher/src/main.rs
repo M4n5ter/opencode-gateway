@@ -52,7 +52,7 @@ impl GatewayPaths {
         let opencode_dir = config_root.join("opencode");
 
         Ok(Self {
-            config_file: config_root.join("config.toml"),
+            config_file: opencode_dir.join("opencode-gateway.toml"),
             opencode_config_file: opencode_dir.join("opencode.json"),
             opencode_plugin_loader: opencode_dir.join("plugins/opencode-gateway.ts"),
             state_db: state_dir.join("state.db"),
@@ -247,9 +247,6 @@ fn write_gateway_config_if_missing(paths: &GatewayPaths) -> Result<(), Box<dyn E
                 "# Fill in secrets and provider details before enabling real integrations.\n\n",
                 "[gateway]\n",
                 "state_db = \"{}\"\n\n",
-                "[opencode]\n",
-                "hostname = \"127.0.0.1\"\n",
-                "port = 4096\n\n",
                 "[cron]\n",
                 "enabled = true\n",
                 "tick_seconds = 5\n",

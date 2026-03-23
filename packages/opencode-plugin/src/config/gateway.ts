@@ -1,8 +1,8 @@
 import { existsSync } from "node:fs"
-import { homedir } from "node:os"
 import { dirname, isAbsolute, join, resolve } from "node:path"
 
 import { type CronConfig, parseCronConfig } from "./cron"
+import { defaultGatewayStateDbPath, resolveGatewayConfigPath } from "./paths"
 import { parseTelegramConfig, type TelegramConfig } from "./telegram"
 
 type RawGatewayConfig = {
@@ -87,20 +87,6 @@ function parseMailboxConfig(value: unknown): GatewayMailboxConfig {
         batchWindowMs: readBatchWindowMs(table.batch_window_ms),
         routes: readMailboxRoutes(table.routes),
     }
-}
-
-function resolveGatewayConfigPath(env: EnvSource): string {
-    const explicit = env.OPENCODE_GATEWAY_CONFIG
-    if (explicit && explicit.trim().length > 0) {
-        return resolve(explicit)
-    }
-
-    const opencodeConfigDir = env.OPENCODE_CONFIG_DIR
-    if (opencodeConfigDir && opencodeConfigDir.trim().length > 0) {
-        return resolve(opencodeConfigDir, "..", "config.toml")
-    }
-
-    return defaultGatewayConfigPath(env)
 }
 
 async function readGatewayConfigFile(path: string): Promise<RawGatewayConfig | null> {
@@ -240,22 +226,10 @@ function readLegacyGatewayTimezone(value: unknown): string | null {
     return trimmed.length === 0 ? null : trimmed
 }
 
-function defaultGatewayConfigPath(env: EnvSource): string {
-    return join(resolveConfigHome(env), "opencode-gateway", "config.toml")
-}
-
 function defaultStateDbPath(env: EnvSource): string {
-    return join(resolveDataHome(env), "opencode-gateway", "state.db")
+    return defaultGatewayStateDbPath(env)
 }
 
 function resolveMediaRootPath(stateDbPath: string): string {
     return join(dirname(stateDbPath), "media")
-}
-
-function resolveConfigHome(env: EnvSource): string {
-    return env.XDG_CONFIG_HOME ?? join(homedir(), ".config")
-}
-
-function resolveDataHome(env: EnvSource): string {
-    return env.XDG_DATA_HOME ?? join(homedir(), ".local", "share")
 }

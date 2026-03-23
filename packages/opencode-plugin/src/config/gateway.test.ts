@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -18,6 +18,46 @@ test("loadGatewayConfig resolves relative state_db against the config file", asy
 
         expect(config.configPath).toBe(configPath)
         expect(config.stateDbPath).toBe(join(root, "state", "custom.db"))
+    } finally {
+        await rm(root, { recursive: true, force: true })
+    }
+})
+
+test("loadGatewayConfig prefers OPENCODE_CONFIG_DIR/opencode-gateway.toml when no explicit path is set", async () => {
+    const root = await mkdtemp(join(tmpdir(), "opencode-gateway-config-dir-"))
+    const configDir = join(root, "opencode")
+    const configPath = join(configDir, "opencode-gateway.toml")
+
+    try {
+        await mkdir(configDir, { recursive: true })
+        await writeFile(configPath, '[gateway]\nstate_db = "state/custom.db"\n')
+
+        const config = await loadGatewayConfig({
+            OPENCODE_CONFIG_DIR: configDir,
+        })
+
+        expect(config.configPath).toBe(configPath)
+        expect(config.stateDbPath).toBe(join(configDir, "state", "custom.db"))
+    } finally {
+        await rm(root, { recursive: true, force: true })
+    }
+})
+
+test("loadGatewayConfig falls back to the global opencode config directory", async () => {
+    const root = await mkdtemp(join(tmpdir(), "opencode-gateway-global-"))
+    const configHome = join(root, "config-home")
+    const configDir = join(configHome, "opencode")
+    const configPath = join(configDir, "opencode-gateway.toml")
+
+    try {
+        await mkdir(configDir, { recursive: true })
+        await writeFile(configPath, "")
+
+        const config = await loadGatewayConfig({
+            XDG_CONFIG_HOME: configHome,
+        })
+
+        expect(config.configPath).toBe(configPath)
     } finally {
         await rm(root, { recursive: true, force: true })
     }

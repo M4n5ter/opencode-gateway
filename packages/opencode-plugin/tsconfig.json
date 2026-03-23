@@ -4,7 +4,7 @@
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "strict": true,
-    "types": ["bun-types"],
+    "types": ["bun-types", "node"],
     "declaration": true,
     "outDir": "dist",
     "rootDir": "src",

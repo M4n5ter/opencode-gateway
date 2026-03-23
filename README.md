@@ -1,73 +1,52 @@
 # Opencode Gateway
 
-## Installation
+Gateway plugin for OpenCode.
 
-This repository supports two installation flows:
+This repository contains two things:
 
-1. use the wrapped launcher provided by this repo
-2. wire the plugin into `opencode` manually
+- a publishable npm package: `opencode-gateway`
+- the Rust/Bun workspace used to develop, test, and ship it
 
-In both cases, start from the repository root and build the local WebAssembly binding first:
+The recommended user path is the npm package. The repository path is for local
+development and debugging.
 
-```bash
-bun install
-bun run build:binding
-```
+## Use Through npm
 
-The generated `wasm-bindgen` package is required before the plugin can load.
+### 1. Initialize your OpenCode config
 
-### Option A: Use the Wrapped Launcher
-
-The launcher prepares a managed OpenCode config directory under
-`~/.config/opencode-gateway/opencode/`, creates a plugin loader, warms the current
-project instance, and starts `opencode serve` with the correct environment variables.
-
-1. Initialize the managed files:
+Run:
 
 ```bash
-cargo run -p opencode-gateway-launcher -- init
+npx opencode-gateway init
 ```
 
-2. Edit the generated gateway config:
+By default this uses `OPENCODE_CONFIG_DIR` when it is set, otherwise it writes
+into your standard OpenCode config directory:
 
-```text
-~/.config/opencode-gateway/config.toml
-```
+- `~/.config/opencode/opencode.json`
+- `~/.config/opencode/opencode-gateway.toml`
 
-At minimum, set `channels.telegram.enabled = true`, configure an explicit allowlist,
-and export the bot token through the environment if you want Telegram enabled.
+`init` will:
 
-3. Start the managed OpenCode server:
+- create `opencode.json` when it does not exist
+- ensure `plugin: ["opencode-gateway"]` is present
+- create `opencode-gateway.toml` when it does not exist
+
+If you want a separate managed config tree instead of touching your existing
+OpenCode config, use:
 
 ```bash
-cargo run -p opencode-gateway-launcher -- serve
+npx opencode-gateway init --managed
 ```
 
-Useful helper:
+That writes:
 
-```bash
-cargo run -p opencode-gateway-launcher -- doctor
-```
+- `~/.config/opencode-gateway/opencode/opencode.json`
+- `~/.config/opencode-gateway/opencode/opencode-gateway.toml`
 
-### Option B: Use `opencode` Directly
+### 2. Configure the gateway
 
-If you prefer to manage OpenCode yourself, create your own managed config
-directory and point OpenCode at it explicitly.
-
-1. Create a config root:
-
-```bash
-mkdir -p ~/.config/opencode-gateway/opencode/plugins
-mkdir -p ~/.local/share/opencode-gateway
-```
-
-2. Create the gateway config at:
-
-```text
-~/.config/opencode-gateway/config.toml
-```
-
-Example:
+Edit `opencode-gateway.toml`. Minimal example:
 
 ```toml
 [gateway]
@@ -87,40 +66,34 @@ allowed_chats = []
 allowed_users = []
 ```
 
-When `cron.timezone` is omitted, recurring cron expressions are interpreted in the
-runtime's local time zone.
+When `cron.timezone` is omitted, recurring cron expressions are interpreted in
+the runtime's local time zone.
 
-3. Create the OpenCode config at:
+### 3. Verify the generated config
 
-```text
-~/.config/opencode-gateway/opencode/opencode.json
+Run:
+
+```bash
+npx opencode-gateway doctor
 ```
 
-Example:
+This reports:
 
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "server": {
-    "hostname": "127.0.0.1",
-    "port": 4096
-  }
-}
+- the resolved config directory
+- whether `opencode.json` exists
+- whether `opencode-gateway.toml` exists
+- whether `opencode-gateway` is present in the `plugin` array
+- whether `TELEGRAM_BOT_TOKEN` is set
+
+### 4. Start OpenCode
+
+If you used the default config directory:
+
+```bash
+opencode serve
 ```
 
-4. Create the plugin loader at:
-
-```text
-~/.config/opencode-gateway/opencode/plugins/opencode-gateway.ts
-```
-
-Replace `<REPO_ROOT>` with the absolute path to this repository:
-
-```ts
-export { default, OpencodeGatewayPlugin } from "file://<REPO_ROOT>/packages/opencode-plugin/src/index.ts"
-```
-
-5. Start OpenCode with the managed config:
+If you used `--managed`, start OpenCode against that directory explicitly:
 
 ```bash
 export OPENCODE_CONFIG="$HOME/.config/opencode-gateway/opencode/opencode.json"
@@ -132,4 +105,89 @@ If Telegram is enabled, also export:
 
 ```bash
 export TELEGRAM_BOT_TOKEN="..."
+```
+
+## Develop From This Repository
+
+This path is for working on the plugin itself.
+
+### Install dependencies
+
+```bash
+bun install
+```
+
+### Build the Rust wasm binding
+
+```bash
+bun run build:binding
+```
+
+This generates the package-local `wasm-bindgen` output under:
+
+```text
+packages/opencode-plugin/generated/wasm/pkg/
+```
+
+### Run the managed local launcher
+
+The launcher keeps using a repository-local plugin loader for development.
+
+Initialize managed files:
+
+```bash
+cargo run -p opencode-gateway-launcher -- init
+```
+
+This creates:
+
+- `~/.config/opencode-gateway/opencode/opencode.json`
+- `~/.config/opencode-gateway/opencode/opencode-gateway.toml`
+- `~/.config/opencode-gateway/opencode/plugins/opencode-gateway.ts`
+
+Start the managed OpenCode instance:
+
+```bash
+cargo run -p opencode-gateway-launcher -- serve
+```
+
+Useful helper:
+
+```bash
+cargo run -p opencode-gateway-launcher -- doctor
+```
+
+### Run checks
+
+```bash
+bun run check:binding
+bun run check:plugin
+cargo test
+cargo clippy --all-targets --all-features
+```
+
+## Publish The npm Package
+
+From the package directory:
+
+```bash
+cd packages/opencode-plugin
+npm pack --dry-run
+```
+
+`prepack` builds both the package-local wasm output and the TypeScript `dist`
+tree, so the tarball is self-contained and does not depend on repository-root
+artifacts.
+
+For a full release flow from the repository root, use:
+
+```bash
+node scripts/publish-npm.mjs
+```
+
+That runs the binding smoke check, plugin check, Rust test/clippy, and
+`npm pack --dry-run`. Add `--publish` to actually publish:
+
+```bash
+node scripts/publish-npm.mjs --publish
 ```
