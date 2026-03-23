@@ -170,6 +170,7 @@ name = "opencode-gateway-ffi"
 version = "0.1.0"
 dependencies = [
  "opencode-gateway-core",
+ "opencode-gateway-runtime",
  "serde",
  "serde-wasm-bindgen",
  "serde_json",
@@ -178,6 +179,13 @@ dependencies = [
 
 [[package]]
 name = "opencode-gateway-launcher"
+version = "0.1.0"
+dependencies = [
+ "opencode-gateway-core",
+]
+
+[[package]]
+name = "opencode-gateway-runtime"
 version = "0.1.0"
 dependencies = [
  "opencode-gateway-core",

@@ -1,36 +1,32 @@
 import { expect, test } from "bun:test"
 
-import type { BindingExecutionObservation } from "../binding"
+import type {
+    BindingExecutionObservation,
+    BindingOpencodeCommandResult,
+    BindingOpencodeDriverStep,
+    OpencodeExecutionDriver,
+} from "../binding"
 import { OpencodeEventStream } from "./event-stream"
 import { OpencodeEventHub } from "./events"
 
 test("OpencodeEventStream forwards SDK SSE events into the prompt hub", async () => {
     const hub = new OpencodeEventHub()
     const observations: BindingExecutionObservation[] = []
-    const registration = hub.registerPrompt(
+    const registration = hub.registerDriver(
         "session-1",
-        {
-            observeEvent(observation) {
-                observations.push(observation)
-                return {
-                    kind:
-                        observation.kind === "textPartUpdated" && observation.messageId === "msg_assistant_1"
-                            ? "preview"
-                            : "noop",
-                    text:
-                        observation.kind === "textPartUpdated" && observation.messageId === "msg_assistant_1"
-                            ? "hello"
-                            : null,
-                }
-            },
-            finish() {
-                return {
-                    kind: "noop",
-                    text: null,
-                }
-            },
-        },
-        "msg_user_1",
+        createDriver((observation) => {
+            observations.push(observation)
+            return {
+                kind:
+                    observation.kind === "textPartUpdated" && observation.messageId === "msg_assistant_1"
+                        ? "preview"
+                        : "noop",
+                text:
+                    observation.kind === "textPartUpdated" && observation.messageId === "msg_assistant_1"
+                        ? "hello"
+                        : null,
+            }
+        }),
         () => {},
     )
 
@@ -117,5 +113,21 @@ function createAssistantMessageUpdatedEvent(sessionID: string, id: string, paren
 function createLogger() {
     return {
         log() {},
+    }
+}
+
+function createDriver(
+    observeEvent: (observation: BindingExecutionObservation) => { kind: string; text: string | null },
+): OpencodeExecutionDriver {
+    return {
+        start(): BindingOpencodeDriverStep {
+            throw new Error("unused")
+        },
+        resume(_result: BindingOpencodeCommandResult): BindingOpencodeDriverStep {
+            throw new Error("unused")
+        },
+        observeEvent(observation) {
+            return observeEvent(observation)
+        },
     }
 }

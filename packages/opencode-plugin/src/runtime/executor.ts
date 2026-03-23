@@ -7,17 +7,17 @@ import type {
     GatewayBindingModule,
 } from "../binding"
 import type { GatewayTextDelivery, TextDeliverySession } from "../delivery/text"
-import type { GatewayOpencodeHost } from "../host/opencode"
-import { createMailboxPromptIds } from "../opencode/message-ids"
+import type { OpencodeSdkAdapter } from "../opencode/adapter"
+import type { OpencodeEventHub } from "../opencode/events"
 import type { MailboxEntryRecord, RuntimeJournalEntry, SqliteStore } from "../store/sqlite"
-
-const DEFAULT_FLUSH_INTERVAL_MS = 400
+import { type PromptExecutionResult, runOpencodeDriver } from "./opencode-runner"
 
 export class GatewayExecutor {
     constructor(
         private readonly module: GatewayBindingModule,
         private readonly store: SqliteStore,
-        private readonly opencode: GatewayOpencodeHostLike,
+        private readonly opencode: GatewayOpencodeRuntimeLike,
+        private readonly events: OpencodeEventHub,
         private readonly delivery: GatewayTextDeliveryLike,
         private readonly logger: BindingLoggerHost,
     ) {}
@@ -126,7 +126,7 @@ export class GatewayExecutor {
         )
         const [deliverySession] =
             replyTargets.length === 0 ? [null] : await this.delivery.openMany(replyTargets, "auto")
-        const promptResult = await this.executePromptWithRecovery(entries, persistedSessionId, deliverySession)
+        const promptResult = await this.executeDriver(entries, recordedAtMs, persistedSessionId, deliverySession)
 
         this.store.putSessionBinding(conversationKey, promptResult.sessionId, recordedAtMs)
 
@@ -151,79 +151,24 @@ export class GatewayExecutor {
         }
     }
 
-    private async executePromptWithRecovery(
+    private async executeDriver(
         entries: PreparedMailboxEntry[],
+        recordedAtMs: number,
         persistedSessionId: string | null,
         deliverySession: TextDeliverySessionLike | null,
     ): Promise<PromptExecutionResult> {
-        const conversationKey = entries[0].prepared.conversationKey
-        const sessionId = await this.opencode.ensureSession(conversationKey, persistedSessionId)
-
-        try {
-            await this.opencode.waitUntilSessionIdle(sessionId)
-            return await this.executePrompt(entries, sessionId, deliverySession)
-        } catch (error) {
-            if (persistedSessionId === null || !isMissingSessionBindingError(error)) {
-                throw error
-            }
-
-            this.logger.log(
-                "warn",
-                `stale opencode session binding detected for ${conversationKey}; recreating session`,
-            )
-            this.store.deleteSessionBinding(conversationKey)
-
-            const freshSessionId = await this.opencode.ensureSession(conversationKey, null)
-            await this.opencode.waitUntilSessionIdle(freshSessionId)
-            return await this.executePrompt(entries, freshSessionId, deliverySession)
-        }
-    }
-
-    private async executePrompt(
-        entries: PreparedMailboxEntry[],
-        sessionId: string,
-        deliverySession: TextDeliverySessionLike | null,
-    ): Promise<PromptExecutionResult> {
-        const lastEntry = entries[entries.length - 1]
-        const execution =
-            deliverySession?.mode === "progressive"
-                ? this.module.ExecutionHandle.progressive(lastEntry.prepared, sessionId, DEFAULT_FLUSH_INTERVAL_MS)
-                : this.module.ExecutionHandle.oneshot(lastEntry.prepared, sessionId, DEFAULT_FLUSH_INTERVAL_MS)
-
-        try {
-            for (const entry of entries.slice(0, -1)) {
-                if (entry.entry === null) {
-                    throw new Error("synthetic execution batches cannot append intermediate prompts")
-                }
-
-                await this.opencode.appendPrompt(
-                    sessionId,
-                    entry.prepared.prompt,
-                    createMailboxPromptIds(entry.entry.id),
-                )
-            }
-
-            const responseText = await this.opencode.promptSessionWithSnapshots(
-                sessionId,
-                lastEntry.prepared.prompt,
-                createPromptIds(lastEntry.entry, lastEntry.prepared.conversationKey),
-                execution,
-                deliverySession?.mode === "progressive"
-                    ? async (snapshot) => {
-                          await deliverySession.preview(snapshot)
-                      }
-                    : null,
-            )
-            const finalDirective = execution.finish(responseText, monotonicNowMs())
-
-            return {
-                sessionId,
-                responseText,
-                finalText: finalDirective.kind === "final" ? finalDirective.text : null,
-            }
-        } finally {
-            execution.free?.()
-        }
+        return await runOpencodeDriver({
+            module: this.module,
+            opencode: this.opencode,
+            events: this.events,
+            conversationKey: entries[0].prepared.conversationKey,
+            persistedSessionId,
+            deliverySession,
+            prompts: entries.map((entry, index) => ({
+                promptKey: createPromptKey(entry, recordedAtMs, index),
+                prompt: entry.prepared.prompt,
+            })),
+        })
     }
 }
 
@@ -232,12 +177,6 @@ export type GatewayExecutorLike = Pick<
     "handleInboundMessage" | "dispatchCronJob" | "executeMailboxEntries" | "prepareInboundMessage"
 >
 
-type PromptExecutionResult = {
-    sessionId: string
-    responseText: string
-    finalText: string | null
-}
-
 type PreparedMailboxEntry = {
     entry: MailboxEntryRecord | null
     message: BindingInboundMessage | null
@@ -245,10 +184,7 @@ type PreparedMailboxEntry = {
 }
 
 type GatewayTextDeliveryLike = Pick<GatewayTextDelivery, "openMany">
-type GatewayOpencodeHostLike = Pick<
-    GatewayOpencodeHost,
-    "ensureSession" | "waitUntilSessionIdle" | "appendPrompt" | "promptSessionWithSnapshots"
->
+type GatewayOpencodeRuntimeLike = Pick<OpencodeSdkAdapter, "execute">
 type TextDeliverySessionLike = Pick<TextDeliverySession, "mode" | "preview" | "finish">
 
 function createJournalEntry(
@@ -266,55 +202,31 @@ function createJournalEntry(
 }
 
 function mailboxEntryToInboundMessage(entry: MailboxEntryRecord): BindingInboundMessage {
-    if (entry.replyChannel === null || entry.replyTarget === null) {
-        throw new Error("mailbox entries without a reply target are not supported on the inbound path")
-    }
-
     return {
-        mailboxKey: entry.mailboxKey,
-        sender: entry.sender,
-        body: entry.body,
         deliveryTarget: {
-            channel: entry.replyChannel,
-            target: entry.replyTarget,
+            channel: normalizeRequiredField(entry.replyChannel ?? "", "mailbox reply channel"),
+            target: normalizeRequiredField(entry.replyTarget ?? "", "mailbox reply target"),
             topic: entry.replyTopic,
         },
-    }
-}
-
-function createPromptIds(entry: MailboxEntryRecord | null, conversationKey: string) {
-    if (entry !== null) {
-        return createMailboxPromptIds(entry.id)
-    }
-
-    const now = Date.now()
-    return {
-        messageId: `msg_gateway_${sanitizeIdentifier(conversationKey)}_${now}`,
-        textPartId: `prt_gateway_${sanitizeIdentifier(conversationKey)}_${now}`,
+        sender: entry.sender,
+        body: entry.body,
+        mailboxKey: entry.mailboxKey,
     }
 }
 
 function dedupeReplyTargets(
-    targets: BindingPreparedExecution["replyTarget"][],
+    targets: NonNullable<BindingPreparedExecution["replyTarget"]>[],
 ): NonNullable<BindingPreparedExecution["replyTarget"]>[] {
     const seen = new Set<string>()
-    const unique: NonNullable<BindingPreparedExecution["replyTarget"]>[] = []
-
-    for (const target of targets) {
-        if (target === null) {
-            continue
-        }
-
+    return targets.filter((target) => {
         const key = `${target.channel}:${target.target}:${target.topic ?? ""}`
         if (seen.has(key)) {
-            continue
+            return false
         }
 
         seen.add(key)
-        unique.push(target)
-    }
-
-    return unique
+        return true
+    })
 }
 
 function normalizeRequiredField(value: string, field: string): string {
@@ -326,37 +238,10 @@ function normalizeRequiredField(value: string, field: string): string {
     return trimmed
 }
 
-function isMissingSessionBindingError(error: unknown): boolean {
-    return containsMissingSessionBinding(error, 0)
-}
-
-function containsMissingSessionBinding(value: unknown, depth: number): boolean {
-    if (depth > 6) {
-        return false
+function createPromptKey(entry: PreparedMailboxEntry, recordedAtMs: number, index: number): string {
+    if (entry.entry !== null) {
+        return `mailbox:${entry.entry.id}:${recordedAtMs}`
     }
 
-    if (typeof value === "string") {
-        return value.includes("Session not found:")
-    }
-
-    if (typeof value !== "object" || value === null) {
-        return false
-    }
-
-    for (const key of Object.getOwnPropertyNames(value)) {
-        const nested = (value as Record<string, unknown>)[key]
-        if (containsMissingSessionBinding(nested, depth + 1)) {
-            return true
-        }
-    }
-
-    return false
-}
-
-function monotonicNowMs(): number {
-    return Math.trunc(performance.now())
-}
-
-function sanitizeIdentifier(value: string): string {
-    return value.replace(/[^a-zA-Z0-9_]+/g, "_")
+    return `synthetic:${recordedAtMs}:${index}`
 }

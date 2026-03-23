@@ -3,7 +3,6 @@ import type { SqliteStore } from "../store/sqlite"
 import type { TelegramSendClientLike } from "../telegram/client"
 import { recordTelegramSendFailure, recordTelegramSendSuccess } from "../telegram/state"
 import { formatError } from "../utils/error"
-import { failedAck, okAck } from "./result"
 
 export class GatewayTransportHost implements BindingTransportHost {
     constructor(
@@ -28,10 +27,14 @@ export class GatewayTransportHost implements BindingTransportHost {
 
             await this.telegramClient.sendMessage(message.deliveryTarget.target, body, message.deliveryTarget.topic)
             recordTelegramSendSuccess(this.store, Date.now())
-            return okAck()
+            return {
+                errorMessage: null,
+            }
         } catch (error) {
             recordTelegramSendFailure(this.store, formatError(error), Date.now())
-            return failedAck(error)
+            return {
+                errorMessage: formatError(error),
+            }
         }
     }
 }

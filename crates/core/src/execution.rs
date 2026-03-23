@@ -122,6 +122,10 @@ impl ExecutionState {
         self.progressive.finish(final_text, now_ms)
     }
 
+    pub fn assistant_message_id(&self) -> Option<&str> {
+        self.assistant_message_id.as_deref()
+    }
+
     fn observe_message_updated(
         &mut self,
         session_id: String,

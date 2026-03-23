@@ -68,7 +68,9 @@ fn to_js_value<T>(value: &T) -> Result<JsValue, JsValue>
 where
     T: Serialize,
 {
-    serde_wasm_bindgen::to_value(value).map_err(|error| js_error(error.to_string()))
+    value
+        .serialize(&serde_wasm_bindgen::Serializer::new().serialize_missing_as_null(true))
+        .map_err(|error| js_error(error.to_string()))
 }
 
 fn js_error(message: impl Into<String>) -> JsValue {

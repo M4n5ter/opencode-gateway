@@ -1,4 +1,4 @@
-import { loadGatewayBindingModule } from "../packages/opencode-plugin/src/binding.ts"
+import { loadGatewayBindingModule } from "../packages/opencode-plugin/src/binding"
 
 const module = await loadGatewayBindingModule()
 if (typeof module.gatewayStatus !== "function") {
@@ -13,8 +13,8 @@ if (typeof module.normalizeCronTimeZone !== "function") {
 if (typeof module.prepareInboundExecution !== "function") {
     throw new Error("prepareInboundExecution export is unavailable")
 }
-if (typeof module.ExecutionHandle?.progressive !== "function") {
-    throw new Error("ExecutionHandle progressive constructor is unavailable")
+if (typeof module.OpencodeExecutionDriver !== "function") {
+    throw new Error("OpencodeExecutionDriver constructor is unavailable")
 }
 
 module.gatewayStatus()
@@ -40,4 +40,60 @@ const prepared = module.prepareInboundExecution({
     sender: "telegram:7",
     body: "hello",
 })
-module.ExecutionHandle.progressive(prepared, "ses_smoke", 400)
+const driver = new module.OpencodeExecutionDriver({
+    conversationKey: prepared.conversationKey,
+    persistedSessionId: null,
+    mode: "progressive",
+    flushIntervalMs: 400,
+    prompts: [{ promptKey: "synthetic:smoke:0", prompt: prepared.prompt }],
+})
+const firstStep = driver.start()
+if (firstStep.kind !== "command" || firstStep.command.kind !== "createSession") {
+    throw new Error("driver did not request createSession")
+}
+
+const createResult = {
+    kind: "createSession",
+    sessionId: "session-smoke",
+}
+const idleBeforePrompt = driver.resume(createResult)
+if (idleBeforePrompt.kind !== "command" || idleBeforePrompt.command.kind !== "waitUntilIdle") {
+    throw new Error("driver did not wait for idle before prompt dispatch")
+}
+
+const sendPrompt = driver.resume({
+    kind: "waitUntilIdle",
+    sessionId: "session-smoke",
+})
+if (sendPrompt.kind !== "command" || sendPrompt.command.kind !== "sendPromptAsync") {
+    throw new Error("driver did not issue sendPromptAsync")
+}
+
+const awaitPromptResponse = driver.resume({
+    kind: "sendPromptAsync",
+    sessionId: "session-smoke",
+})
+if (awaitPromptResponse.kind !== "command" || awaitPromptResponse.command.kind !== "awaitPromptResponse") {
+    throw new Error("driver did not await the prompt response after sendPromptAsync")
+}
+
+const completed = driver.resume({
+    kind: "awaitPromptResponse",
+    sessionId: "session-smoke",
+    messageId: "msg_assistant_smoke",
+    parts: [
+        {
+            messageId: "msg_assistant_smoke",
+            partId: "prt_assistant_smoke",
+            type: "text",
+            text: null,
+            ignored: false,
+        },
+    ],
+})
+if (completed.kind !== "complete") {
+    throw new Error("driver did not complete after awaitPromptResponse")
+}
+if (completed.finalText !== null) {
+    throw new Error(`driver finalText must serialize as null, received ${String(completed.finalText)}`)
+}

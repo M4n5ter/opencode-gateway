@@ -11,9 +11,10 @@ inside this repo.
 The repository now uses a **Rust core + TypeScript host + `wasm-bindgen` sync bridge**
 split:
 
-- Rust owns typed contracts, validation, cron semantics, and progressive text state.
-- TypeScript owns OpenCode plugin hooks, OpenCode SDK calls, SQLite, Telegram I/O,
-  and the async execution loop.
+- Rust owns typed contracts, validation, cron semantics, progressive text state,
+  and the OpenCode execution state machine.
+- TypeScript owns OpenCode plugin hooks, thin SDK command translation, SQLite,
+  Telegram I/O, and the async host loops.
 - The WebAssembly boundary is intentionally small and synchronous.
 
 The current state of the repository is a working local gateway with:
@@ -36,7 +37,8 @@ The current state of the repository is a working local gateway with:
 ├── crates
 │   ├── core
 │   ├── ffi
-│   └── launcher
+│   ├── launcher
+│   └── runtime
 └── packages
     └── opencode-plugin
 ```
@@ -70,9 +72,20 @@ This crate now exports only a small synchronous `wasm-bindgen` surface:
 - `nextCronRunAt(...)`
 - `prepareInboundExecution(...)`
 - `prepareCronExecution(...)`
-- `ExecutionHandle`
+- `OpencodeExecutionDriver`
 
 It no longer carries the old callback-heavy FFI runtime.
+
+### `crates/runtime`
+
+Rust-owned OpenCode execution driver state.
+
+This crate owns:
+
+- host command sequencing for OpenCode session execution
+- deterministic prompt/message identity derivation
+- stale session retry policy
+- assistant-message binding and text-part aggregation during execution
 
 ### `crates/launcher`
 
@@ -99,9 +112,9 @@ This package now:
 - runs per-mailbox workers with optional reply batching
 - supports explicit mailbox route overrides so multiple gateway targets can share one session
 - runs the cron scheduler loop
-- executes OpenCode sessions through the plugin SDK
+- translates Rust-emitted OpenCode commands into thin plugin SDK calls
 - subscribes to the OpenCode SDK event stream and forwards normalized execution
-  observations into Rust-owned execution state
+  observations into Rust-owned execution drivers
 - delivers Telegram replies and private-chat draft previews
 - exposes gateway, cron, and Telegram operational tools
 
@@ -118,9 +131,11 @@ opencode-gateway serve
   -> Telegram updates are enqueued into durable mailboxes
   -> per-mailbox workers serialize ingress and optionally batch replies
   -> cron ticks enter the plugin-local executor directly
-  -> plugin executes OpenCode sessions and outbound delivery
+  -> Rust emits OpenCode host commands one step at a time
+  -> plugin executes those commands through the SDK and outbound delivery
   -> Rust remains responsible for typed contracts, prepared executions,
-     event aggregation, cron next-run calculation, and progressive delivery state
+     execution sequencing, event aggregation, cron next-run calculation,
+     and progressive delivery state
 ```
 
 ## Ownership Boundaries
@@ -131,6 +146,7 @@ opencode-gateway serve
 - validation and invariants
 - scheduling semantics
 - prepared inbound/cron execution plans
+- OpenCode execution sequencing and stale-session recovery
 - assistant-message binding and text-part aggregation
 - progressive text state and flush/finalize decisions
 - provider-agnostic gateway behavior
@@ -138,7 +154,7 @@ opencode-gateway serve
 ### TypeScript/Bun owns
 
 - OpenCode plugin entrypoints
-- OpenCode SDK calls
+- thin OpenCode SDK command execution
 - event subscription and raw event normalization
 - SQLite reads and writes
 - Telegram HTTP transport and drafts
@@ -178,8 +194,10 @@ opencode-gateway doctor
 - `nextCronRunAt(job, afterMs)`
 - `prepareInboundExecution(message)`
 - `prepareCronExecution(job)`
-- `ExecutionHandle.progressive(prepared, sessionId, flushIntervalMs)`
-- `ExecutionHandle.oneshot(prepared, sessionId, flushIntervalMs)`
+- `new OpencodeExecutionDriver(input)`
+- `OpencodeExecutionDriver.start()`
+- `OpencodeExecutionDriver.resume(result)`
+- `OpencodeExecutionDriver.observeEvent(observation, nowMs)`
 
 ## Configuration Model
 
@@ -222,8 +240,9 @@ The repository already contains:
 
 - a Cargo workspace and Bun workspace root
 - a pure Rust core crate with typed contracts and progressive state
+- a Rust runtime crate with an OpenCode execution driver
 - a sync `wasm-bindgen` bridge crate
-- Rust-owned prepared execution and event aggregation state
+- Rust-owned prepared execution, driver sequencing, and event aggregation state
 - a launcher that can materialize managed config and warm the current project
 - a plugin package with Telegram, SQLite, and cron behavior
 - plugin-local host orchestration for mailbox workers and cron dispatch

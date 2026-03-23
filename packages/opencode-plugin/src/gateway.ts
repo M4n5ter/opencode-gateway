@@ -6,9 +6,9 @@ import { GatewayCronRuntime } from "./cron/runtime"
 import { TelegramProgressiveSupport } from "./delivery/telegram"
 import { GatewayTextDelivery } from "./delivery/text"
 import { ConsoleLoggerHost } from "./host/noop"
-import { GatewayOpencodeHost } from "./host/opencode"
 import { GatewayTransportHost } from "./host/transport"
 import { GatewayMailboxRouter } from "./mailbox/router"
+import { OpencodeSdkAdapter } from "./opencode/adapter"
 import { OpencodeEventStream } from "./opencode/event-stream"
 import { OpencodeEventHub } from "./opencode/events"
 import { GatewayExecutor } from "./runtime/executor"
@@ -75,11 +75,11 @@ export async function createGatewayRuntime(
     const telegramClient = config.telegram.enabled ? new TelegramBotClient(config.telegram.botToken) : null
     const mailboxRouter = new GatewayMailboxRouter(config.mailbox.routes)
     const opencodeEvents = new OpencodeEventHub()
-    const opencode = new GatewayOpencodeHost(input.client, input.directory, opencodeEvents)
+    const opencode = new OpencodeSdkAdapter(input.client, input.directory)
     const transport = new GatewayTransportHost(telegramClient, store)
     const progressiveSupport = new TelegramProgressiveSupport(telegramClient, store, logger)
     const delivery = new GatewayTextDelivery(transport, store, progressiveSupport)
-    const executor = new GatewayExecutor(module, store, opencode, delivery, logger)
+    const executor = new GatewayExecutor(module, store, opencode, opencodeEvents, delivery, logger)
     const mailbox = new GatewayMailboxRuntime(executor, store, logger, config.mailbox)
     const cron = new GatewayCronRuntime(executor, module, store, logger, config.cron, effectiveCronTimeZone)
     const eventStream = new OpencodeEventStream(input.client, input.directory, opencodeEvents, logger)
