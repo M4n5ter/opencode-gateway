@@ -10,6 +10,7 @@ type RawGatewayConfig = {
     gateway?: {
         state_db?: unknown
         mailbox?: unknown
+        timezone?: unknown
     }
     channels?: {
         telegram?: unknown
@@ -45,6 +46,8 @@ export type GatewayMailboxConfig = {
 export type GatewayConfig = {
     configPath: string
     stateDbPath: string
+    hasLegacyGatewayTimezone: boolean
+    legacyGatewayTimezone: string | null
     mailbox: GatewayMailboxConfig
     cron: CronConfig
     telegram: TelegramConfig
@@ -64,6 +67,8 @@ export async function loadGatewayConfig(env: EnvSource = process.env): Promise<G
     return {
         configPath,
         stateDbPath: resolveStateDbPath(stateDbValue, configPath, env),
+        hasLegacyGatewayTimezone: rawConfig?.gateway?.timezone !== undefined,
+        legacyGatewayTimezone: readLegacyGatewayTimezone(rawConfig?.gateway?.timezone),
         mailbox: parseMailboxConfig(rawConfig?.gateway?.mailbox),
         cron: parseCronConfig(rawConfig?.cron),
         telegram: parseTelegramConfig(rawConfig?.channels?.telegram, env),
@@ -220,6 +225,15 @@ function readOptionalString(value: unknown, field: string): string | null {
     }
 
     return readRequiredString(value, field)
+}
+
+function readLegacyGatewayTimezone(value: unknown): string | null {
+    if (typeof value !== "string") {
+        return null
+    }
+
+    const trimmed = value.trim()
+    return trimmed.length === 0 ? null : trimmed
 }
 
 function defaultGatewayConfigPath(env: EnvSource): string {

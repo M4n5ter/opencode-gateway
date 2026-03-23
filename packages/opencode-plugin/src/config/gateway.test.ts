@@ -201,11 +201,36 @@ test("loadGatewayConfig normalizes Telegram allowlist identifiers", async () => 
             batchWindowMs: 1_500,
             routes: [],
         })
+        expect(config.hasLegacyGatewayTimezone).toBe(false)
+        expect(config.legacyGatewayTimezone).toBeNull()
         expect(config.cron).toEqual({
             enabled: true,
             tickSeconds: 5,
             maxConcurrentRuns: 1,
+            timezone: null,
         })
+    } finally {
+        await rm(root, { recursive: true, force: true })
+    }
+})
+
+test("loadGatewayConfig parses cron timezone and preserves legacy gateway timezone for warnings", async () => {
+    const root = await mkdtemp(join(tmpdir(), "opencode-gateway-config-"))
+    const configPath = join(root, "config.toml")
+
+    try {
+        await writeFile(
+            configPath,
+            ["[gateway]", 'timezone = "UTC"', "", "[cron]", 'timezone = "Asia/Shanghai"'].join("\n"),
+        )
+
+        const config = await loadGatewayConfig({
+            OPENCODE_GATEWAY_CONFIG: configPath,
+        })
+
+        expect(config.hasLegacyGatewayTimezone).toBe(true)
+        expect(config.legacyGatewayTimezone).toBe("UTC")
+        expect(config.cron.timezone).toBe("Asia/Shanghai")
     } finally {
         await rm(root, { recursive: true, force: true })
     }

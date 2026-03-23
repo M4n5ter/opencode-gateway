@@ -13,21 +13,30 @@ pub fn gateway_status() -> Result<JsValue, JsValue> {
 }
 
 #[wasm_bindgen(js_name = nextCronRunAt)]
-pub fn next_cron_run_at(job: JsValue, after_ms: f64) -> Result<f64, JsValue> {
+pub fn next_cron_run_at(job: JsValue, after_ms: f64, time_zone: String) -> Result<f64, JsValue> {
     let job: BindingCronJobSpec =
         serde_wasm_bindgen::from_value(job).map_err(|error| js_error(error.to_string()))?;
     let after_ms = parse_js_timestamp(after_ms, "afterMs").map_err(js_error)?;
-    let next = next_cron_run_at_value(job, after_ms).map_err(js_error)?;
+    let next = next_cron_run_at_value(job, after_ms, &time_zone).map_err(js_error)?;
     Ok(next as f64)
+}
+
+#[wasm_bindgen(js_name = normalizeCronTimeZone)]
+pub fn normalize_cron_time_zone(time_zone: String) -> Result<String, JsValue> {
+    normalize_cron_time_zone_value(&time_zone).map_err(js_error)
 }
 
 fn gateway_status_value() -> BindingGatewayStatus {
     BindingGatewayStatus::from(opencode_gateway_core::GatewayEngine::new().status())
 }
 
-fn next_cron_run_at_value(job: BindingCronJobSpec, after_ms: u64) -> Result<u64, String> {
+fn next_cron_run_at_value(
+    job: BindingCronJobSpec,
+    after_ms: u64,
+    time_zone: &str,
+) -> Result<u64, String> {
     let next = opencode_gateway_core::CronJobSpec::try_from(job)?
-        .next_run_at(after_ms)
+        .next_run_at(after_ms, time_zone)
         .map_err(|error| error.to_string())?;
 
     if next > JS_MAX_SAFE_INTEGER {
@@ -37,6 +46,10 @@ fn next_cron_run_at_value(job: BindingCronJobSpec, after_ms: u64) -> Result<u64,
     }
 
     Ok(next)
+}
+
+fn normalize_cron_time_zone_value(time_zone: &str) -> Result<String, String> {
+    opencode_gateway_core::normalize_cron_time_zone(time_zone).map_err(|error| error.to_string())
 }
 
 fn parse_js_timestamp(value: f64, field: &str) -> Result<u64, String> {
@@ -64,7 +77,7 @@ fn js_error(message: impl Into<String>) -> JsValue {
 
 #[cfg(test)]
 mod tests {
-    use super::next_cron_run_at_value;
+    use super::{next_cron_run_at_value, normalize_cron_time_zone_value};
     use crate::binding::BindingCronJobSpec;
 
     #[test]
@@ -79,9 +92,26 @@ mod tests {
                 delivery_topic: None,
             },
             1_735_689_600_000,
+            "UTC",
         )
         .expect("next cron occurrence");
 
         assert_eq!(next, 1_735_722_000_000);
+    }
+
+    #[test]
+    fn normalize_cron_time_zone_canonicalizes_iana_name() {
+        let time_zone =
+            normalize_cron_time_zone_value("Asia/Shanghai").expect("canonical time zone");
+
+        assert_eq!(time_zone, "Asia/Shanghai");
+    }
+
+    #[test]
+    fn normalize_cron_time_zone_rejects_invalid_value() {
+        let error =
+            normalize_cron_time_zone_value("Mars/Olympus").expect_err("expected invalid time zone");
+
+        assert!(error.contains("invalid cron time zone"));
     }
 }

@@ -7,6 +7,9 @@ if (typeof module.gatewayStatus !== "function") {
 if (typeof module.nextCronRunAt !== "function") {
     throw new Error("nextCronRunAt export is unavailable")
 }
+if (typeof module.normalizeCronTimeZone !== "function") {
+    throw new Error("normalizeCronTimeZone export is unavailable")
+}
 if (typeof module.prepareInboundExecution !== "function") {
     throw new Error("prepareInboundExecution export is unavailable")
 }
@@ -15,6 +18,7 @@ if (typeof module.ExecutionHandle?.progressive !== "function") {
 }
 
 module.gatewayStatus()
+module.normalizeCronTimeZone("Asia/Shanghai")
 module.nextCronRunAt(
     {
         id: "nightly",
@@ -25,6 +29,7 @@ module.nextCronRunAt(
         deliveryTopic: null,
     },
     1_735_689_600_000,
+    "UTC",
 )
 const prepared = module.prepareInboundExecution({
     deliveryTarget: {

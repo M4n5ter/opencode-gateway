@@ -2,12 +2,14 @@ type RawCronConfig = {
     enabled?: unknown
     tick_seconds?: unknown
     max_concurrent_runs?: unknown
+    timezone?: unknown
 }
 
 export type CronConfig = {
     enabled: boolean
     tickSeconds: number
     maxConcurrentRuns: number
+    timezone: string | null
 }
 
 export function parseCronConfig(value: unknown): CronConfig {
@@ -17,6 +19,7 @@ export function parseCronConfig(value: unknown): CronConfig {
         enabled: readBoolean(table.enabled, "cron.enabled", true),
         tickSeconds: readPositiveInteger(table.tick_seconds, "cron.tick_seconds", 5),
         maxConcurrentRuns: readPositiveInteger(table.max_concurrent_runs, "cron.max_concurrent_runs", 1),
+        timezone: readOptionalString(table.timezone, "cron.timezone"),
     }
 }
 
@@ -58,4 +61,21 @@ function readPositiveInteger(value: unknown, field: string, fallback: number): n
     }
 
     return value
+}
+
+function readOptionalString(value: unknown, field: string): string | null {
+    if (value === undefined) {
+        return null
+    }
+
+    if (typeof value !== "string") {
+        throw new Error(`${field} must be a string when present`)
+    }
+
+    const trimmed = value.trim()
+    if (trimmed.length === 0) {
+        throw new Error(`${field} must not be empty when present`)
+    }
+
+    return trimmed
 }

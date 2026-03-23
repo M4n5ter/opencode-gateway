@@ -77,6 +77,7 @@ state_db = "/home/you/.local/share/opencode-gateway/state.db"
 enabled = true
 tick_seconds = 5
 max_concurrent_runs = 1
+# timezone = "Asia/Shanghai"
 
 [channels.telegram]
 enabled = false
@@ -85,6 +86,9 @@ poll_timeout_seconds = 25
 allowed_chats = []
 allowed_users = []
 ```
+
+When `cron.timezone` is omitted, recurring cron expressions are interpreted in the
+runtime's local time zone.
 
 3. Create the OpenCode config at:
 

@@ -26,11 +26,19 @@ test("cron reconcile skips missed runs and marks stale running rows abandoned", 
         })
         const staleRunId = store.insertCronRun("nightly", 1_735_689_600_000, 200)
 
-        const runtime = new GatewayCronRuntime(createExecutorStub(), createBindingStub(), store, new MemoryLogger(), {
-            enabled: true,
-            tickSeconds: 5,
-            maxConcurrentRuns: 1,
-        })
+        const runtime = new GatewayCronRuntime(
+            createExecutorStub(),
+            createBindingStub(),
+            store,
+            new MemoryLogger(),
+            {
+                enabled: true,
+                tickSeconds: 5,
+                maxConcurrentRuns: 1,
+                timezone: null,
+            },
+            "UTC",
+        )
 
         await runtime.reconcileOnce(1_735_700_000_000)
 
@@ -63,11 +71,19 @@ test("cron tick executes due jobs and records successful runs", async () => {
             recordedAtMs: 100,
         })
 
-        const runtime = new GatewayCronRuntime(createExecutorStub(), createBindingStub(), store, new MemoryLogger(), {
-            enabled: true,
-            tickSeconds: 5,
-            maxConcurrentRuns: 1,
-        })
+        const runtime = new GatewayCronRuntime(
+            createExecutorStub(),
+            createBindingStub(),
+            store,
+            new MemoryLogger(),
+            {
+                enabled: true,
+                tickSeconds: 5,
+                maxConcurrentRuns: 1,
+                timezone: null,
+            },
+            "UTC",
+        )
 
         await runtime.tickOnce(1_735_689_600_000)
         await Bun.sleep(0)
@@ -88,6 +104,47 @@ test("cron tick executes due jobs and records successful runs", async () => {
     }
 })
 
+test("cron reconcile rebases enabled jobs when the effective time zone changes", async () => {
+    const db = new Database(":memory:")
+
+    try {
+        migrateGatewayDatabase(db)
+        const store = new SqliteStore(db)
+        store.upsertCronJob({
+            id: "nightly",
+            schedule: "0 9 * * *",
+            prompt: "Summarize work",
+            deliveryChannel: null,
+            deliveryTarget: null,
+            deliveryTopic: null,
+            enabled: true,
+            nextRunAtMs: 1_735_722_000_000,
+            recordedAtMs: 100,
+        })
+
+        const runtime = new GatewayCronRuntime(
+            createExecutorStub(),
+            createBindingStub(),
+            store,
+            new MemoryLogger(),
+            {
+                enabled: true,
+                tickSeconds: 5,
+                maxConcurrentRuns: 1,
+                timezone: "Asia/Shanghai",
+            },
+            "Asia/Shanghai",
+        )
+
+        await runtime.reconcileOnce(1_735_700_000_000)
+
+        expect(store.getCronJob("nightly")?.nextRunAtMs).toBe(1_735_786_800_000)
+        expect(store.getStateValue("cron.effective_timezone")).toBe("Asia/Shanghai")
+    } finally {
+        db.close()
+    }
+})
+
 function createBindingStub(): GatewayContract {
     return {
         gatewayStatus() {
@@ -98,8 +155,15 @@ function createBindingStub(): GatewayContract {
                 hasWebUi: false,
             }
         },
-        nextCronRunAt(_job: BindingCronJobSpec, afterMs: number): number {
+        nextCronRunAt(_job: BindingCronJobSpec, afterMs: number, timeZone: string): number {
+            if (timeZone === "Asia/Shanghai") {
+                return 1_735_786_800_000
+            }
+
             return afterMs < 1_735_722_000_000 ? 1_735_722_000_000 : 1_735_808_400_000
+        },
+        normalizeCronTimeZone(timeZone: string): string {
+            return timeZone.trim()
         },
     }
 }

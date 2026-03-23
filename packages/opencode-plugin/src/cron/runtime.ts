@@ -14,6 +14,9 @@ export type UpsertCronJobInput = {
     deliveryTopic: string | null
 }
 
+const CRON_EFFECTIVE_TIME_ZONE_KEY = "cron.effective_timezone"
+const LEGACY_CRON_TIME_ZONE = "UTC"
+
 export class GatewayCronRuntime {
     private readonly runningJobIds = new Set<string>()
     private running = false
@@ -24,6 +27,7 @@ export class GatewayCronRuntime {
         private readonly store: SqliteStore,
         private readonly logger: BindingLoggerHost,
         private readonly config: CronConfig,
+        private readonly effectiveTimeZone: string,
     ) {}
 
     isEnabled(): boolean {
@@ -36,6 +40,10 @@ export class GatewayCronRuntime {
 
     runningJobs(): number {
         return this.runningJobIds.size
+    }
+
+    timeZone(): string {
+        return this.effectiveTimeZone
     }
 
     start(): void {
@@ -56,7 +64,7 @@ export class GatewayCronRuntime {
     upsertJob(input: UpsertCronJobInput): CronJobRecord {
         const normalized = normalizeUpsertInput(input)
         const recordedAtMs = Date.now()
-        const nextRunAtMs = computeNextRunAt(this.contract, normalized, recordedAtMs)
+        const nextRunAtMs = computeNextRunAt(this.contract, normalized, recordedAtMs, this.effectiveTimeZone)
 
         this.store.upsertCronJob({
             ...normalized,
@@ -102,14 +110,23 @@ export class GatewayCronRuntime {
             this.logger.log("warn", `abandoned ${abandoned} stale cron runs on startup`)
         }
 
-        for (const job of this.store.listOverdueCronJobs(nowMs)) {
-            try {
-                const nextRunAtMs = computeNextRunAt(this.contract, job, nowMs)
-                this.store.updateCronJobNextRun(job.id, nextRunAtMs, nowMs)
-            } catch (error) {
-                this.logger.log("error", `failed to rebase cron job ${job.id}: ${formatError(error)}`)
-            }
+        const storedTimeZone = this.readStoredEffectiveTimeZone()
+        const previousTimeZone = storedTimeZone ?? LEGACY_CRON_TIME_ZONE
+        if (previousTimeZone !== this.effectiveTimeZone) {
+            const message =
+                storedTimeZone === null
+                    ? `rebasing enabled cron jobs from legacy ${LEGACY_CRON_TIME_ZONE} semantics to ${this.effectiveTimeZone}`
+                    : `cron time zone changed from ${previousTimeZone} to ${this.effectiveTimeZone}; rebasing enabled jobs`
+            this.logger.log("warn", message)
+            this.rebaseJobs(
+                this.store.listCronJobs().filter((job) => job.enabled),
+                nowMs,
+            )
+        } else {
+            this.rebaseJobs(this.store.listOverdueCronJobs(nowMs), nowMs)
         }
+
+        this.store.putStateValue(CRON_EFFECTIVE_TIME_ZONE_KEY, this.effectiveTimeZone, nowMs)
     }
 
     async tickOnce(nowMs = Date.now()): Promise<void> {
@@ -146,7 +163,12 @@ export class GatewayCronRuntime {
     ): Promise<BindingRuntimeReport> {
         const startedAtMs = Date.now()
         if (nextRunBaseMs !== null) {
-            const nextRunAtMs = computeNextRunAt(this.contract, job, Math.max(nextRunBaseMs, scheduledForMs))
+            const nextRunAtMs = computeNextRunAt(
+                this.contract,
+                job,
+                Math.max(nextRunBaseMs, scheduledForMs),
+                this.effectiveTimeZone,
+            )
             this.store.updateCronJobNextRun(job.id, nextRunAtMs, startedAtMs)
         }
 
@@ -170,6 +192,34 @@ export class GatewayCronRuntime {
         }
 
         return job
+    }
+
+    private rebaseJobs(jobs: CronJobRecord[], nowMs: number): void {
+        for (const job of jobs) {
+            try {
+                const nextRunAtMs = computeNextRunAt(this.contract, job, nowMs, this.effectiveTimeZone)
+                this.store.updateCronJobNextRun(job.id, nextRunAtMs, nowMs)
+            } catch (error) {
+                this.logger.log("error", `failed to rebase cron job ${job.id}: ${formatError(error)}`)
+            }
+        }
+    }
+
+    private readStoredEffectiveTimeZone(): string | null {
+        const stored = this.store.getStateValue(CRON_EFFECTIVE_TIME_ZONE_KEY)
+        if (stored === null) {
+            return null
+        }
+
+        try {
+            return this.contract.normalizeCronTimeZone(stored)
+        } catch (error) {
+            this.logger.log(
+                "warn",
+                `stored cron time zone is invalid (${stored}); treating as legacy ${LEGACY_CRON_TIME_ZONE}: ${formatError(error)}`,
+            )
+            return null
+        }
     }
 }
 
@@ -251,8 +301,9 @@ function computeNextRunAt(
         "id" | "schedule" | "prompt" | "deliveryChannel" | "deliveryTarget" | "deliveryTopic"
     >,
     afterMs: number,
+    timeZone: string,
 ): number {
-    const nextRunAt = contract.nextCronRunAt(toBindingCronJobSpec(job), afterMs)
+    const nextRunAt = contract.nextCronRunAt(toBindingCronJobSpec(job), afterMs, timeZone)
     if (!Number.isSafeInteger(nextRunAt) || nextRunAt < 0) {
         throw new Error(`next cron run at is out of range for JavaScript: ${nextRunAt}`)
     }

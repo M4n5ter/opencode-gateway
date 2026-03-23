@@ -19,6 +19,7 @@ function formatGatewayStatus(status: GatewayPluginStatus): string {
         `supports_telegram=${status.supportsTelegram}`,
         `supports_cron=${status.supportsCron}`,
         `has_web_ui=${status.hasWebUi}`,
+        `cron_timezone=${status.cronTimezone}`,
         `cron_enabled=${status.cronEnabled}`,
         `cron_polling=${status.cronPolling}`,
         `cron_running_jobs=${status.cronRunningJobs}`,

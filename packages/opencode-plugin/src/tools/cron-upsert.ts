@@ -2,11 +2,12 @@ import type { ToolDefinition } from "@opencode-ai/plugin"
 import { tool } from "@opencode-ai/plugin"
 
 import type { GatewayCronRuntime } from "../cron/runtime"
-import { formatUnixMsAsUtc } from "./time"
+import { formatUnixMsAsUtc, formatUnixMsInTimeZone } from "./time"
 
 export function createCronUpsertTool(runtime: GatewayCronRuntime): ToolDefinition {
     return tool({
-        description: "Create or replace a persisted gateway cron job. The schedule is interpreted in UTC.",
+        description:
+            "Create or replace a persisted gateway cron job. The schedule uses cron.timezone or the runtime local time zone.",
         args: {
             id: tool.schema.string().min(1),
             schedule: tool.schema.string().min(1),
@@ -17,6 +18,7 @@ export function createCronUpsertTool(runtime: GatewayCronRuntime): ToolDefinitio
             delivery_topic: tool.schema.string().optional(),
         },
         async execute(args) {
+            const timeZone = runtime.timeZone()
             const job = runtime.upsertJob({
                 id: args.id,
                 schedule: args.schedule,
@@ -31,7 +33,9 @@ export function createCronUpsertTool(runtime: GatewayCronRuntime): ToolDefinitio
                 `id=${job.id}`,
                 `enabled=${job.enabled}`,
                 `schedule=${job.schedule}`,
+                `timezone=${timeZone}`,
                 `next_run_at_ms=${job.nextRunAtMs}`,
+                `next_run_at_local=${formatUnixMsInTimeZone(job.nextRunAtMs, timeZone)}`,
                 `next_run_at_utc=${formatUnixMsAsUtc(job.nextRunAtMs)}`,
             ].join("\n")
         },

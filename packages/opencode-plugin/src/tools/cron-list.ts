@@ -2,11 +2,11 @@ import type { ToolDefinition } from "@opencode-ai/plugin"
 import { tool } from "@opencode-ai/plugin"
 
 import type { GatewayCronRuntime } from "../cron/runtime"
-import { formatUnixMsAsUtc } from "./time"
+import { formatUnixMsAsUtc, formatUnixMsInTimeZone } from "./time"
 
 export function createCronListTool(runtime: GatewayCronRuntime): ToolDefinition {
     return tool({
-        description: "List persisted gateway cron jobs. Cron schedules are interpreted in UTC.",
+        description: "List persisted gateway cron jobs. Schedules use cron.timezone or the runtime local time zone.",
         args: {},
         async execute() {
             const jobs = runtime.listJobs()
@@ -14,17 +14,19 @@ export function createCronListTool(runtime: GatewayCronRuntime): ToolDefinition 
                 return "no cron jobs"
             }
 
-            return jobs.map(formatCronJob).join("\n\n")
+            return jobs.map((job) => formatCronJob(job, runtime.timeZone())).join("\n\n")
         },
     })
 }
 
-function formatCronJob(job: ReturnType<GatewayCronRuntime["listJobs"]>[number]): string {
+function formatCronJob(job: ReturnType<GatewayCronRuntime["listJobs"]>[number], timeZone: string): string {
     return [
         `id=${job.id}`,
         `enabled=${job.enabled}`,
         `schedule=${job.schedule}`,
+        `timezone=${timeZone}`,
         `next_run_at_ms=${job.nextRunAtMs}`,
+        `next_run_at_local=${formatUnixMsInTimeZone(job.nextRunAtMs, timeZone)}`,
         `next_run_at_utc=${formatUnixMsAsUtc(job.nextRunAtMs)}`,
         `delivery=${formatDelivery(job.deliveryChannel, job.deliveryTarget, job.deliveryTopic)}`,
         `prompt=${job.prompt}`,

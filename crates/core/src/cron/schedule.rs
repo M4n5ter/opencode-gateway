@@ -1,6 +1,7 @@
 use std::str::FromStr;
 
 use chrono::{TimeZone, Utc};
+use chrono_tz::Tz;
 use cron::Schedule;
 
 use super::job::CronValidationError;
@@ -17,15 +18,33 @@ pub(super) fn normalize_schedule(value: &str) -> Result<String, CronValidationEr
     Ok(trimmed.to_owned())
 }
 
-pub(super) fn next_run_at(schedule: &str, after_unix_ms: u64) -> Result<u64, CronValidationError> {
+pub fn normalize_time_zone(value: &str) -> Result<String, CronValidationError> {
+    parse_time_zone(value).map(|time_zone| time_zone.to_string())
+}
+
+pub(super) fn next_run_at(
+    schedule: &str,
+    after_unix_ms: u64,
+    time_zone: &str,
+) -> Result<u64, CronValidationError> {
     let cron = parse_schedule(schedule)?;
+    let time_zone = parse_time_zone(time_zone)?;
+    next_run_at_in_time_zone(&cron, after_unix_ms, &time_zone)
+}
+
+fn next_run_at_in_time_zone(
+    schedule: &Schedule,
+    after_unix_ms: u64,
+    time_zone: &Tz,
+) -> Result<u64, CronValidationError> {
     let after_unix_ms =
         i64::try_from(after_unix_ms).map_err(|_| CronValidationError::NextOccurrenceOutOfRange)?;
     let start = Utc
         .timestamp_millis_opt(after_unix_ms)
         .single()
         .ok_or(CronValidationError::NextOccurrenceOutOfRange)?;
-    let next = cron
+    let start = start.with_timezone(time_zone);
+    let next = schedule
         .after(&start)
         .next()
         .ok_or(CronValidationError::NextOccurrenceOutOfRange)?;
@@ -40,6 +59,17 @@ fn parse_schedule(value: &str) -> Result<Schedule, CronValidationError> {
 
     Schedule::from_str(&normalized)
         .map_err(|error| CronValidationError::InvalidSchedule(error.to_string()))
+}
+
+fn parse_time_zone(value: &str) -> Result<Tz, CronValidationError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(CronValidationError::InvalidTimeZone(
+            "time zone must not be empty".to_owned(),
+        ));
+    }
+
+    Tz::from_str(trimmed).map_err(|error| CronValidationError::InvalidTimeZone(error.to_string()))
 }
 
 fn normalize_for_cron_parser(value: &str) -> String {
@@ -58,7 +88,7 @@ fn validate_field_count(value: &str) -> Result<(), CronValidationError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{next_run_at, normalize_schedule};
+    use super::{next_run_at, normalize_schedule, normalize_time_zone};
     use crate::CronValidationError;
 
     #[test]
@@ -70,8 +100,23 @@ mod tests {
 
     #[test]
     fn recurring_cron_computes_next_future_occurrence() {
-        let next = next_run_at("0 9 * * *", 1_735_689_600_000).expect("next occurrence");
+        let next = next_run_at("0 9 * * *", 1_735_689_600_000, "UTC").expect("next occurrence");
 
         assert_eq!(next, 1_735_722_000_000);
+    }
+
+    #[test]
+    fn recurring_cron_computes_next_future_occurrence_in_local_time_zone() {
+        let next =
+            next_run_at("0 9 * * *", 1_735_689_600_000, "Asia/Shanghai").expect("next occurrence");
+
+        assert_eq!(next, 1_735_693_200_000);
+    }
+
+    #[test]
+    fn recurring_cron_rejects_invalid_time_zone() {
+        let error = normalize_time_zone("Mars/Olympus").expect_err("expected invalid time zone");
+
+        assert!(matches!(error, CronValidationError::InvalidTimeZone(_)));
     }
 }

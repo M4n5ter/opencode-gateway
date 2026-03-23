@@ -42,6 +42,7 @@ pub enum CronValidationError {
     EmptyId,
     EmptySchedule,
     InvalidSchedule(String),
+    InvalidTimeZone(String),
     EmptyPrompt,
     NextOccurrenceOutOfRange,
 }
@@ -52,6 +53,7 @@ impl Display for CronValidationError {
             Self::EmptyId => f.write_str("cron job id must not be empty"),
             Self::EmptySchedule => f.write_str("cron schedule must not be empty"),
             Self::InvalidSchedule(message) => write!(f, "invalid cron schedule: {message}"),
+            Self::InvalidTimeZone(message) => write!(f, "invalid cron time zone: {message}"),
             Self::EmptyPrompt => f.write_str("cron prompt must not be empty"),
             Self::NextOccurrenceOutOfRange => {
                 f.write_str("next cron occurrence is out of range for unix milliseconds")
@@ -128,9 +130,13 @@ impl CronJobSpec {
     ///
     /// Returns a [`CronValidationError`] when the schedule is invalid or the next occurrence
     /// cannot be represented as unix milliseconds.
-    pub fn next_run_at(&self, after_unix_ms: u64) -> Result<u64, CronValidationError> {
+    pub fn next_run_at(
+        &self,
+        after_unix_ms: u64,
+        time_zone: &str,
+    ) -> Result<u64, CronValidationError> {
         self.validate()?;
-        next_run_at(&self.schedule, after_unix_ms)
+        next_run_at(&self.schedule, after_unix_ms, time_zone)
     }
 }
 

@@ -11,7 +11,7 @@ pub mod status;
 
 pub use channel::{ChannelKind, TargetKey};
 pub use conversation::ConversationKey;
-pub use cron::{CronJobId, CronJobSpec, CronValidationError};
+pub use cron::{CronJobId, CronJobSpec, CronValidationError, normalize_cron_time_zone};
 pub use engine::{GatewayEngine, GatewayPlan};
 pub use execution::{ExecutionObservation, ExecutionRole, ExecutionState, PreparedExecution};
 pub use message::{

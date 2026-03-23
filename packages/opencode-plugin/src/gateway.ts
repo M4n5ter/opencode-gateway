@@ -23,6 +23,7 @@ export type GatewayPluginStatus = {
     supportsTelegram: boolean
     supportsCron: boolean
     hasWebUi: boolean
+    cronTimezone: string
     cronEnabled: boolean
     cronPolling: boolean
     cronRunningJobs: number
@@ -47,6 +48,7 @@ export class GatewayPluginRuntime {
             supportsTelegram: rustStatus.supportsTelegram,
             supportsCron: rustStatus.supportsCron,
             hasWebUi: rustStatus.hasWebUi,
+            cronTimezone: this.cron.timeZone(),
             cronEnabled: this.cron.isEnabled(),
             cronPolling: this.cron.isRunning(),
             cronRunningJobs: this.cron.runningJobs(),
@@ -62,8 +64,14 @@ export async function createGatewayRuntime(
     input: PluginInput,
 ): Promise<GatewayPluginRuntime> {
     const config = await loadGatewayConfig()
-    const store = await openSqliteStore(config.stateDbPath)
     const logger = new ConsoleLoggerHost()
+    if (config.hasLegacyGatewayTimezone) {
+        const suffix = config.legacyGatewayTimezone === null ? "" : ` (${config.legacyGatewayTimezone})`
+        logger.log("warn", `gateway.timezone${suffix} is ignored; use cron.timezone instead`)
+    }
+
+    const effectiveCronTimeZone = resolveEffectiveCronTimeZone(module, config)
+    const store = await openSqliteStore(config.stateDbPath)
     const telegramClient = config.telegram.enabled ? new TelegramBotClient(config.telegram.botToken) : null
     const mailboxRouter = new GatewayMailboxRouter(config.mailbox.routes)
     const opencodeEvents = new OpencodeEventHub()
@@ -73,7 +81,7 @@ export async function createGatewayRuntime(
     const delivery = new GatewayTextDelivery(transport, store, progressiveSupport)
     const executor = new GatewayExecutor(module, store, opencode, delivery, logger)
     const mailbox = new GatewayMailboxRuntime(executor, store, logger, config.mailbox)
-    const cron = new GatewayCronRuntime(executor, module, store, logger, config.cron)
+    const cron = new GatewayCronRuntime(executor, module, store, logger, config.cron, effectiveCronTimeZone)
     const eventStream = new OpencodeEventStream(input.client, input.directory, opencodeEvents, logger)
     const telegramPolling =
         config.telegram.enabled && telegramClient !== null
@@ -94,4 +102,21 @@ export async function createGatewayRuntime(
     telegram.start()
 
     return new GatewayPluginRuntime(module, executor, cron, telegram)
+}
+
+function resolveEffectiveCronTimeZone(
+    module: GatewayBindingModule,
+    config: Awaited<ReturnType<typeof loadGatewayConfig>>,
+): string {
+    const candidate = config.cron.timezone ?? resolveRuntimeLocalTimeZone()
+    return module.normalizeCronTimeZone(candidate)
+}
+
+function resolveRuntimeLocalTimeZone(): string {
+    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
+    if (typeof timeZone !== "string" || timeZone.trim().length === 0) {
+        throw new Error("runtime local time zone could not be determined")
+    }
+
+    return timeZone
 }

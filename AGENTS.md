@@ -212,7 +212,9 @@ The SQLite layer currently revolves around:
 - `cron_runs`
 - `kv_state`
 
-The current cron implementation interprets recurring cron expressions in `UTC` only.
+The current cron implementation interprets recurring cron expressions in the effective
+cron time zone, using `cron.timezone` when configured and otherwise the runtime's
+local time zone.
 
 ## What Exists Today
 

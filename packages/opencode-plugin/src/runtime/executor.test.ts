@@ -183,6 +183,9 @@ function createModule() {
         nextCronRunAt() {
             return 1_735_722_000_000
         },
+        normalizeCronTimeZone(timeZone: string) {
+            return timeZone.trim()
+        },
         prepareInboundExecution(message: BindingInboundMessage): BindingPreparedExecution {
             return {
                 conversationKey: `telegram:${message.deliveryTarget.target}`,
