@@ -19,6 +19,7 @@ import { type PromptExecutionResult, runOpencodeDriver } from "./opencode-runner
 
 const SESSION_ABORT_SETTLE_TIMEOUT_MS = 5_000
 const SESSION_ABORT_POLL_MS = 250
+const SESSION_RESIDUAL_BUSY_GRACE_POLLS = 3
 
 export class GatewayExecutor {
     private internalPromptSequence = 0
@@ -353,11 +354,11 @@ export class GatewayExecutor {
     }
 
     private async cleanupResidualBusySession(sessionId: string): Promise<void> {
-        if (!(await this.opencode.isSessionBusy(sessionId))) {
+        if (await this.waitForSessionToSettle(sessionId, SESSION_RESIDUAL_BUSY_GRACE_POLLS)) {
             return
         }
 
-        this.logger.log("warn", `aborting residual busy gateway session after prompt completion: ${sessionId}`)
+        this.logger.log("debug", `aborting residual busy gateway session after prompt completion: ${sessionId}`)
 
         try {
             await this.abortSessionAndWaitForSettle(sessionId)
@@ -367,6 +368,20 @@ export class GatewayExecutor {
                 `residual busy gateway session did not settle after abort: ${sessionId}: ${extractErrorMessage(error)}`,
             )
         }
+    }
+
+    private async waitForSessionToSettle(sessionId: string, extraPolls: number): Promise<boolean> {
+        for (let attempt = 0; attempt <= extraPolls; attempt += 1) {
+            if (!(await this.opencode.isSessionBusy(sessionId))) {
+                return true
+            }
+
+            if (attempt < extraPolls) {
+                await Bun.sleep(SESSION_ABORT_POLL_MS)
+            }
+        }
+
+        return false
     }
 
     private async abortSessionAndWaitForSettle(sessionId: string): Promise<void> {

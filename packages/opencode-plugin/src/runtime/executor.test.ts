@@ -493,7 +493,7 @@ test("GatewayExecutor aborts a residual busy session after prompt completion", a
 
         const commands: BindingOpencodeCommand[] = []
         const abortCalls: string[] = []
-        const busyStates = [true, false]
+        const busyStates = [true, true, true, true, false]
         const executor = new GatewayExecutor(
             createModule(),
             store,
@@ -548,6 +548,85 @@ test("GatewayExecutor aborts a residual busy session after prompt completion", a
         await executor.handleInboundMessage(createMessage())
 
         expect(abortCalls).toEqual(["ses_fresh"])
+        expect(commands.map((command) => command.kind)).toEqual([
+            "createSession",
+            "waitUntilIdle",
+            "sendPromptAsync",
+            "awaitPromptResponse",
+        ])
+    } finally {
+        restoreNow()
+        db.close()
+    }
+})
+
+test("GatewayExecutor lets a residual busy session settle before aborting it", async () => {
+    const db = new Database(":memory:")
+    const now = 1_735_689_600_000
+    const restoreNow = mockDateNow(now)
+
+    try {
+        migrateGatewayDatabase(db)
+        const store = new SqliteStore(db)
+        const events = new OpencodeEventHub()
+
+        const commands: BindingOpencodeCommand[] = []
+        const abortCalls: string[] = []
+        const busyStates = [true, true, false]
+        const executor = new GatewayExecutor(
+            createModule(),
+            store,
+            {
+                async execute(command: BindingOpencodeCommand): Promise<BindingOpencodeCommandResult> {
+                    commands.push(command)
+
+                    switch (command.kind) {
+                        case "createSession":
+                            return { kind: "createSession", sessionId: "ses_fresh" }
+                        case "waitUntilIdle":
+                            return { kind: "waitUntilIdle", sessionId: command.sessionId }
+                        case "sendPromptAsync":
+                            return { kind: "sendPromptAsync", sessionId: command.sessionId }
+                        case "awaitPromptResponse":
+                            return createAwaitPromptResponseResult(
+                                command.sessionId,
+                                "msg_assistant_final",
+                                "hello back",
+                            )
+                        case "lookupSession":
+                        case "appendPrompt":
+                            throw new Error("unused")
+                    }
+
+                    throw new Error(`unexpected command: ${command.kind}`)
+                },
+                async isSessionBusy() {
+                    return busyStates.shift() ?? false
+                },
+                async abortSession(sessionId: string): Promise<void> {
+                    abortCalls.push(sessionId)
+                },
+            },
+            events,
+            {
+                async openMany() {
+                    return [
+                        {
+                            mode: "oneshot" as const,
+                            async preview(): Promise<void> {},
+                            async finish(): Promise<boolean> {
+                                return true
+                            },
+                        },
+                    ]
+                },
+            },
+            new MemoryLogger(),
+        )
+
+        await executor.handleInboundMessage(createMessage())
+
+        expect(abortCalls).toEqual([])
         expect(commands.map((command) => command.kind)).toEqual([
             "createSession",
             "waitUntilIdle",
