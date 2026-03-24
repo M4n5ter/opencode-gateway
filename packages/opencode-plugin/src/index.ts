@@ -54,8 +54,8 @@ export const OpencodeGatewayPlugin: Plugin = async (input) => {
                 return
             }
 
-            const systemPrompt = runtime.sessionContext.buildSystemPrompt(sessionId)
-            if (systemPrompt !== null) {
+            const systemPrompts = await runtime.systemPrompts.buildPrompts(sessionId)
+            for (const systemPrompt of systemPrompts) {
                 output.system.push(systemPrompt)
             }
         },

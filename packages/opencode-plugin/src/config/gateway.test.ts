@@ -75,11 +75,29 @@ test("loadGatewayConfig defaults mailbox batching to off", async () => {
             OPENCODE_GATEWAY_CONFIG: configPath,
         })
 
+        expect(config.logLevel).toBe("off")
         expect(config.mailbox).toEqual({
             batchReplies: false,
             batchWindowMs: 1_500,
             routes: [],
         })
+    } finally {
+        await rm(root, { recursive: true, force: true })
+    }
+})
+
+test("loadGatewayConfig parses gateway.log_level", async () => {
+    const root = await mkdtemp(join(tmpdir(), "opencode-gateway-config-"))
+    const configPath = join(root, "config.toml")
+
+    try {
+        await writeFile(configPath, ["[gateway]", 'log_level = "warn"'].join("\n"))
+
+        const config = await loadGatewayConfig({
+            OPENCODE_GATEWAY_CONFIG: configPath,
+        })
+
+        expect(config.logLevel).toBe("warn")
     } finally {
         await rm(root, { recursive: true, force: true })
     }

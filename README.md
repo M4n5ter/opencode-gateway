@@ -51,6 +51,7 @@ Edit `opencode-gateway.toml`. Minimal example:
 ```toml
 [gateway]
 state_db = "/home/you/.local/share/opencode-gateway/state.db"
+# log_level = "warn"
 
 [cron]
 enabled = true
@@ -64,10 +65,36 @@ bot_token_env = "TELEGRAM_BOT_TOKEN"
 poll_timeout_seconds = 25
 allowed_chats = []
 allowed_users = []
+
+[[memory.entries]]
+path = "memory/project.md"
+description = "Project conventions and long-lived context"
+inject_content = true
+
+[[memory.entries]]
+path = "memory/notes"
+description = "Domain notes and operating docs"
+inject_markdown_contents = true
+globs = ["**/*.rs", "notes/**/*.txt"]
 ```
 
 When `cron.timezone` is omitted, recurring cron expressions are interpreted in
 the runtime's local time zone.
+
+Gateway plugin logs are disabled by default. Set `gateway.log_level` to one of
+`error`, `warn`, `info`, or `debug` to print that level and anything above it.
+
+Memory rules:
+
+- all entries inject their configured path and description
+- file contents are injected only when `inject_content = true`
+- directory entries default to description-only
+- `inject_markdown_contents = true` recursively injects `*.md` and `*.markdown`
+- `globs` are evaluated relative to the configured directory and may match other
+  UTF-8 text files
+- relative paths are resolved from `opencode-gateway.toml`
+- memory is injected only into gateway-managed sessions, including scheduled
+  runs and channel-bound sessions
 
 ### 3. Verify the generated config
 

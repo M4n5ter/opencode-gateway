@@ -264,6 +264,35 @@ export class SqliteStore {
         return row ? mapSessionReplyTargetRow(row) : null
     }
 
+    hasGatewaySession(sessionId: string): boolean {
+        const binding = this.db
+            .query<{ present: number }, [string]>(
+                `
+                    SELECT 1 AS present
+                    FROM session_bindings
+                    WHERE session_id = ?1
+                    LIMIT 1;
+                `,
+            )
+            .get(sessionId)
+        if (binding?.present === 1) {
+            return true
+        }
+
+        const replyTarget = this.db
+            .query<{ present: number }, [string]>(
+                `
+                    SELECT 1 AS present
+                    FROM session_reply_targets
+                    WHERE session_id = ?1
+                    LIMIT 1;
+                `,
+            )
+            .get(sessionId)
+
+        return replyTarget?.present === 1
+    }
+
     appendJournal(entry: RuntimeJournalEntry): void {
         this.db
             .query(

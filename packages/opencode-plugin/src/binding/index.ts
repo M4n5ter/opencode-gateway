@@ -9,6 +9,7 @@ export type {
     BindingInboundAttachment,
     BindingInboundMessage,
     BindingLoggerHost,
+    BindingLogLevel,
     BindingOutboundMessage,
     BindingPreparedExecution,
     BindingPromptPart,

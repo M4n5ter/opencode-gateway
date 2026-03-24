@@ -73,8 +73,10 @@ export type BindingTransportHost = {
     sendMessage(message: BindingOutboundMessage): Promise<BindingHostAck>
 }
 
+export type BindingLogLevel = "debug" | "info" | "warn" | "error"
+
 export type BindingLoggerHost = {
-    log(level: string, message: string): void
+    log(level: BindingLogLevel, message: string): void
 }
 
 export type GatewayContract = {

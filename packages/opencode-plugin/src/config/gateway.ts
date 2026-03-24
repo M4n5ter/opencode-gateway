@@ -1,7 +1,9 @@
 import { existsSync } from "node:fs"
 import { dirname, isAbsolute, join, resolve } from "node:path"
 
+import { type GatewayLogLevel, parseGatewayLogLevel } from "../host/logger"
 import { type CronConfig, parseCronConfig } from "./cron"
+import { type GatewayMemoryConfig, parseMemoryConfig } from "./memory"
 import { defaultGatewayStateDbPath, resolveGatewayConfigPath, resolveGatewayWorkspacePath } from "./paths"
 import { parseTelegramConfig, type TelegramConfig } from "./telegram"
 
@@ -9,9 +11,11 @@ type RawGatewayConfig = {
     cron?: unknown
     gateway?: {
         state_db?: unknown
+        log_level?: unknown
         mailbox?: unknown
         timezone?: unknown
     }
+    memory?: unknown
     channels?: {
         telegram?: unknown
     }
@@ -48,9 +52,11 @@ export type GatewayConfig = {
     stateDbPath: string
     mediaRootPath: string
     workspaceDirPath: string
+    logLevel: GatewayLogLevel
     hasLegacyGatewayTimezone: boolean
     legacyGatewayTimezone: string | null
     mailbox: GatewayMailboxConfig
+    memory: GatewayMemoryConfig
     cron: CronConfig
     telegram: TelegramConfig
 }
@@ -73,9 +79,11 @@ export async function loadGatewayConfig(env: EnvSource = process.env): Promise<G
         stateDbPath,
         mediaRootPath: resolveMediaRootPath(stateDbPath),
         workspaceDirPath: resolveGatewayWorkspacePath(configPath),
+        logLevel: parseGatewayLogLevel(rawConfig?.gateway?.log_level, "gateway.log_level"),
         hasLegacyGatewayTimezone: rawConfig?.gateway?.timezone !== undefined,
         legacyGatewayTimezone: readLegacyGatewayTimezone(rawConfig?.gateway?.timezone),
         mailbox: parseMailboxConfig(rawConfig?.gateway?.mailbox),
+        memory: await parseMemoryConfig(rawConfig?.memory, configPath),
         cron: parseCronConfig(rawConfig?.cron),
         telegram: parseTelegramConfig(rawConfig?.channels?.telegram, env),
     }

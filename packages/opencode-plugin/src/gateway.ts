@@ -7,9 +7,10 @@ import { GatewayCronRuntime } from "./cron/runtime"
 import { TelegramProgressiveSupport } from "./delivery/telegram"
 import { GatewayTextDelivery } from "./delivery/text"
 import { ChannelFileSender } from "./host/file-sender"
-import { ConsoleLoggerHost } from "./host/noop"
+import { ConsoleLoggerHost } from "./host/logger"
 import { GatewayTransportHost } from "./host/transport"
 import { GatewayMailboxRouter } from "./mailbox/router"
+import { GatewayMemoryPromptProvider } from "./memory/prompt"
 import { OpencodeSdkAdapter } from "./opencode/adapter"
 import { OpencodeEventStream } from "./opencode/event-stream"
 import { OpencodeEventHub } from "./opencode/events"
@@ -21,6 +22,7 @@ import { getOrCreateRuntimeSingleton } from "./runtime/runtime-singleton"
 import { GatewaySessionContext } from "./session/context"
 import { resolveConversationKeyForTarget } from "./session/conversation-key"
 import { ChannelSessionSwitcher } from "./session/switcher"
+import { GatewaySystemPromptBuilder } from "./session/system-prompt"
 import { openSqliteStore } from "./store/sqlite"
 import { TelegramBotClient } from "./telegram/client"
 import { TelegramInboundMediaStore } from "./telegram/media"
@@ -50,6 +52,7 @@ export class GatewayPluginRuntime {
         readonly files: ChannelFileSender,
         readonly channelSessions: ChannelSessionSwitcher,
         readonly sessionContext: GatewaySessionContext,
+        readonly systemPrompts: GatewaySystemPromptBuilder,
     ) {}
 
     status(): GatewayPluginStatus {
@@ -78,7 +81,7 @@ export async function createGatewayRuntime(
     const config = await loadGatewayConfig()
     return await getOrCreateRuntimeSingleton(config.configPath, async () => {
         await mkdir(config.workspaceDirPath, { recursive: true })
-        const logger = new ConsoleLoggerHost()
+        const logger = new ConsoleLoggerHost(config.logLevel)
         if (config.hasLegacyGatewayTimezone) {
             const suffix = config.legacyGatewayTimezone === null ? "" : ` (${config.legacyGatewayTimezone})`
             logger.log("warn", `gateway.timezone${suffix} is ignored; use cron.timezone instead`)
@@ -87,6 +90,8 @@ export async function createGatewayRuntime(
         const effectiveCronTimeZone = resolveEffectiveCronTimeZone(module, config)
         const store = await openSqliteStore(config.stateDbPath)
         const sessionContext = new GatewaySessionContext(store)
+        const memoryPrompts = new GatewayMemoryPromptProvider(config.memory, logger)
+        const systemPrompts = new GatewaySystemPromptBuilder(sessionContext, memoryPrompts)
         const telegramClient = config.telegram.enabled ? new TelegramBotClient(config.telegram.botToken) : null
         const telegramMediaStore =
             config.telegram.enabled && telegramClient !== null
@@ -162,7 +167,16 @@ export async function createGatewayRuntime(
         mailbox.start()
         telegram.start()
 
-        return new GatewayPluginRuntime(module, executor, cron, telegram, files, channelSessions, sessionContext)
+        return new GatewayPluginRuntime(
+            module,
+            executor,
+            cron,
+            telegram,
+            files,
+            channelSessions,
+            sessionContext,
+            systemPrompts,
+        )
     })
 }
 
