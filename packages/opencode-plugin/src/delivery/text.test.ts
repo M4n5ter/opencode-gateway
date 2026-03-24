@@ -320,6 +320,55 @@ test("GatewayTextDelivery does not emit late drafts after finish starts", async 
     }
 })
 
+test("GatewayTextDelivery skips whitespace-only draft previews", async () => {
+    const db = new Database(":memory:")
+
+    try {
+        migrateGatewayDatabase(db)
+        const store = new SqliteStore(db)
+        store.putStateValue("telegram.chat_type:42", "private", Date.now())
+
+        const drafts: string[] = []
+        const sends: string[] = []
+        const client = {
+            async getChat() {
+                throw new Error("unused")
+            },
+            async sendChatAction(): Promise<void> {},
+            async sendMessage(_chatId: string, text: string): Promise<void> {
+                sends.push(text)
+            },
+            async sendMessageDraft(_chatId: string, _draftId: number, text: string): Promise<void> {
+                drafts.push(text)
+            },
+        }
+
+        const delivery = new GatewayTextDelivery(
+            new GatewayTransportHost(client, store),
+            store,
+            new TelegramProgressiveSupport(client, store, createLogger()),
+        )
+
+        const session = await delivery.open(
+            {
+                channel: "telegram",
+                target: "42",
+                topic: null,
+            },
+            "auto",
+        )
+
+        await session.preview("\n\n")
+        await session.preview("hello")
+        await session.finish("\n\nhello world")
+
+        expect(drafts).toEqual(["hello"])
+        expect(sends).toEqual(["hello world"])
+    } finally {
+        db.close()
+    }
+})
+
 function createLogger() {
     return {
         log() {},

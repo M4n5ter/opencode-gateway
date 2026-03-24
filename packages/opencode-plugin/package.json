@@ -41,13 +41,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/M4n5ter/aI.git",
+    "url": "git+https://github.com/M4n5ter/opencode-gateway.git",
     "directory": "packages/opencode-plugin"
   },
   "bugs": {
-    "url": "https://github.com/M4n5ter/aI/issues"
+    "url": "https://github.com/M4n5ter/opencode-gateway/issues"
   },
-  "homepage": "https://github.com/M4n5ter/aI",
+  "homepage": "https://github.com/M4n5ter/opencode-gateway",
   "publishConfig": {
     "access": "public"
   },

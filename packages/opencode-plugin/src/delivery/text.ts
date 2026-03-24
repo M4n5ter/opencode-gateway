@@ -157,7 +157,7 @@ class ProgressiveTextDeliverySession implements TextDeliverySession {
     }
 
     async preview(text: string): Promise<void> {
-        if (this.previewFailed || this.closed) {
+        if (this.previewFailed || this.closed || text.trim().length === 0) {
             return
         }
 
