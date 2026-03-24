@@ -8,6 +8,18 @@ import { migrateGatewayDatabase } from "./migrations"
 
 export type RuntimeJournalKind = "inbound_message" | "cron_dispatch" | "delivery" | "mailbox_enqueue" | "mailbox_flush"
 export type CronRunStatus = "running" | "succeeded" | "failed" | "abandoned"
+export type ScheduleJobKind = "cron" | "once"
+
+export type CronRunRecord = {
+    id: number
+    jobId: string
+    scheduledForMs: number
+    startedAtMs: number
+    finishedAtMs: number | null
+    status: CronRunStatus
+    responseText: string | null
+    errorMessage: string | null
+}
 
 export type RuntimeJournalEntry = {
     kind: RuntimeJournalKind
@@ -18,7 +30,9 @@ export type RuntimeJournalEntry = {
 
 export type CronJobRecord = {
     id: string
-    schedule: string
+    kind: ScheduleJobKind
+    schedule: string | null
+    runAtMs: number | null
     prompt: string
     deliveryChannel: string | null
     deliveryTarget: string | null
@@ -53,7 +67,9 @@ export type MailboxEntryAttachmentRecord = {
 
 export type PersistCronJobInput = {
     id: string
-    schedule: string
+    kind: ScheduleJobKind
+    schedule: string | null
+    runAtMs: number | null
     prompt: string
     deliveryChannel: string | null
     deliveryTarget: string | null
@@ -536,13 +552,18 @@ export class SqliteStore {
     upsertCronJob(input: PersistCronJobInput): void {
         assertSafeInteger(input.nextRunAtMs, "cron next_run_at_ms")
         assertSafeInteger(input.recordedAtMs, "cron recordedAtMs")
+        if (input.runAtMs !== null) {
+            assertSafeInteger(input.runAtMs, "cron run_at_ms")
+        }
 
         this.db
             .query(
                 `
                     INSERT INTO cron_jobs (
                         id,
+                        kind,
                         schedule,
+                        run_at_ms,
                         prompt,
                         delivery_channel,
                         delivery_target,
@@ -552,9 +573,11 @@ export class SqliteStore {
                         created_at_ms,
                         updated_at_ms
                     )
-                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)
+                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)
                     ON CONFLICT(id) DO UPDATE SET
+                        kind = excluded.kind,
                         schedule = excluded.schedule,
+                        run_at_ms = excluded.run_at_ms,
                         prompt = excluded.prompt,
                         delivery_channel = excluded.delivery_channel,
                         delivery_target = excluded.delivery_target,
@@ -566,7 +589,9 @@ export class SqliteStore {
             )
             .run(
                 input.id,
-                input.schedule,
+                input.kind,
+                encodeStoredSchedule(input.kind, input.schedule),
+                input.runAtMs,
                 input.prompt,
                 input.deliveryChannel,
                 input.deliveryTarget,
@@ -583,7 +608,9 @@ export class SqliteStore {
                 `
                     SELECT
                         id,
+                        kind,
                         schedule,
+                        run_at_ms,
                         prompt,
                         delivery_channel,
                         delivery_target,
@@ -607,7 +634,9 @@ export class SqliteStore {
                 `
                     SELECT
                         id,
+                        kind,
                         schedule,
+                        run_at_ms,
                         prompt,
                         delivery_channel,
                         delivery_target,
@@ -633,7 +662,9 @@ export class SqliteStore {
                 `
                     SELECT
                         id,
+                        kind,
                         schedule,
+                        run_at_ms,
                         prompt,
                         delivery_channel,
                         delivery_target,
@@ -643,7 +674,7 @@ export class SqliteStore {
                         created_at_ms,
                         updated_at_ms
                     FROM cron_jobs
-                    WHERE enabled = 1 AND next_run_at_ms <= ?1
+                    WHERE kind = 'cron' AND enabled = 1 AND next_run_at_ms <= ?1
                     ORDER BY next_run_at_ms ASC, id ASC;
                 `,
             )
@@ -661,7 +692,9 @@ export class SqliteStore {
                 `
                     SELECT
                         id,
+                        kind,
                         schedule,
+                        run_at_ms,
                         prompt,
                         delivery_channel,
                         delivery_target,
@@ -699,6 +732,70 @@ export class SqliteStore {
                 `,
             )
             .run(id, nextRunAtMs, recordedAtMs)
+    }
+
+    setCronJobEnabled(id: string, enabled: boolean, recordedAtMs: number): void {
+        assertSafeInteger(recordedAtMs, "cron recordedAtMs")
+
+        this.db
+            .query(
+                `
+                    UPDATE cron_jobs
+                    SET enabled = ?2,
+                        updated_at_ms = ?3
+                    WHERE id = ?1;
+                `,
+            )
+            .run(id, enabled ? 1 : 0, recordedAtMs)
+    }
+
+    listCronRuns(jobId: string, limit: number): CronRunRecord[] {
+        assertSafeInteger(limit, "cron run limit")
+
+        const rows = this.db
+            .query<
+                {
+                    id: number
+                    job_id: string
+                    scheduled_for_ms: number
+                    started_at_ms: number
+                    finished_at_ms: number | null
+                    status: CronRunStatus
+                    response_text: string | null
+                    error_message: string | null
+                },
+                [string, number]
+            >(
+                `
+                    SELECT
+                        id,
+                        job_id,
+                        scheduled_for_ms,
+                        started_at_ms,
+                        finished_at_ms,
+                        status,
+                        response_text,
+                        error_message
+                    FROM cron_runs
+                    WHERE job_id = ?1
+                    ORDER BY started_at_ms DESC, id DESC
+                    LIMIT ?2;
+                `,
+            )
+            .all(jobId, limit)
+
+        return rows.map(
+            (row): CronRunRecord => ({
+                id: row.id,
+                jobId: row.job_id,
+                scheduledForMs: row.scheduled_for_ms,
+                startedAtMs: row.started_at_ms,
+                finishedAtMs: row.finished_at_ms,
+                status: row.status,
+                responseText: row.response_text,
+                errorMessage: row.error_message,
+            }),
+        )
     }
 
     insertCronRun(jobId: string, scheduledForMs: number, startedAtMs: number): number {
@@ -777,6 +874,8 @@ export class SqliteStore {
 type CronJobRow = {
     id: string
     schedule: string
+    kind: string
+    run_at_ms: number | null
     prompt: string
     delivery_channel: string | null
     delivery_target: string | null
@@ -832,9 +931,12 @@ type PendingQuestionRow = {
 }
 
 function mapCronJobRow(row: CronJobRow): CronJobRecord {
+    const kind = parseScheduleJobKind(row.kind)
     return {
         id: row.id,
-        schedule: row.schedule,
+        kind,
+        schedule: kind === "cron" ? row.schedule : null,
+        runAtMs: row.run_at_ms,
         prompt: row.prompt,
         deliveryChannel: row.delivery_channel,
         deliveryTarget: row.delivery_target,
@@ -844,6 +946,28 @@ function mapCronJobRow(row: CronJobRow): CronJobRecord {
         createdAtMs: row.created_at_ms,
         updatedAtMs: row.updated_at_ms,
     }
+}
+
+function parseScheduleJobKind(value: string): ScheduleJobKind {
+    switch (value) {
+        case "cron":
+        case "once":
+            return value
+        default:
+            throw new Error(`stored schedule job kind is invalid: ${value}`)
+    }
+}
+
+function encodeStoredSchedule(kind: ScheduleJobKind, schedule: string | null): string {
+    if (kind === "once") {
+        return "@once"
+    }
+
+    if (schedule === null) {
+        throw new Error("cron schedule must not be null")
+    }
+
+    return schedule
 }
 
 function mapMailboxEntryRow(row: MailboxEntryRow, attachments: MailboxEntryAttachmentRecord[]): MailboxEntryRecord {

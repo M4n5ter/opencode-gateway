@@ -177,5 +177,104 @@ test("OpencodeSdkAdapter waits for the final assistant child message", async () 
             },
         ],
     })
+    expect(calls).toBe(3)
+})
+
+test("OpencodeSdkAdapter ignores a trailing empty assistant stub when waiting for the final response", async () => {
+    let calls = 0
+    const adapter = new OpencodeSdkAdapter(
+        {
+            session: {
+                async messages() {
+                    calls += 1
+                    return {
+                        data:
+                            calls === 1
+                                ? [
+                                      {
+                                          info: {
+                                              id: "msg_user_1",
+                                              role: "user",
+                                          },
+                                          parts: [],
+                                      },
+                                      {
+                                          info: {
+                                              id: "msg_assistant_final",
+                                              role: "assistant",
+                                              parentID: "msg_user_1",
+                                              finish: "stop",
+                                          },
+                                          parts: [
+                                              {
+                                                  id: "part_1",
+                                                  messageID: "msg_assistant_final",
+                                                  type: "text",
+                                                  text: "final answer",
+                                              },
+                                          ],
+                                      },
+                                  ]
+                                : [
+                                      {
+                                          info: {
+                                              id: "msg_user_1",
+                                              role: "user",
+                                          },
+                                          parts: [],
+                                      },
+                                      {
+                                          info: {
+                                              id: "msg_assistant_final",
+                                              role: "assistant",
+                                              parentID: "msg_user_1",
+                                              finish: "stop",
+                                          },
+                                          parts: [
+                                              {
+                                                  id: "part_1",
+                                                  messageID: "msg_assistant_final",
+                                                  type: "text",
+                                                  text: "final answer",
+                                              },
+                                          ],
+                                      },
+                                      {
+                                          info: {
+                                              id: "msg_assistant_empty",
+                                              role: "assistant",
+                                              parentID: "msg_user_1",
+                                              finish: "stop",
+                                          },
+                                          parts: [],
+                                      },
+                                  ],
+                    }
+                },
+            },
+        } as never,
+        "/workspace",
+    )
+
+    expect(
+        await adapter.execute({
+            kind: "awaitPromptResponse",
+            sessionId: "ses_1",
+            messageId: "msg_user_1",
+        }),
+    ).toEqual({
+        kind: "awaitPromptResponse",
+        sessionId: "ses_1",
+        messageId: "msg_assistant_final",
+        parts: [
+            {
+                messageId: "msg_assistant_final",
+                partId: "part_1",
+                type: "text",
+                text: "final answer",
+                ignored: false,
+            },
+        ],
+    })
     expect(calls).toBe(2)
 })

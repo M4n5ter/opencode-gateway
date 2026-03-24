@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises"
 import { join } from "node:path"
 
-import { GATEWAY_CONFIG_FILE, OPENCODE_CONFIG_FILE } from "../config/paths"
+import { GATEWAY_CONFIG_FILE, OPENCODE_CONFIG_FILE, resolveGatewayWorkspacePath } from "../config/paths"
 import { parseOpencodeConfig } from "./opencode-config"
 import { pathExists, resolveCliConfigDir } from "./paths"
 
@@ -10,13 +10,11 @@ type DoctorOptions = {
     configDir: string | null
 }
 
-export async function runDoctor(
-    options: DoctorOptions,
-    env: Record<string, string | undefined>,
-): Promise<void> {
+export async function runDoctor(options: DoctorOptions, env: Record<string, string | undefined>): Promise<void> {
     const configDir = resolveCliConfigDir(options, env)
     const opencodeConfigPath = join(configDir, OPENCODE_CONFIG_FILE)
     const gatewayConfigPath = join(configDir, GATEWAY_CONFIG_FILE)
+    const workspaceDirPath = resolveGatewayWorkspacePath(gatewayConfigPath)
     const opencodeStatus = await inspectOpencodeConfig(opencodeConfigPath)
     const gatewayOverride = env.OPENCODE_GATEWAY_CONFIG?.trim() || null
 
@@ -24,6 +22,7 @@ export async function runDoctor(
     console.log(`  config dir: ${configDir}`)
     console.log(`  opencode config: ${await describePath(opencodeConfigPath)}`)
     console.log(`  gateway config: ${await describePath(gatewayConfigPath)}`)
+    console.log(`  gateway workspace: ${await describePath(workspaceDirPath)}`)
     console.log(`  gateway config override: ${gatewayOverride ?? "not set"}`)
     console.log(`  plugin configured: ${opencodeStatus.pluginConfigured}`)
     console.log(`  TELEGRAM_BOT_TOKEN: ${env.TELEGRAM_BOT_TOKEN?.trim() ? "set" : "missing"}`)

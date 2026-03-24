@@ -1,5 +1,5 @@
-import { access } from "node:fs/promises"
 import { constants } from "node:fs"
+import { access } from "node:fs/promises"
 import { resolve } from "node:path"
 
 import { resolveManagedOpencodeConfigDir, resolveOpencodeConfigDir } from "../config/paths"
@@ -9,10 +9,7 @@ type CliPathOptions = {
     configDir: string | null
 }
 
-export function resolveCliConfigDir(
-    options: CliPathOptions,
-    env: Record<string, string | undefined>,
-): string {
+export function resolveCliConfigDir(options: CliPathOptions, env: Record<string, string | undefined>): string {
     if (options.configDir !== null) {
         return resolve(options.configDir)
     }

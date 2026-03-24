@@ -3,14 +3,14 @@ import { tool } from "@opencode-ai/plugin"
 
 import type { GatewayCronRuntime } from "../cron/runtime"
 
-export function createCronRemoveTool(runtime: GatewayCronRuntime): ToolDefinition {
+export function createScheduleCancelTool(runtime: GatewayCronRuntime): ToolDefinition {
     return tool({
-        description: "Remove a persisted gateway cron job",
+        description: "Cancel a persisted gateway schedule job without deleting its run history.",
         args: {
             id: tool.schema.string().min(1),
         },
         async execute(args) {
-            return runtime.removeJob(args.id) ? `removed=${args.id}` : `missing=${args.id}`
+            return runtime.cancelJob(args.id) ? `canceled=${args.id}` : `inactive=${args.id}`
         },
     })
 }

@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite"
 
-const LATEST_SCHEMA_VERSION = 6
+const LATEST_SCHEMA_VERSION = 7
 
 export function migrateGatewayDatabase(db: Database): void {
     db.exec("PRAGMA journal_mode = WAL;")
@@ -38,6 +38,11 @@ export function migrateGatewayDatabase(db: Database): void {
 
     if (currentVersion === 5) {
         migrateToV6(db)
+        currentVersion = 6
+    }
+
+    if (currentVersion === 6) {
+        migrateToV7(db)
     }
 }
 
@@ -195,6 +200,17 @@ function migrateToV6(db: Database): void {
 
         CREATE INDEX pending_questions_session_id_created_at_ms_idx
             ON pending_questions (session_id, created_at_ms);
+    `)
+    db.exec("PRAGMA user_version = 6;")
+}
+
+function migrateToV7(db: Database): void {
+    db.exec(`
+        ALTER TABLE cron_jobs
+        ADD COLUMN kind TEXT NOT NULL DEFAULT 'cron';
+
+        ALTER TABLE cron_jobs
+        ADD COLUMN run_at_ms INTEGER;
     `)
     db.exec(`PRAGMA user_version = ${LATEST_SCHEMA_VERSION};`)
 }

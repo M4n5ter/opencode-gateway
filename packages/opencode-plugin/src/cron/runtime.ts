@@ -1,7 +1,7 @@
-import type { BindingCronJobSpec, BindingLoggerHost, BindingRuntimeReport, GatewayContract } from "../binding"
+import type { BindingDeliveryTarget, BindingLoggerHost, BindingRuntimeReport, GatewayContract } from "../binding"
 import type { CronConfig } from "../config/cron"
 import type { GatewayExecutorLike } from "../runtime/executor"
-import type { CronJobRecord, PersistCronJobInput, SqliteStore } from "../store/sqlite"
+import type { CronJobRecord, CronRunRecord, PersistCronJobInput, SqliteStore } from "../store/sqlite"
 import { formatError } from "../utils/error"
 
 export type UpsertCronJobInput = {
@@ -14,8 +14,27 @@ export type UpsertCronJobInput = {
     deliveryTopic: string | null
 }
 
+export type ScheduleOnceInput = {
+    id: string
+    prompt: string
+    delaySeconds: number | null
+    runAtMs: number | null
+    deliveryChannel: string | null
+    deliveryTarget: string | null
+    deliveryTopic: string | null
+}
+
+export type ScheduleJobState = "scheduled" | "running" | "succeeded" | "failed" | "abandoned" | "canceled"
+
+export type ScheduleJobStatus = {
+    job: CronJobRecord
+    state: ScheduleJobState
+    runs: CronRunRecord[]
+}
+
 const CRON_EFFECTIVE_TIME_ZONE_KEY = "cron.effective_timezone"
 const LEGACY_CRON_TIME_ZONE = "UTC"
+const MAX_STATUS_RUNS = 20
 
 export class GatewayCronRuntime {
     private readonly runningJobIds = new Set<string>()
@@ -28,6 +47,7 @@ export class GatewayCronRuntime {
         private readonly logger: BindingLoggerHost,
         private readonly config: CronConfig,
         private readonly effectiveTimeZone: string,
+        private readonly resolveConversationKeyForTarget: (target: BindingDeliveryTarget) => string,
     ) {}
 
     isEnabled(): boolean {
@@ -57,8 +77,24 @@ export class GatewayCronRuntime {
         })
     }
 
-    listJobs(): CronJobRecord[] {
-        return this.store.listCronJobs()
+    listJobs(includeTerminal = false): CronJobRecord[] {
+        const jobs = this.store.listCronJobs()
+        if (includeTerminal) {
+            return jobs
+        }
+
+        return jobs.filter((job) => !isTerminalJob(job))
+    }
+
+    getJobStatus(id: string, limit = 5): ScheduleJobStatus {
+        const job = this.requireJob(normalizeId(id))
+        const runs = this.store.listCronRuns(job.id, clampStatusLimit(limit))
+
+        return {
+            job,
+            state: deriveJobState(job, runs[0] ?? null),
+            runs,
+        }
     }
 
     upsertJob(input: UpsertCronJobInput): CronJobRecord {
@@ -75,14 +111,37 @@ export class GatewayCronRuntime {
         return this.requireJob(normalized.id)
     }
 
-    removeJob(id: string): boolean {
-        return this.store.removeCronJob(normalizeId(id))
+    scheduleOnce(input: ScheduleOnceInput): CronJobRecord {
+        const normalized = normalizeOnceInput(input)
+        const recordedAtMs = Date.now()
+
+        this.store.upsertCronJob({
+            ...normalized,
+            nextRunAtMs: normalized.runAtMs ?? recordedAtMs,
+            recordedAtMs,
+        })
+
+        return this.requireJob(normalized.id)
+    }
+
+    cancelJob(id: string): boolean {
+        const job = this.store.getCronJob(normalizeId(id))
+        if (job === null || !job.enabled) {
+            return false
+        }
+
+        this.store.setCronJobEnabled(job.id, false, Date.now())
+        return true
     }
 
     async runNow(id: string): Promise<BindingRuntimeReport> {
         const job = this.requireJob(normalizeId(id))
+        if (!job.enabled) {
+            throw new Error(`schedule job is not active: ${job.id}`)
+        }
+
         if (this.runningJobIds.has(job.id)) {
-            throw new Error(`cron job is already running: ${job.id}`)
+            throw new Error(`schedule job is already running: ${job.id}`)
         }
 
         this.runningJobIds.add(job.id)
@@ -119,7 +178,7 @@ export class GatewayCronRuntime {
                     : `cron time zone changed from ${previousTimeZone} to ${this.effectiveTimeZone}; rebasing enabled jobs`
             this.logger.log("warn", message)
             this.rebaseJobs(
-                this.store.listCronJobs().filter((job) => job.enabled),
+                this.store.listCronJobs().filter((job) => job.enabled && job.kind === "cron"),
                 nowMs,
             )
         } else {
@@ -144,7 +203,7 @@ export class GatewayCronRuntime {
             this.runningJobIds.add(job.id)
             void this.executeJob(job, job.nextRunAtMs, nowMs)
                 .catch((error) => {
-                    this.logger.log("error", `cron job ${job.id} failed: ${formatError(error)}`)
+                    this.logger.log("error", `schedule job ${job.id} failed: ${formatError(error)}`)
                 })
                 .finally(() => {
                     this.runningJobIds.delete(job.id)
@@ -162,7 +221,7 @@ export class GatewayCronRuntime {
         nextRunBaseMs: number | null,
     ): Promise<BindingRuntimeReport> {
         const startedAtMs = Date.now()
-        if (nextRunBaseMs !== null) {
+        if (job.kind === "cron" && nextRunBaseMs !== null) {
             const nextRunAtMs = computeNextRunAt(
                 this.contract,
                 job,
@@ -170,25 +229,74 @@ export class GatewayCronRuntime {
                 this.effectiveTimeZone,
             )
             this.store.updateCronJobNextRun(job.id, nextRunAtMs, startedAtMs)
+        } else if (job.kind === "once") {
+            this.store.setCronJobEnabled(job.id, false, startedAtMs)
         }
 
         const runId = this.store.insertCronRun(job.id, scheduledForMs, startedAtMs)
 
         try {
-            const report = await this.executor.dispatchCronJob(toBindingCronJobSpec(job))
+            const report = await this.executor.dispatchScheduledJob({
+                jobId: job.id,
+                jobKind: job.kind,
+                conversationKey: conversationKeyForJob(job),
+                prompt: job.prompt,
+                replyTarget: toReplyTarget(job),
+            })
             this.store.finishCronRun(runId, "succeeded", Date.now(), report.responseText, null)
+            await this.appendScheduleResultToTarget(job, scheduledForMs, {
+                kind: "success",
+                responseText: report.responseText,
+            })
             return report
         } catch (error) {
             const message = formatError(error)
             this.store.finishCronRun(runId, "failed", Date.now(), null, message)
+            await this.appendScheduleResultToTarget(job, scheduledForMs, {
+                kind: "failure",
+                errorMessage: message,
+            })
             throw error
+        }
+    }
+
+    private async appendScheduleResultToTarget(
+        job: CronJobRecord,
+        scheduledForMs: number,
+        outcome:
+            | {
+                  kind: "success"
+                  responseText: string
+              }
+            | {
+                  kind: "failure"
+                  errorMessage: string
+              },
+    ): Promise<void> {
+        const replyTarget = toReplyTarget(job)
+        if (replyTarget === null) {
+            return
+        }
+
+        try {
+            await this.executor.appendContextToConversation({
+                conversationKey: this.resolveConversationKeyForTarget(replyTarget),
+                replyTarget,
+                body: formatScheduleContextNote(job, scheduledForMs, outcome),
+                recordedAtMs: Date.now(),
+            })
+        } catch (error) {
+            this.logger.log(
+                "warn",
+                `failed to append schedule result to ${replyTarget.channel}:${replyTarget.target}: ${formatError(error)}`,
+            )
         }
     }
 
     private requireJob(id: string): CronJobRecord {
         const job = this.store.getCronJob(id)
         if (job === null) {
-            throw new Error(`unknown cron job: ${id}`)
+            throw new Error(`unknown schedule job: ${id}`)
         }
 
         return job
@@ -245,7 +353,9 @@ function normalizeUpsertInput(input: UpsertCronJobInput): PersistCronJobInput {
 
     return {
         id,
+        kind: "cron",
         schedule,
+        runAtMs: null,
         prompt,
         enabled: input.enabled,
         deliveryChannel,
@@ -256,8 +366,69 @@ function normalizeUpsertInput(input: UpsertCronJobInput): PersistCronJobInput {
     }
 }
 
+function normalizeOnceInput(input: ScheduleOnceInput): PersistCronJobInput {
+    const id = normalizeId(input.id)
+    const prompt = normalizeRequiredField(input.prompt, "schedule prompt")
+    const deliveryChannel = normalizeOptionalField(input.deliveryChannel)
+    const deliveryTarget = normalizeOptionalField(input.deliveryTarget)
+    const deliveryTopic = normalizeOptionalField(input.deliveryTopic)
+
+    if ((deliveryChannel === null) !== (deliveryTarget === null)) {
+        throw new Error("schedule delivery_channel and delivery_target must be provided together")
+    }
+
+    if (deliveryChannel === null && deliveryTopic !== null) {
+        throw new Error("schedule delivery_topic requires delivery_channel and delivery_target")
+    }
+
+    if (deliveryChannel !== null && deliveryChannel !== "telegram") {
+        throw new Error(`unsupported schedule delivery channel: ${deliveryChannel}`)
+    }
+
+    const runAtMs = resolveOnceRunAt(input)
+
+    return {
+        id,
+        kind: "once",
+        schedule: null,
+        runAtMs,
+        prompt,
+        enabled: true,
+        deliveryChannel,
+        deliveryTarget,
+        deliveryTopic,
+        nextRunAtMs: runAtMs,
+        recordedAtMs: 0,
+    }
+}
+
+function resolveOnceRunAt(input: ScheduleOnceInput): number {
+    if (input.delaySeconds === null && input.runAtMs === null) {
+        throw new Error("schedule_once requires delay_seconds or run_at_ms")
+    }
+
+    if (input.delaySeconds !== null && input.runAtMs !== null) {
+        throw new Error("schedule_once accepts only one of delay_seconds or run_at_ms")
+    }
+
+    if (input.runAtMs !== null) {
+        if (!Number.isSafeInteger(input.runAtMs) || input.runAtMs < 0) {
+            throw new Error("schedule run_at_ms must be a non-negative integer")
+        }
+
+        return input.runAtMs
+    }
+
+    const delaySeconds = input.delaySeconds ?? 0
+    if (!Number.isSafeInteger(delaySeconds) || delaySeconds < 0) {
+        throw new Error("schedule delay_seconds must be a non-negative integer")
+    }
+
+    return Date.now() + delaySeconds * 1_000
+}
+
 function normalizeId(id: string): string {
-    return normalizeRequiredField(id, "cron id")
+    return normalizeRequiredField(id, "schedule id")
 }
 
 function normalizeRequiredField(value: string, field: string): string {
@@ -283,10 +454,10 @@ function toBindingCronJobSpec(
         CronJobRecord | PersistCronJobInput,
         "id" | "schedule" | "prompt" | "deliveryChannel" | "deliveryTarget" | "deliveryTopic"
     >,
-): BindingCronJobSpec {
+) {
     return {
         id: job.id,
-        schedule: job.schedule,
+        schedule: normalizeRequiredField(job.schedule ?? "", "cron schedule"),
         prompt: job.prompt,
         deliveryChannel: job.deliveryChannel,
         deliveryTarget: job.deliveryTarget,
@@ -315,4 +486,77 @@ function sleep(durationMs: number): Promise<void> {
     return new Promise((resolve) => {
         setTimeout(resolve, durationMs)
     })
+}
+
+function clampStatusLimit(limit: number): number {
+    if (!Number.isSafeInteger(limit) || limit <= 0) {
+        throw new Error("schedule_status limit must be a positive integer")
+    }
+
+    return Math.min(limit, MAX_STATUS_RUNS)
+}
+
+function deriveJobState(job: CronJobRecord, latestRun: CronRunRecord | null): ScheduleJobState {
+    if (latestRun?.status === "running") {
+        return "running"
+    }
+
+    if (job.enabled) {
+        return "scheduled"
+    }
+
+    if (latestRun !== null) {
+        return latestRun.status
+    }
+
+    return "canceled"
+}
+
+function isTerminalJob(job: CronJobRecord): boolean {
+    return !job.enabled
+}
+
+function toReplyTarget(
+    job: Pick<CronJobRecord, "deliveryChannel" | "deliveryTarget" | "deliveryTopic">,
+): BindingDeliveryTarget | null {
+    if (job.deliveryChannel === null || job.deliveryTarget === null) {
+        return null
+    }
+
+    return {
+        channel: job.deliveryChannel,
+        target: job.deliveryTarget,
+        topic: job.deliveryTopic,
+    }
+}
+
+function conversationKeyForJob(job: Pick<CronJobRecord, "id" | "kind">): string {
+    return job.kind === "cron" ? `cron:${job.id}` : `once:${job.id}`
+}
+
+function formatScheduleContextNote(
+    job: Pick<CronJobRecord, "id" | "kind">,
+    scheduledForMs: number,
+    outcome:
+        | {
+              kind: "success"
+              responseText: string
+          }
+        | {
+              kind: "failure"
+              errorMessage: string
+          },
+): string {
+    const header = [
+        "[Gateway schedule result]",
+        `job_id=${job.id}`,
+        `job_kind=${job.kind}`,
+        `scheduled_for_ms=${scheduledForMs}`,
+    ]
+
+    if (outcome.kind === "success") {
+        return [...header, "status=succeeded", "", outcome.responseText].join("\n")
+    }
+
+    return [...header, "status=failed", "", outcome.errorMessage].join("\n")
 }

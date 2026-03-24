@@ -1,8 +1,12 @@
 import { Database } from "bun:sqlite"
 import { expect, test } from "bun:test"
 
-import type { BindingCronJobSpec, BindingLoggerHost, GatewayContract } from "../binding"
-import type { GatewayExecutorLike } from "../runtime/executor"
+import type { BindingLoggerHost, GatewayContract } from "../binding"
+import type {
+    AppendContextToConversationInput,
+    DispatchScheduledJobInput,
+    GatewayExecutorLike,
+} from "../runtime/executor"
 import { migrateGatewayDatabase } from "../store/migrations"
 import { SqliteStore } from "../store/sqlite"
 import { GatewayCronRuntime } from "./runtime"
@@ -15,7 +19,9 @@ test("cron reconcile skips missed runs and marks stale running rows abandoned", 
         const store = new SqliteStore(db)
         store.upsertCronJob({
             id: "nightly",
+            kind: "cron",
             schedule: "0 9 * * *",
+            runAtMs: null,
             prompt: "Summarize work",
             deliveryChannel: null,
             deliveryTarget: null,
@@ -26,19 +32,7 @@ test("cron reconcile skips missed runs and marks stale running rows abandoned", 
         })
         const staleRunId = store.insertCronRun("nightly", 1_735_689_600_000, 200)
 
-        const runtime = new GatewayCronRuntime(
-            createExecutorStub(),
-            createBindingStub(),
-            store,
-            new MemoryLogger(),
-            {
-                enabled: true,
-                tickSeconds: 5,
-                maxConcurrentRuns: 1,
-                timezone: null,
-            },
-            "UTC",
-        )
+        const runtime = createRuntime(store)
 
         await runtime.reconcileOnce(1_735_700_000_000)
 
@@ -53,15 +47,19 @@ test("cron reconcile skips missed runs and marks stale running rows abandoned", 
     }
 })
 
-test("cron tick executes due jobs and records successful runs", async () => {
+test("schedule tick executes due cron jobs and appends the run result back into the target conversation", async () => {
     const db = new Database(":memory:")
 
     try {
         migrateGatewayDatabase(db)
         const store = new SqliteStore(db)
+        const appendedContexts: AppendContextToConversationInput[] = []
+
         store.upsertCronJob({
             id: "nightly",
+            kind: "cron",
             schedule: "0 9 * * *",
+            runAtMs: null,
             prompt: "Summarize work",
             deliveryChannel: "telegram",
             deliveryTarget: "-100123",
@@ -71,19 +69,7 @@ test("cron tick executes due jobs and records successful runs", async () => {
             recordedAtMs: 100,
         })
 
-        const runtime = new GatewayCronRuntime(
-            createExecutorStub(),
-            createBindingStub(),
-            store,
-            new MemoryLogger(),
-            {
-                enabled: true,
-                tickSeconds: 5,
-                maxConcurrentRuns: 1,
-                timezone: null,
-            },
-            "UTC",
-        )
+        const runtime = createRuntime(store, { appendedContexts })
 
         await runtime.tickOnce(1_735_689_600_000)
         await Bun.sleep(0)
@@ -99,7 +85,58 @@ test("cron tick executes due jobs and records successful runs", async () => {
             response_text: "assistant reply",
         })
         expect(store.getCronJob("nightly")?.nextRunAtMs).toBe(1_735_722_000_000)
+        expect(appendedContexts).toHaveLength(1)
+        expect(appendedContexts[0]).toMatchObject({
+            conversationKey: "telegram:-100123:topic:42",
+            replyTarget: {
+                channel: "telegram",
+                target: "-100123",
+                topic: "42",
+            },
+        })
+        expect(appendedContexts[0]?.body).toContain("job_id=nightly")
+        expect(appendedContexts[0]?.body).toContain("status=succeeded")
     } finally {
+        db.close()
+    }
+})
+
+test("schedule_once runs once, disables the job, and exposes succeeded status", async () => {
+    const db = new Database(":memory:")
+    const restoreNow = mockDateNow(1_735_689_500_000)
+
+    try {
+        migrateGatewayDatabase(db)
+        const store = new SqliteStore(db)
+        const runtime = createRuntime(store)
+        const job = runtime.scheduleOnce({
+            id: "reminder",
+            prompt: "Ping me in two minutes",
+            delaySeconds: 120,
+            runAtMs: null,
+            deliveryChannel: "telegram",
+            deliveryTarget: "42",
+            deliveryTopic: null,
+        })
+
+        expect(job.kind).toBe("once")
+        expect(job.enabled).toBe(true)
+
+        await runtime.tickOnce(job.nextRunAtMs)
+        await Bun.sleep(0)
+
+        const stored = store.getCronJob("reminder")
+        expect(stored?.enabled).toBe(false)
+
+        const status = runtime.getJobStatus("reminder")
+        expect(status.state).toBe("succeeded")
+        expect(status.runs).toHaveLength(1)
+        expect(status.runs[0]).toMatchObject({
+            status: "succeeded",
+            responseText: "assistant reply",
+        })
+    } finally {
+        restoreNow()
         db.close()
     }
 })
@@ -112,7 +149,9 @@ test("cron reconcile rebases enabled jobs when the effective time zone changes",
         const store = new SqliteStore(db)
         store.upsertCronJob({
             id: "nightly",
+            kind: "cron",
             schedule: "0 9 * * *",
+            runAtMs: null,
             prompt: "Summarize work",
             deliveryChannel: null,
             deliveryTarget: null,
@@ -122,19 +161,15 @@ test("cron reconcile rebases enabled jobs when the effective time zone changes",
             recordedAtMs: 100,
         })
 
-        const runtime = new GatewayCronRuntime(
-            createExecutorStub(),
-            createBindingStub(),
-            store,
-            new MemoryLogger(),
-            {
+        const runtime = createRuntime(store, {
+            config: {
                 enabled: true,
                 tickSeconds: 5,
                 maxConcurrentRuns: 1,
                 timezone: "Asia/Shanghai",
             },
-            "Asia/Shanghai",
-        )
+            timeZone: "Asia/Shanghai",
+        })
 
         await runtime.reconcileOnce(1_735_700_000_000)
 
@@ -144,6 +179,37 @@ test("cron reconcile rebases enabled jobs when the effective time zone changes",
         db.close()
     }
 })
+
+function createRuntime(
+    store: SqliteStore,
+    options: {
+        appendedContexts?: AppendContextToConversationInput[]
+        config?: {
+            enabled: boolean
+            tickSeconds: number
+            maxConcurrentRuns: number
+            timezone: string | null
+        }
+        timeZone?: string
+    } = {},
+): GatewayCronRuntime {
+    const binding = createBindingStub()
+
+    return new GatewayCronRuntime(
+        createExecutorStub(options.appendedContexts ?? []),
+        binding,
+        store,
+        new MemoryLogger(),
+        options.config ?? {
+            enabled: true,
+            tickSeconds: 5,
+            maxConcurrentRuns: 1,
+            timezone: null,
+        },
+        options.timeZone ?? "UTC",
+        (target) => binding.conversationKeyForDeliveryTarget(target),
+    )
+}
 
 function createBindingStub(): GatewayContract {
     return {
@@ -160,22 +226,22 @@ function createBindingStub(): GatewayContract {
                 ? `${target.channel}:${target.target}`
                 : `${target.channel}:${target.target}:topic:${target.topic}`
         },
-        nextCronRunAt(_job: BindingCronJobSpec, afterMs: number, timeZone: string): number {
+        nextCronRunAt(_job, afterMs, timeZone) {
             if (timeZone === "Asia/Shanghai") {
                 return 1_735_786_800_000
             }
 
             return afterMs < 1_735_722_000_000 ? 1_735_722_000_000 : 1_735_808_400_000
         },
-        normalizeCronTimeZone(timeZone: string): string {
+        normalizeCronTimeZone(timeZone: string) {
             return timeZone.trim()
         },
     }
 }
 
-function createExecutorStub(): GatewayExecutorLike {
+function createExecutorStub(appendedContexts: AppendContextToConversationInput[]): GatewayExecutorLike {
     return {
-        async handleInboundMessage(_message) {
+        async handleInboundMessage() {
             throw new Error("unused")
         },
         prepareInboundMessage() {
@@ -184,17 +250,31 @@ function createExecutorStub(): GatewayExecutorLike {
         async executeMailboxEntries() {
             throw new Error("unused")
         },
-        async dispatchCronJob(_job: BindingCronJobSpec) {
+        async dispatchCronJob() {
+            throw new Error("unused")
+        },
+        async dispatchScheduledJob(input: DispatchScheduledJobInput) {
             return {
-                conversationKey: "cron:nightly",
+                conversationKey: input.conversationKey,
                 responseText: "assistant reply",
-                delivered: true,
+                delivered: input.replyTarget !== null,
                 recordedAtMs: 4_242n,
             }
+        },
+        async appendContextToConversation(input: AppendContextToConversationInput) {
+            appendedContexts.push(input)
         },
     }
 }
 
 class MemoryLogger implements BindingLoggerHost {
     log(_level: string, _message: string): void {}
+}
+
+function mockDateNow(value: number) {
+    const original = Date.now
+    Date.now = () => value
+    return () => {
+        Date.now = original
+    }
 }

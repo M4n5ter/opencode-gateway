@@ -22,6 +22,22 @@ export function resolveToolDeliveryTarget(
     }
 }
 
+export function resolveOptionalToolDeliveryTarget(
+    args: {
+        channel?: string
+        target?: string
+        topic?: string
+    },
+    sessionId: string | null | undefined,
+    sessions: GatewaySessionContext,
+): BindingDeliveryTarget | null {
+    if (args.channel === undefined && args.target === undefined && args.topic === undefined) {
+        return sessionId ? sessions.getDefaultReplyTarget(sessionId) : null
+    }
+
+    return resolveToolDeliveryTarget(args, sessionId, sessions)
+}
+
 function normalizeRequired(value: string | null, field: string): string {
     if (value === null) {
         throw new Error(`${field} is required when the current session has no default reply target`)

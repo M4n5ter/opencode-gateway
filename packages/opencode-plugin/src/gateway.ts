@@ -1,3 +1,4 @@
+import { mkdir } from "node:fs/promises"
 import type { PluginInput } from "@opencode-ai/plugin"
 
 import type { GatewayBindingModule, GatewayContract } from "./binding"
@@ -16,7 +17,9 @@ import { createQuestionClient } from "./questions/client"
 import { GatewayQuestionRuntime } from "./questions/runtime"
 import { GatewayExecutor } from "./runtime/executor"
 import { GatewayMailboxRuntime } from "./runtime/mailbox"
+import { getOrCreateRuntimeSingleton } from "./runtime/runtime-singleton"
 import { GatewaySessionContext } from "./session/context"
+import { resolveConversationKeyForTarget } from "./session/conversation-key"
 import { ChannelSessionSwitcher } from "./session/switcher"
 import { openSqliteStore } from "./store/sqlite"
 import { TelegramBotClient } from "./telegram/client"
@@ -73,77 +76,94 @@ export async function createGatewayRuntime(
     input: PluginInput,
 ): Promise<GatewayPluginRuntime> {
     const config = await loadGatewayConfig()
-    const logger = new ConsoleLoggerHost()
-    if (config.hasLegacyGatewayTimezone) {
-        const suffix = config.legacyGatewayTimezone === null ? "" : ` (${config.legacyGatewayTimezone})`
-        logger.log("warn", `gateway.timezone${suffix} is ignored; use cron.timezone instead`)
-    }
+    return await getOrCreateRuntimeSingleton(config.configPath, async () => {
+        await mkdir(config.workspaceDirPath, { recursive: true })
+        const logger = new ConsoleLoggerHost()
+        if (config.hasLegacyGatewayTimezone) {
+            const suffix = config.legacyGatewayTimezone === null ? "" : ` (${config.legacyGatewayTimezone})`
+            logger.log("warn", `gateway.timezone${suffix} is ignored; use cron.timezone instead`)
+        }
 
-    const effectiveCronTimeZone = resolveEffectiveCronTimeZone(module, config)
-    const store = await openSqliteStore(config.stateDbPath)
-    const sessionContext = new GatewaySessionContext(store)
-    const telegramClient = config.telegram.enabled ? new TelegramBotClient(config.telegram.botToken) : null
-    const telegramMediaStore =
-        config.telegram.enabled && telegramClient !== null
-            ? new TelegramInboundMediaStore(telegramClient, config.mediaRootPath)
-            : null
-    const mailboxRouter = new GatewayMailboxRouter(config.mailbox.routes)
-    const opencodeEvents = new OpencodeEventHub()
-    const opencode = new OpencodeSdkAdapter(input.client, input.directory)
-    const questionClient = createQuestionClient(input.client, input.serverUrl, input.directory)
-    const transport = new GatewayTransportHost(telegramClient, store)
-    const files = new ChannelFileSender(telegramClient)
-    const channelSessions = new ChannelSessionSwitcher(
-        store,
-        sessionContext,
-        mailboxRouter,
-        module,
-        opencode,
-        config.telegram.enabled,
-    )
-    const questions = new GatewayQuestionRuntime(
-        questionClient,
-        input.directory,
-        store,
-        sessionContext,
-        transport,
-        telegramClient,
-        logger,
-    )
-    const progressiveSupport = new TelegramProgressiveSupport(telegramClient, store, logger)
-    const delivery = new GatewayTextDelivery(transport, store, progressiveSupport)
-    const executor = new GatewayExecutor(module, store, opencode, opencodeEvents, delivery, logger)
-    const mailbox = new GatewayMailboxRuntime(executor, store, logger, config.mailbox, questions)
-    const cron = new GatewayCronRuntime(executor, module, store, logger, config.cron, effectiveCronTimeZone)
-    const eventStream = new OpencodeEventStream(input.client, input.directory, opencodeEvents, [questions], logger)
-    const telegramPolling =
-        config.telegram.enabled && telegramClient !== null && telegramMediaStore !== null
-            ? new TelegramPollingService(
-                  telegramClient,
-                  mailbox,
-                  store,
-                  logger,
-                  config.telegram,
-                  mailboxRouter,
-                  telegramMediaStore,
-                  questions,
-              )
-            : null
-    const telegram = new GatewayTelegramRuntime(
-        telegramClient,
-        delivery,
-        store,
-        logger,
-        config.telegram,
-        telegramPolling,
-        eventStream,
-    )
-    eventStream.start()
-    cron.start()
-    mailbox.start()
-    telegram.start()
+        const effectiveCronTimeZone = resolveEffectiveCronTimeZone(module, config)
+        const store = await openSqliteStore(config.stateDbPath)
+        const sessionContext = new GatewaySessionContext(store)
+        const telegramClient = config.telegram.enabled ? new TelegramBotClient(config.telegram.botToken) : null
+        const telegramMediaStore =
+            config.telegram.enabled && telegramClient !== null
+                ? new TelegramInboundMediaStore(telegramClient, config.mediaRootPath)
+                : null
+        const mailboxRouter = new GatewayMailboxRouter(config.mailbox.routes)
+        const opencodeEvents = new OpencodeEventHub()
+        const opencode = new OpencodeSdkAdapter(input.client, config.workspaceDirPath)
+        const questionClient = createQuestionClient(input.client, input.serverUrl, config.workspaceDirPath)
+        const transport = new GatewayTransportHost(telegramClient, store)
+        const files = new ChannelFileSender(telegramClient)
+        const channelSessions = new ChannelSessionSwitcher(
+            store,
+            sessionContext,
+            mailboxRouter,
+            module,
+            opencode,
+            config.telegram.enabled,
+        )
+        const questions = new GatewayQuestionRuntime(
+            questionClient,
+            config.workspaceDirPath,
+            store,
+            sessionContext,
+            transport,
+            telegramClient,
+            logger,
+        )
+        const progressiveSupport = new TelegramProgressiveSupport(telegramClient, store, logger)
+        const delivery = new GatewayTextDelivery(transport, store, progressiveSupport)
+        const executor = new GatewayExecutor(module, store, opencode, opencodeEvents, delivery, logger)
+        const mailbox = new GatewayMailboxRuntime(executor, store, logger, config.mailbox, questions)
+        const cron = new GatewayCronRuntime(
+            executor,
+            module,
+            store,
+            logger,
+            config.cron,
+            effectiveCronTimeZone,
+            (target) => resolveConversationKeyForTarget(target, mailboxRouter, module),
+        )
+        const eventStream = new OpencodeEventStream(
+            input.client,
+            config.workspaceDirPath,
+            opencodeEvents,
+            [questions],
+            logger,
+        )
+        const telegramPolling =
+            config.telegram.enabled && telegramClient !== null && telegramMediaStore !== null
+                ? new TelegramPollingService(
+                      telegramClient,
+                      mailbox,
+                      store,
+                      logger,
+                      config.telegram,
+                      mailboxRouter,
+                      telegramMediaStore,
+                      questions,
+                  )
+                : null
+        const telegram = new GatewayTelegramRuntime(
+            telegramClient,
+            delivery,
+            store,
+            logger,
+            config.telegram,
+            telegramPolling,
+            eventStream,
+        )
+        eventStream.start()
+        cron.start()
+        mailbox.start()
+        telegram.start()
 
-    return new GatewayPluginRuntime(module, executor, cron, telegram, files, channelSessions, sessionContext)
+        return new GatewayPluginRuntime(module, executor, cron, telegram, files, channelSessions, sessionContext)
+    })
 }
 
 function resolveEffectiveCronTimeZone(

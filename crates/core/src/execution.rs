@@ -148,7 +148,16 @@ impl ExecutionState {
                     return ProgressiveDirective::Noop;
                 }
 
-                self.assistant_message_id = Some(message_id);
+                if self.assistant_message_id.as_deref() != Some(message_id.as_str())
+                    && !self.has_visible_preview_text()
+                {
+                    self.text_parts.clear();
+                    self.next_order = 0;
+                    self.assistant_message_id = Some(message_id.clone());
+                }
+                if self.assistant_message_id.is_none() {
+                    self.assistant_message_id = Some(message_id);
+                }
             }
             ExecutionRole::Other(_) => {}
         }
@@ -221,6 +230,12 @@ impl ExecutionState {
             .filter(|text| !text.is_empty())
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    fn has_visible_preview_text(&self) -> bool {
+        self.text_parts
+            .values()
+            .any(|part| !part.text.trim().is_empty())
     }
 }
 
@@ -386,6 +401,139 @@ mod tests {
                 2,
             ),
             ProgressiveDirective::Preview("hello".to_owned())
+        );
+    }
+
+    #[test]
+    fn execution_state_switches_to_new_assistant_before_any_preview_text_arrives() {
+        let mut state = ExecutionState::new("ses_1", ProgressiveMode::Progressive, 0);
+
+        assert_eq!(
+            state.observe(
+                ExecutionObservation::MessageUpdated {
+                    session_id: "ses_1".to_owned(),
+                    message_id: "msg_user_1".to_owned(),
+                    role: ExecutionRole::User,
+                    parent_id: None,
+                },
+                0,
+            ),
+            ProgressiveDirective::Noop
+        );
+
+        assert_eq!(
+            state.observe(
+                ExecutionObservation::MessageUpdated {
+                    session_id: "ses_1".to_owned(),
+                    message_id: "msg_assistant_1".to_owned(),
+                    role: ExecutionRole::Assistant,
+                    parent_id: Some("msg_user_1".to_owned()),
+                },
+                1,
+            ),
+            ProgressiveDirective::Noop
+        );
+
+        assert_eq!(
+            state.observe(
+                ExecutionObservation::MessageUpdated {
+                    session_id: "ses_1".to_owned(),
+                    message_id: "msg_assistant_2".to_owned(),
+                    role: ExecutionRole::Assistant,
+                    parent_id: Some("msg_user_1".to_owned()),
+                },
+                2,
+            ),
+            ProgressiveDirective::Noop
+        );
+
+        assert_eq!(
+            state.observe(
+                ExecutionObservation::TextPartUpdated {
+                    session_id: "ses_1".to_owned(),
+                    message_id: "msg_assistant_2".to_owned(),
+                    part_id: "part_2".to_owned(),
+                    text: Some("second".to_owned()),
+                    delta: None,
+                    ignored: false,
+                },
+                3,
+            ),
+            ProgressiveDirective::Preview("second".to_owned())
+        );
+    }
+
+    #[test]
+    fn execution_state_keeps_existing_preview_stream_after_visible_text_arrives() {
+        let mut state = ExecutionState::new("ses_1", ProgressiveMode::Progressive, 0);
+
+        assert_eq!(
+            state.observe(
+                ExecutionObservation::MessageUpdated {
+                    session_id: "ses_1".to_owned(),
+                    message_id: "msg_user_1".to_owned(),
+                    role: ExecutionRole::User,
+                    parent_id: None,
+                },
+                0,
+            ),
+            ProgressiveDirective::Noop
+        );
+
+        assert_eq!(
+            state.observe(
+                ExecutionObservation::MessageUpdated {
+                    session_id: "ses_1".to_owned(),
+                    message_id: "msg_assistant_1".to_owned(),
+                    role: ExecutionRole::Assistant,
+                    parent_id: Some("msg_user_1".to_owned()),
+                },
+                1,
+            ),
+            ProgressiveDirective::Noop
+        );
+
+        assert_eq!(
+            state.observe(
+                ExecutionObservation::TextPartUpdated {
+                    session_id: "ses_1".to_owned(),
+                    message_id: "msg_assistant_1".to_owned(),
+                    part_id: "part_1".to_owned(),
+                    text: Some("first".to_owned()),
+                    delta: None,
+                    ignored: false,
+                },
+                2,
+            ),
+            ProgressiveDirective::Preview("first".to_owned())
+        );
+
+        assert_eq!(
+            state.observe(
+                ExecutionObservation::MessageUpdated {
+                    session_id: "ses_1".to_owned(),
+                    message_id: "msg_assistant_2".to_owned(),
+                    role: ExecutionRole::Assistant,
+                    parent_id: Some("msg_user_1".to_owned()),
+                },
+                3,
+            ),
+            ProgressiveDirective::Noop
+        );
+
+        assert_eq!(
+            state.observe(
+                ExecutionObservation::TextPartUpdated {
+                    session_id: "ses_1".to_owned(),
+                    message_id: "msg_assistant_2".to_owned(),
+                    part_id: "part_2".to_owned(),
+                    text: Some("second".to_owned()),
+                    delta: None,
+                    ignored: false,
+                },
+                4,
+            ),
+            ProgressiveDirective::Noop
         );
     }
 }

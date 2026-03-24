@@ -5,6 +5,7 @@ import {
     defaultGatewayStateDbPath,
     GATEWAY_CONFIG_FILE,
     OPENCODE_CONFIG_FILE,
+    resolveGatewayWorkspacePath,
 } from "../config/paths"
 import {
     createDefaultOpencodeConfig,
@@ -24,8 +25,10 @@ export async function runInit(options: InitOptions, env: Record<string, string |
     const configDir = resolveCliConfigDir(options, env)
     const opencodeConfigPath = join(configDir, OPENCODE_CONFIG_FILE)
     const gatewayConfigPath = join(configDir, GATEWAY_CONFIG_FILE)
+    const workspaceDirPath = resolveGatewayWorkspacePath(gatewayConfigPath)
 
     await mkdir(configDir, { recursive: true })
+    await mkdir(workspaceDirPath, { recursive: true })
 
     let opencodeStatus = "already present"
     if (!(await pathExists(opencodeConfigPath))) {
@@ -52,4 +55,5 @@ export async function runInit(options: InitOptions, env: Record<string, string |
     console.log(`config dir: ${configDir}`)
     console.log(`opencode config: ${opencodeConfigPath} (${opencodeStatus})`)
     console.log(`gateway config: ${gatewayConfigPath} (${gatewayStatus})`)
+    console.log(`gateway workspace: ${workspaceDirPath} (ready)`)
 }

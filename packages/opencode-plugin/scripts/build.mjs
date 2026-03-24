@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process"
+import { readFile, rm, writeFile } from "node:fs/promises"
 import { dirname } from "node:path"
 import { fileURLToPath } from "node:url"
-import { readFile, rm, writeFile } from "node:fs/promises"
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)))
 const cliOutputPath = `${packageRoot}/dist/cli.js`

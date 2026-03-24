@@ -2,7 +2,7 @@ import { existsSync } from "node:fs"
 import { dirname, isAbsolute, join, resolve } from "node:path"
 
 import { type CronConfig, parseCronConfig } from "./cron"
-import { defaultGatewayStateDbPath, resolveGatewayConfigPath } from "./paths"
+import { defaultGatewayStateDbPath, resolveGatewayConfigPath, resolveGatewayWorkspacePath } from "./paths"
 import { parseTelegramConfig, type TelegramConfig } from "./telegram"
 
 type RawGatewayConfig = {
@@ -47,6 +47,7 @@ export type GatewayConfig = {
     configPath: string
     stateDbPath: string
     mediaRootPath: string
+    workspaceDirPath: string
     hasLegacyGatewayTimezone: boolean
     legacyGatewayTimezone: string | null
     mailbox: GatewayMailboxConfig
@@ -71,6 +72,7 @@ export async function loadGatewayConfig(env: EnvSource = process.env): Promise<G
         configPath,
         stateDbPath,
         mediaRootPath: resolveMediaRootPath(stateDbPath),
+        workspaceDirPath: resolveGatewayWorkspacePath(configPath),
         hasLegacyGatewayTimezone: rawConfig?.gateway?.timezone !== undefined,
         legacyGatewayTimezone: readLegacyGatewayTimezone(rawConfig?.gateway?.timezone),
         mailbox: parseMailboxConfig(rawConfig?.gateway?.mailbox),

@@ -66,6 +66,10 @@ test("GatewayExecutor recreates a stale persisted session before completing a on
 
                     throw new Error(`unexpected command: ${command.kind}`)
                 },
+                async isSessionBusy() {
+                    return false
+                },
+                async abortSession(): Promise<void> {},
             },
             events,
             {
@@ -153,6 +157,10 @@ test("GatewayExecutor appends earlier prompts and forwards progressive previews 
 
                     throw new Error(`unexpected command: ${command.kind}`)
                 },
+                async isSessionBusy() {
+                    return false
+                },
+                async abortSession(): Promise<void> {},
             },
             events,
             {
@@ -262,6 +270,10 @@ test("GatewayExecutor preserves a session binding that changed during execution"
 
                     throw new Error(`unexpected command: ${command.kind}`)
                 },
+                async isSessionBusy() {
+                    return false
+                },
+                async abortSession(): Promise<void> {},
             },
             events,
             {
@@ -284,11 +296,264 @@ test("GatewayExecutor preserves a session binding that changed during execution"
 
         expect(commands.map((command) => command.kind)).toEqual([
             "lookupSession",
+            "lookupSession",
             "waitUntilIdle",
             "sendPromptAsync",
             "awaitPromptResponse",
         ])
         expect(store.getSessionBinding("telegram:42")).toBe("ses_switched")
+    } finally {
+        restoreNow()
+        db.close()
+    }
+})
+
+test("GatewayExecutor appends context into the target conversation without triggering delivery", async () => {
+    const db = new Database(":memory:")
+    const now = 1_735_689_600_000
+    const restoreNow = mockDateNow(now)
+
+    try {
+        migrateGatewayDatabase(db)
+        const store = new SqliteStore(db)
+        const events = new OpencodeEventHub()
+
+        const commands: BindingOpencodeCommand[] = []
+        const executor = new GatewayExecutor(
+            createModule(),
+            store,
+            {
+                async execute(command: BindingOpencodeCommand): Promise<BindingOpencodeCommandResult> {
+                    commands.push(command)
+
+                    switch (command.kind) {
+                        case "createSession":
+                            return { kind: "createSession", sessionId: "ses_context" }
+                        case "waitUntilIdle":
+                            return { kind: "waitUntilIdle", sessionId: command.sessionId }
+                        case "appendPrompt":
+                            return { kind: "appendPrompt", sessionId: command.sessionId }
+                        case "lookupSession":
+                        case "sendPromptAsync":
+                        case "awaitPromptResponse":
+                            throw new Error("unused")
+                    }
+
+                    throw new Error(`unexpected command: ${command.kind}`)
+                },
+                async isSessionBusy() {
+                    return false
+                },
+                async abortSession(): Promise<void> {},
+            },
+            events,
+            {
+                async openMany() {
+                    throw new Error("unused")
+                },
+            },
+            new MemoryLogger(),
+        )
+
+        await executor.appendContextToConversation({
+            conversationKey: "telegram:42",
+            replyTarget: {
+                channel: "telegram",
+                target: "42",
+                topic: null,
+            },
+            body: "schedule result",
+            recordedAtMs: now,
+        })
+
+        expect(commands).toEqual([
+            {
+                kind: "createSession",
+                title: "Gateway telegram:42",
+            },
+            {
+                kind: "waitUntilIdle",
+                sessionId: "ses_context",
+            },
+            {
+                kind: "appendPrompt",
+                sessionId: "ses_context",
+                messageId: `msg_gateway_context_${now}_0`,
+                parts: [
+                    {
+                        kind: "text",
+                        partId: `prt_gateway_context_${now}_0_0`,
+                        text: "schedule result",
+                    },
+                ],
+            },
+        ])
+        expect(store.getSessionBinding("telegram:42")).toBe("ses_context")
+        expect(store.getDefaultSessionReplyTarget("ses_context")).toEqual({
+            channel: "telegram",
+            target: "42",
+            topic: null,
+        })
+    } finally {
+        restoreNow()
+        db.close()
+    }
+})
+
+test("GatewayExecutor aborts a residual busy persisted session before dispatching the next prompt", async () => {
+    const db = new Database(":memory:")
+    const now = 1_735_689_600_000
+    const restoreNow = mockDateNow(now)
+
+    try {
+        migrateGatewayDatabase(db)
+        const store = new SqliteStore(db)
+        store.putSessionBinding("telegram:42", "ses_busy", 0)
+        const events = new OpencodeEventHub()
+
+        const commands: BindingOpencodeCommand[] = []
+        const abortCalls: string[] = []
+        const busyStates = [true, false, false]
+        const executor = new GatewayExecutor(
+            createModule(),
+            store,
+            {
+                async execute(command: BindingOpencodeCommand): Promise<BindingOpencodeCommandResult> {
+                    commands.push(command)
+
+                    switch (command.kind) {
+                        case "lookupSession":
+                            return { kind: "lookupSession", sessionId: command.sessionId, found: true }
+                        case "waitUntilIdle":
+                            return { kind: "waitUntilIdle", sessionId: command.sessionId }
+                        case "sendPromptAsync":
+                            return { kind: "sendPromptAsync", sessionId: command.sessionId }
+                        case "awaitPromptResponse":
+                            return createAwaitPromptResponseResult(
+                                command.sessionId,
+                                "msg_assistant_final",
+                                "hello back",
+                            )
+                        case "appendPrompt":
+                        case "createSession":
+                            throw new Error("unused")
+                    }
+
+                    throw new Error(`unexpected command: ${command.kind}`)
+                },
+                async isSessionBusy() {
+                    return busyStates.shift() ?? false
+                },
+                async abortSession(sessionId: string): Promise<void> {
+                    abortCalls.push(sessionId)
+                },
+            },
+            events,
+            {
+                async openMany() {
+                    return [
+                        {
+                            mode: "oneshot" as const,
+                            async preview(): Promise<void> {},
+                            async finish(): Promise<boolean> {
+                                return true
+                            },
+                        },
+                    ]
+                },
+            },
+            new MemoryLogger(),
+        )
+
+        await executor.handleInboundMessage(createMessage())
+
+        expect(abortCalls).toEqual(["ses_busy"])
+        expect(commands.map((command) => command.kind)).toEqual([
+            "lookupSession",
+            "lookupSession",
+            "waitUntilIdle",
+            "sendPromptAsync",
+            "awaitPromptResponse",
+        ])
+    } finally {
+        restoreNow()
+        db.close()
+    }
+})
+
+test("GatewayExecutor aborts a residual busy session after prompt completion", async () => {
+    const db = new Database(":memory:")
+    const now = 1_735_689_600_000
+    const restoreNow = mockDateNow(now)
+
+    try {
+        migrateGatewayDatabase(db)
+        const store = new SqliteStore(db)
+        const events = new OpencodeEventHub()
+
+        const commands: BindingOpencodeCommand[] = []
+        const abortCalls: string[] = []
+        const busyStates = [true, false]
+        const executor = new GatewayExecutor(
+            createModule(),
+            store,
+            {
+                async execute(command: BindingOpencodeCommand): Promise<BindingOpencodeCommandResult> {
+                    commands.push(command)
+
+                    switch (command.kind) {
+                        case "createSession":
+                            return { kind: "createSession", sessionId: "ses_fresh" }
+                        case "waitUntilIdle":
+                            return { kind: "waitUntilIdle", sessionId: command.sessionId }
+                        case "sendPromptAsync":
+                            return { kind: "sendPromptAsync", sessionId: command.sessionId }
+                        case "awaitPromptResponse":
+                            return createAwaitPromptResponseResult(
+                                command.sessionId,
+                                "msg_assistant_final",
+                                "hello back",
+                            )
+                        case "lookupSession":
+                        case "appendPrompt":
+                            throw new Error("unused")
+                    }
+
+                    throw new Error(`unexpected command: ${command.kind}`)
+                },
+                async isSessionBusy() {
+                    return busyStates.shift() ?? false
+                },
+                async abortSession(sessionId: string): Promise<void> {
+                    abortCalls.push(sessionId)
+                },
+            },
+            events,
+            {
+                async openMany() {
+                    return [
+                        {
+                            mode: "oneshot" as const,
+                            async preview(): Promise<void> {},
+                            async finish(): Promise<boolean> {
+                                return true
+                            },
+                        },
+                    ]
+                },
+            },
+            new MemoryLogger(),
+        )
+
+        await executor.handleInboundMessage(createMessage())
+
+        expect(abortCalls).toEqual(["ses_fresh"])
+        expect(commands.map((command) => command.kind)).toEqual([
+            "createSession",
+            "waitUntilIdle",
+            "sendPromptAsync",
+            "awaitPromptResponse",
+        ])
     } finally {
         restoreNow()
         db.close()

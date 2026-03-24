@@ -37,6 +37,7 @@ fn run() -> Result<(), Box<dyn Error>> {
 struct GatewayPaths {
     config_root: PathBuf,
     config_file: PathBuf,
+    workspace_dir: PathBuf,
     opencode_dir: PathBuf,
     opencode_config_file: PathBuf,
     opencode_plugin_loader: PathBuf,
@@ -50,9 +51,14 @@ impl GatewayPaths {
         let config_root = xdg_dir("XDG_CONFIG_HOME", &home, ".config").join("opencode-gateway");
         let state_dir = xdg_dir("XDG_DATA_HOME", &home, ".local/share").join("opencode-gateway");
         let opencode_dir = config_root.join("opencode");
+        let config_file = opencode_dir.join("opencode-gateway.toml");
 
         Ok(Self {
-            config_file: opencode_dir.join("opencode-gateway.toml"),
+            workspace_dir: config_file
+                .parent()
+                .expect("gateway config parent")
+                .join("opencode-gateway-workspace"),
+            config_file,
             opencode_config_file: opencode_dir.join("opencode.json"),
             opencode_plugin_loader: opencode_dir.join("plugins/opencode-gateway.ts"),
             state_db: state_dir.join("state.db"),
@@ -90,6 +96,7 @@ fn run_init() -> Result<(), Box<dyn Error>> {
         "managed plugin loader: {}",
         paths.opencode_plugin_loader.display()
     );
+    println!("gateway workspace: {}", paths.workspace_dir.display());
     println!("state database: {}", paths.state_db.display());
     Ok(())
 }
@@ -214,6 +221,10 @@ fn run_doctor() -> Result<(), Box<dyn Error>> {
         "  managed plugin loader: {}",
         describe_path(&paths.opencode_plugin_loader)
     );
+    println!(
+        "  gateway workspace: {}",
+        describe_path(&paths.workspace_dir)
+    );
     println!("  state db: {}", describe_path(&paths.state_db));
 
     report_binary("opencode", "--version");
@@ -224,6 +235,7 @@ fn run_doctor() -> Result<(), Box<dyn Error>> {
 
 fn ensure_layout(paths: &GatewayPaths) -> Result<(), Box<dyn Error>> {
     fs::create_dir_all(&paths.config_root)?;
+    fs::create_dir_all(&paths.workspace_dir)?;
     fs::create_dir_all(
         paths
             .opencode_plugin_loader

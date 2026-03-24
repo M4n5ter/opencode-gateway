@@ -81,6 +81,33 @@ export class OpencodeSdkAdapter {
         return unwrapData<SessionRecord>(session).id
     }
 
+    async isSessionBusy(sessionId: string): Promise<boolean> {
+        const statuses = await this.client.session.status({
+            query: { directory: this.directory },
+            responseStyle: "data",
+            throwOnError: true,
+        })
+        const current = unwrapData<Record<string, { type?: string }>>(statuses)[sessionId]
+        return current?.type === "busy"
+    }
+
+    async abortSession(sessionId: string): Promise<void> {
+        try {
+            await this.client.session.abort({
+                path: { id: sessionId },
+                query: { directory: this.directory },
+                responseStyle: "data",
+                throwOnError: true,
+            })
+        } catch (error) {
+            if (isMissingSessionError(error)) {
+                return
+            }
+
+            throw error
+        }
+    }
+
     async execute(command: BindingOpencodeCommand): Promise<BindingOpencodeCommandResult> {
         try {
             switch (command.kind) {
@@ -203,6 +230,7 @@ export class OpencodeSdkAdapter {
         command: Extract<BindingOpencodeCommand, { kind: "awaitPromptResponse" }>,
     ): Promise<BindingOpencodeCommandResult> {
         const deadline = Date.now() + PROMPT_RESPONSE_TIMEOUT_MS
+        let stableCandidateKey: string | null = null
 
         for (;;) {
             const messages = await this.client.session.messages({
@@ -217,12 +245,19 @@ export class OpencodeSdkAdapter {
             const response = selectAssistantResponse(unwrapData<MessageResponse[]>(messages), command.messageId)
 
             if (response !== null) {
-                return {
-                    kind: "awaitPromptResponse",
-                    sessionId: command.sessionId,
-                    messageId: response.info.id,
-                    parts: response.parts.flatMap(toBindingMessagePart),
+                const candidateKey = createAssistantCandidateKey(response)
+                if (stableCandidateKey === candidateKey) {
+                    return {
+                        kind: "awaitPromptResponse",
+                        sessionId: command.sessionId,
+                        messageId: response.info.id,
+                        parts: response.parts.flatMap(toBindingMessagePart),
+                    }
                 }
+
+                stableCandidateKey = candidateKey
+            } else {
+                stableCandidateKey = null
             }
 
             if (Date.now() >= deadline) {
@@ -320,6 +355,20 @@ function selectAssistantResponse(messages: MessageResponse[], userMessageId: str
     return null
 }
 
+function createAssistantCandidateKey(message: AssistantMessageResponse): string {
+    return JSON.stringify({
+        messageId: message.info.id,
+        finish: message.info.finish ?? null,
+        hasError: message.info.error !== undefined,
+        parts: message.parts.map((part) => ({
+            id: part.id ?? null,
+            type: part.type,
+            text: typeof part.text === "string" ? part.text : null,
+            ignored: part.ignored === true,
+        })),
+    })
+}
+
 function isAssistantChildMessage(
     userMessageId: string,
 ): (message: MessageResponse) => message is AssistantMessageResponse {
@@ -346,7 +395,10 @@ function toBindingMessagePart(part: SessionPromptPart): BindingOpencodeMessagePa
 function hasVisibleText(message: MessageResponse): boolean {
     return message.parts.some(
         (part) =>
-            part.type === "text" && part.ignored !== true && typeof part.text === "string" && part.text.length > 0,
+            part.type === "text" &&
+            part.ignored !== true &&
+            typeof part.text === "string" &&
+            part.text.trim().length > 0,
     )
 }
 

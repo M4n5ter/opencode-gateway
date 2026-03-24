@@ -18,6 +18,7 @@ test("loadGatewayConfig resolves relative state_db against the config file", asy
 
         expect(config.configPath).toBe(configPath)
         expect(config.stateDbPath).toBe(join(root, "state", "custom.db"))
+        expect(config.workspaceDirPath).toBe(join(root, "opencode-gateway-workspace"))
     } finally {
         await rm(root, { recursive: true, force: true })
     }

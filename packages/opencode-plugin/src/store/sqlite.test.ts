@@ -33,7 +33,9 @@ test("sqlite store persists session bindings, offsets, and cron catalog state", 
         })
         store.upsertCronJob({
             id: "nightly",
+            kind: "cron",
             schedule: "0 9 * * *",
+            runAtMs: null,
             prompt: "Summarize work",
             deliveryChannel: "telegram",
             deliveryTarget: "-100123",
@@ -63,7 +65,9 @@ test("sqlite store persists session bindings, offsets, and cron catalog state", 
         ])
         expect(store.getCronJob("nightly")).toEqual({
             id: "nightly",
+            kind: "cron",
             schedule: "0 9 * * *",
+            runAtMs: null,
             prompt: "Summarize work",
             deliveryChannel: "telegram",
             deliveryTarget: "-100123",
@@ -89,6 +93,18 @@ test("sqlite store persists session bindings, offsets, and cron catalog state", 
             status: "succeeded",
             response_text: "ok",
         })
+        expect(store.listCronRuns("nightly", 5)).toEqual([
+            {
+                id: runId,
+                jobId: "nightly",
+                scheduledForMs: 9000,
+                startedAtMs: 4242,
+                finishedAtMs: 5252,
+                status: "succeeded",
+                responseText: "ok",
+                errorMessage: null,
+            },
+        ])
     } finally {
         db.close()
     }

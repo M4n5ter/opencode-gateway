@@ -5,7 +5,7 @@ import type { GatewayCronRuntime } from "../cron/runtime"
 
 export function createCronRunTool(runtime: GatewayCronRuntime): ToolDefinition {
     return tool({
-        description: "Run one persisted gateway cron job immediately without changing its schedule",
+        description: "Run one persisted gateway schedule job immediately without changing its schedule metadata.",
         args: {
             id: tool.schema.string().min(1),
         },

@@ -1,8 +1,9 @@
 import { homedir } from "node:os"
-import { join, resolve } from "node:path"
+import { dirname, join, resolve } from "node:path"
 
 export const GATEWAY_CONFIG_FILE = "opencode-gateway.toml"
 export const OPENCODE_CONFIG_FILE = "opencode.json"
+export const GATEWAY_WORKSPACE_DIR = "opencode-gateway-workspace"
 
 type EnvSource = Record<string, string | undefined>
 
@@ -26,6 +27,10 @@ export function resolveOpencodeConfigDir(env: EnvSource): string {
 
 export function resolveManagedOpencodeConfigDir(env: EnvSource): string {
     return join(resolveConfigHome(env), "opencode-gateway", "opencode")
+}
+
+export function resolveGatewayWorkspacePath(configPath: string): string {
+    return join(dirname(configPath), GATEWAY_WORKSPACE_DIR)
 }
 
 export function defaultGatewayStateDbPath(env: EnvSource): string {
