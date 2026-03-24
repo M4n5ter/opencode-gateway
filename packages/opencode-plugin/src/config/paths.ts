@@ -3,6 +3,8 @@ import { dirname, join, resolve } from "node:path"
 
 export const GATEWAY_CONFIG_FILE = "opencode-gateway.toml"
 export const OPENCODE_CONFIG_FILE = "opencode.json"
+export const OPENCODE_CONFIG_FILE_JSONC = "opencode.jsonc"
+export const OPENCODE_CONFIG_FILE_CANDIDATES = [OPENCODE_CONFIG_FILE_JSONC, OPENCODE_CONFIG_FILE] as const
 export const GATEWAY_WORKSPACE_DIR = "opencode-gateway-workspace"
 
 type EnvSource = Record<string, string | undefined>

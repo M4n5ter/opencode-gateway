@@ -23,13 +23,14 @@ npx opencode-gateway init
 By default this uses `OPENCODE_CONFIG_DIR` when it is set, otherwise it writes
 into your standard OpenCode config directory:
 
-- `~/.config/opencode/opencode.json`
+- `~/.config/opencode/opencode.jsonc` when absent, otherwise existing `opencode.jsonc` or `opencode.json`
 - `~/.config/opencode/opencode-gateway.toml`
 
 `init` will:
 
-- create `opencode.json` when it does not exist
-- ensure `plugin: ["opencode-gateway"]` is present
+- create `opencode.jsonc` when neither config file exists
+- prefer an existing `opencode.jsonc` over `opencode.json`
+- ensure `plugin` contains `opencode-gateway@latest`
 - create `opencode-gateway.toml` when it does not exist
 
 If you want a separate managed config tree instead of touching your existing
@@ -41,7 +42,7 @@ npx opencode-gateway init --managed
 
 That writes:
 
-- `~/.config/opencode-gateway/opencode/opencode.json`
+- `~/.config/opencode-gateway/opencode/opencode.jsonc`
 - `~/.config/opencode-gateway/opencode/opencode-gateway.toml`
 
 ### 2. Configure the gateway

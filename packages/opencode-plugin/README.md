@@ -12,13 +12,14 @@ npx opencode-gateway init
 
 This ensures:
 
-- `plugin: ["opencode-gateway"]` exists in `opencode.json`
-- `opencode-gateway.toml` exists next to `opencode.json`
+- `plugin` contains `opencode-gateway@latest`
+- `opencode-gateway.toml` exists next to the preferred OpenCode config file
 
 By default the CLI uses `OPENCODE_CONFIG_DIR` when it is set, otherwise it
 writes to:
 
-- `~/.config/opencode/opencode.json`
+- an existing `~/.config/opencode/opencode.jsonc` or `~/.config/opencode/opencode.json`
+- otherwise a new `~/.config/opencode/opencode.jsonc`
 - `~/.config/opencode/opencode-gateway.toml`
 
 Check what it resolved:

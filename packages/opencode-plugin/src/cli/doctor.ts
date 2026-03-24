@@ -1,8 +1,9 @@
 import { readFile } from "node:fs/promises"
 import { join } from "node:path"
 
-import { GATEWAY_CONFIG_FILE, OPENCODE_CONFIG_FILE, resolveGatewayWorkspacePath } from "../config/paths"
-import { parseOpencodeConfig } from "./opencode-config"
+import { GATEWAY_CONFIG_FILE, resolveGatewayWorkspacePath } from "../config/paths"
+import { inspectGatewayPlugin, parseOpencodeConfig } from "./opencode-config"
+import { resolveOpencodeConfigFile } from "./opencode-config-file"
 import { pathExists, resolveCliConfigDir } from "./paths"
 
 type DoctorOptions = {
@@ -12,15 +13,15 @@ type DoctorOptions = {
 
 export async function runDoctor(options: DoctorOptions, env: Record<string, string | undefined>): Promise<void> {
     const configDir = resolveCliConfigDir(options, env)
-    const opencodeConfigPath = join(configDir, OPENCODE_CONFIG_FILE)
     const gatewayConfigPath = join(configDir, GATEWAY_CONFIG_FILE)
     const workspaceDirPath = resolveGatewayWorkspacePath(gatewayConfigPath)
-    const opencodeStatus = await inspectOpencodeConfig(opencodeConfigPath)
+    const opencodeConfig = await resolveOpencodeConfigFile(configDir)
+    const opencodeStatus = await inspectOpencodeConfig(opencodeConfig.path)
     const gatewayOverride = env.OPENCODE_GATEWAY_CONFIG?.trim() || null
 
     console.log("doctor report")
     console.log(`  config dir: ${configDir}`)
-    console.log(`  opencode config: ${await describePath(opencodeConfigPath)}`)
+    console.log(`  opencode config: ${await describePath(opencodeConfig.path)}`)
     console.log(`  gateway config: ${await describePath(gatewayConfigPath)}`)
     console.log(`  gateway workspace: ${await describePath(workspaceDirPath)}`)
     console.log(`  gateway config override: ${gatewayOverride ?? "not set"}`)
@@ -46,24 +47,9 @@ async function inspectOpencodeConfig(path: string): Promise<{ pluginConfigured: 
 
     try {
         const parsed = parseOpencodeConfig(await readFile(path, "utf8"), path)
-        const plugins = parsed.plugin
-
-        if (plugins === undefined) {
-            return {
-                pluginConfigured: "no",
-                error: null,
-            }
-        }
-
-        if (!Array.isArray(plugins)) {
-            return {
-                pluginConfigured: "invalid",
-                error: "`plugin` is not an array",
-            }
-        }
 
         return {
-            pluginConfigured: plugins.some((entry) => entry === "opencode-gateway") ? "yes" : "no",
+            pluginConfigured: inspectGatewayPlugin(parsed),
             error: null,
         }
     } catch (error) {

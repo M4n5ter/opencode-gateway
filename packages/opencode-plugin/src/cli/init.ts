@@ -1,18 +1,14 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 
-import {
-    defaultGatewayStateDbPath,
-    GATEWAY_CONFIG_FILE,
-    OPENCODE_CONFIG_FILE,
-    resolveGatewayWorkspacePath,
-} from "../config/paths"
+import { defaultGatewayStateDbPath, GATEWAY_CONFIG_FILE, resolveGatewayWorkspacePath } from "../config/paths"
 import {
     createDefaultOpencodeConfig,
     ensureGatewayPlugin,
     parseOpencodeConfig,
     stringifyOpencodeConfig,
 } from "./opencode-config"
+import { resolveOpencodeConfigFile } from "./opencode-config-file"
 import { pathExists, resolveCliConfigDir } from "./paths"
 import { buildGatewayConfigTemplate } from "./templates"
 
@@ -23,15 +19,16 @@ type InitOptions = {
 
 export async function runInit(options: InitOptions, env: Record<string, string | undefined>): Promise<void> {
     const configDir = resolveCliConfigDir(options, env)
-    const opencodeConfigPath = join(configDir, OPENCODE_CONFIG_FILE)
     const gatewayConfigPath = join(configDir, GATEWAY_CONFIG_FILE)
     const workspaceDirPath = resolveGatewayWorkspacePath(gatewayConfigPath)
+    const opencodeConfig = await resolveOpencodeConfigFile(configDir)
+    const opencodeConfigPath = opencodeConfig.path
 
     await mkdir(configDir, { recursive: true })
     await mkdir(workspaceDirPath, { recursive: true })
 
     let opencodeStatus = "already present"
-    if (!(await pathExists(opencodeConfigPath))) {
+    if (!opencodeConfig.exists) {
         await writeFile(opencodeConfigPath, stringifyOpencodeConfig(createDefaultOpencodeConfig(options.managed)))
         opencodeStatus = "created"
     } else {
