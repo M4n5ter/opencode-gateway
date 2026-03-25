@@ -11,7 +11,7 @@ await rm(outDir, { recursive: true, force: true })
 await mkdir(outDir, { recursive: true })
 
 run(["cargo", "build", "--target", "wasm32-unknown-unknown", "--release", "-p", "opencode-gateway-ffi"], repoRoot)
-run(["wasm-bindgen", "--target", "nodejs", "--out-dir", outDir, wasmPath], repoRoot)
+run(["wasm-bindgen", "--target", "web", "--out-dir", outDir, wasmPath], repoRoot)
 
 function run(argv, cwd) {
     const result = spawnSync(argv[0], argv.slice(1), {
