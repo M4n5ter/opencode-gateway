@@ -166,6 +166,7 @@ class ProgressiveTextDeliverySession implements TextDeliverySession {
 
     start(): void {
         this.telegramSupport.startTyping(this.target)
+        this.ensureKeepalive()
     }
 
     async preview(text: string): Promise<void> {
@@ -268,7 +269,12 @@ class ProgressiveTextDeliverySession implements TextDeliverySession {
             }
 
             this.telegramSupport.startTyping(this.target)
-            void this.enqueueDraftSend(() => this.latestPreviewText, false).finally(() => {
+            const keepaliveWork =
+                this.previewDelivered && !this.previewFailed && this.latestPreviewText !== null
+                    ? this.enqueueDraftSend(() => this.latestPreviewText, false)
+                    : Promise.resolve()
+
+            void keepaliveWork.finally(() => {
                 if (this.shouldKeepalive()) {
                     this.ensureKeepalive()
                 }
@@ -286,13 +292,7 @@ class ProgressiveTextDeliverySession implements TextDeliverySession {
     }
 
     private shouldKeepalive(): boolean {
-        return (
-            this.acceptingPreviews &&
-            !this.finished &&
-            !this.previewFailed &&
-            this.previewDelivered &&
-            this.latestPreviewText !== null
-        )
+        return this.acceptingPreviews && !this.finished
     }
 }
 

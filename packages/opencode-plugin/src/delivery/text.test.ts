@@ -383,6 +383,64 @@ test("GatewayTextDelivery keeps drafts alive while a progressive reply remains o
     }
 })
 
+test("GatewayTextDelivery keeps typing alive before any preview text exists", async () => {
+    const db = createMemoryDatabase()
+
+    try {
+        migrateGatewayDatabase(db)
+        const store = new SqliteStore(db)
+        store.putStateValue("telegram.chat_type:42", "private", Date.now())
+
+        const calls: string[] = []
+        const client = {
+            async getChat() {
+                throw new Error("unused")
+            },
+            async sendChatAction(): Promise<void> {
+                calls.push("typing")
+            },
+            async sendMessage(_chatId: string, text: string): Promise<void> {
+                calls.push(`send:${text}`)
+            },
+            async sendMessageDraft(_chatId: string, _draftId: number, text: string): Promise<void> {
+                calls.push(`draft:${text}`)
+            },
+        }
+
+        const delivery = new GatewayTextDelivery(
+            new GatewayTransportHost(client, store),
+            store,
+            new TelegramProgressiveSupport(client, store, createLogger()),
+            {
+                progressiveRefreshIntervalMs: 10,
+            },
+        )
+
+        const session = await delivery.open(
+            {
+                channel: "telegram",
+                target: "42",
+                topic: null,
+            },
+            "auto",
+        )
+
+        await sleep(25)
+
+        expect(calls.filter((call) => call === "typing").length).toBeGreaterThan(1)
+        expect(calls.filter((call) => call.startsWith("draft:"))).toHaveLength(0)
+
+        await session.finish("final answer")
+        const callsAfterFinish = calls.length
+        await sleep(25)
+
+        expect(calls).toContain("send:final answer")
+        expect(calls.length).toBe(callsAfterFinish)
+    } finally {
+        db.close()
+    }
+})
+
 test("GatewayTextDelivery refreshes drafts with the latest preview text", async () => {
     const db = createMemoryDatabase()
 
