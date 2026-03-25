@@ -10,11 +10,18 @@ export type TextDeliverySession = {
     finish(finalText: string | null): Promise<boolean>
 }
 
+export type TextDeliveryOptions = {
+    progressiveRefreshIntervalMs?: number
+}
+
+const DEFAULT_PROGRESSIVE_REFRESH_INTERVAL_MS = 3_000
+
 export class GatewayTextDelivery {
     constructor(
         private readonly transport: GatewayTransportHost,
         private readonly store: SqliteStore,
         private readonly telegramSupport: TelegramProgressiveSupport,
+        private readonly options: TextDeliveryOptions = {},
     ) {}
 
     async open(target: BindingDeliveryTarget, preference: DeliveryModePreference): Promise<TextDeliverySession> {
@@ -40,6 +47,7 @@ export class GatewayTextDelivery {
                         this.transport,
                         this.telegramSupport,
                         this.store,
+                        this.options.progressiveRefreshIntervalMs ?? DEFAULT_PROGRESSIVE_REFRESH_INTERVAL_MS,
                     )
                     session.start()
                     return session
@@ -140,9 +148,12 @@ class ProgressiveTextDeliverySession implements TextDeliverySession {
     readonly mode = "progressive" as const
     private previewFailed = false
     private previewDelivered = false
-    private closed = false
+    private acceptingPreviews = true
+    private finished = false
+    private latestPreviewText: string | null = null
     private pendingPreviewCount = 0
     private pendingPreview = Promise.resolve()
+    private keepaliveTimer: ReturnType<typeof setTimeout> | null = null
     private readonly draftId = createDraftId()
 
     constructor(
@@ -150,6 +161,7 @@ class ProgressiveTextDeliverySession implements TextDeliverySession {
         private readonly transport: GatewayTransportHost,
         private readonly telegramSupport: TelegramProgressiveSupport,
         private readonly store: SqliteStore,
+        private readonly refreshIntervalMs: number,
     ) {}
 
     start(): void {
@@ -157,22 +169,76 @@ class ProgressiveTextDeliverySession implements TextDeliverySession {
     }
 
     async preview(text: string): Promise<void> {
-        if (this.previewFailed || this.closed || text.trim().length === 0) {
+        if (this.previewFailed || !this.acceptingPreviews || this.finished || text.trim().length === 0) {
             return
         }
 
+        this.latestPreviewText = text
+        await this.enqueueDraftSend(() => this.latestPreviewText, true)
+
+        if (!this.previewFailed && this.previewDelivered) {
+            this.ensureKeepalive()
+        }
+    }
+
+    async finish(finalText: string | null): Promise<boolean> {
+        this.acceptingPreviews = false
+        this.stopKeepalive()
+        await this.awaitPendingPreview()
+
+        const normalizedFinalText = finalText?.trim() ?? ""
+        if (normalizedFinalText.length === 0) {
+            this.finished = true
+            return false
+        }
+
+        if (!this.previewDelivered && !this.previewFailed) {
+            recordTelegramStreamFallback(this.store, "preview_not_established", Date.now())
+        }
+
+        if (this.previewDelivered && !this.previewFailed && this.latestPreviewText !== normalizedFinalText) {
+            this.latestPreviewText = normalizedFinalText
+            await this.enqueueDraftSend(() => this.latestPreviewText, false)
+        }
+
+        try {
+            const ack = await this.transport.sendMessage({
+                deliveryTarget: this.target,
+                body: normalizedFinalText,
+            })
+
+            if (ack.errorMessage !== null) {
+                throw new Error(ack.errorMessage)
+            }
+
+            return true
+        } finally {
+            this.finished = true
+            this.stopKeepalive()
+        }
+    }
+
+    private async enqueueDraftSend(getText: () => string | null, recordEmit: boolean): Promise<void> {
         const runPreview = async (): Promise<void> => {
             try {
-                if (this.previewFailed || this.closed) {
+                if (this.finished || this.previewFailed) {
+                    return
+                }
+
+                const text = getText()
+                if (text === null || text.trim().length === 0) {
                     return
                 }
 
                 try {
-                    recordTelegramPreviewEmit(this.store, Date.now())
+                    if (recordEmit) {
+                        recordTelegramPreviewEmit(this.store, Date.now())
+                    }
                     await this.telegramSupport.sendDraft(this.target, this.draftId, text)
                     this.previewDelivered = true
                 } catch {
                     this.previewFailed = true
+                    this.stopKeepalive()
                 }
             } finally {
                 this.pendingPreviewCount = Math.max(0, this.pendingPreviewCount - 1)
@@ -184,30 +250,49 @@ class ProgressiveTextDeliverySession implements TextDeliverySession {
         await this.pendingPreview
     }
 
-    async finish(finalText: string | null): Promise<boolean> {
-        this.closed = true
+    private async awaitPendingPreview(): Promise<void> {
         if (this.pendingPreviewCount > 0) {
             await this.pendingPreview
         }
+    }
 
-        if (finalText === null || finalText.trim().length === 0) {
-            return false
+    private ensureKeepalive(): void {
+        if (!this.shouldKeepalive() || this.keepaliveTimer !== null) {
+            return
         }
 
-        if (!this.previewDelivered && !this.previewFailed) {
-            recordTelegramStreamFallback(this.store, "preview_not_established", Date.now())
+        this.keepaliveTimer = setTimeout(() => {
+            this.keepaliveTimer = null
+            if (!this.shouldKeepalive()) {
+                return
+            }
+
+            this.telegramSupport.startTyping(this.target)
+            void this.enqueueDraftSend(() => this.latestPreviewText, false).finally(() => {
+                if (this.shouldKeepalive()) {
+                    this.ensureKeepalive()
+                }
+            })
+        }, this.refreshIntervalMs)
+    }
+
+    private stopKeepalive(): void {
+        if (this.keepaliveTimer === null) {
+            return
         }
 
-        const ack = await this.transport.sendMessage({
-            deliveryTarget: this.target,
-            body: finalText,
-        })
+        clearTimeout(this.keepaliveTimer)
+        this.keepaliveTimer = null
+    }
 
-        if (ack.errorMessage !== null) {
-            throw new Error(ack.errorMessage)
-        }
-
-        return true
+    private shouldKeepalive(): boolean {
+        return (
+            this.acceptingPreviews &&
+            !this.finished &&
+            !this.previewFailed &&
+            this.previewDelivered &&
+            this.latestPreviewText !== null
+        )
     }
 }
 

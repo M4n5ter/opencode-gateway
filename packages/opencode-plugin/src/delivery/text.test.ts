@@ -55,7 +55,7 @@ test("GatewayTextDelivery uses draft preview for cached private chats", async ()
         await session.finish("hello world")
 
         expect(calls.typing).toBe(1)
-        expect(calls.drafts).toEqual(["hello"])
+        expect(calls.drafts).toEqual(["hello", "hello world"])
         expect(calls.sends).toEqual(["hello world"])
     } finally {
         db.close()
@@ -314,7 +314,121 @@ test("GatewayTextDelivery does not emit late drafts after finish starts", async 
         await preview
         await finish
 
-        expect(calls).toEqual(["typing", "draft:hello", "send:hello world"])
+        expect(calls).toEqual(["typing", "draft:hello", "draft:hello world", "send:hello world"])
+    } finally {
+        db.close()
+    }
+})
+
+test("GatewayTextDelivery keeps drafts alive while a progressive reply remains open", async () => {
+    const db = createMemoryDatabase()
+
+    try {
+        migrateGatewayDatabase(db)
+        const store = new SqliteStore(db)
+        store.putStateValue("telegram.chat_type:42", "private", Date.now())
+
+        const calls: string[] = []
+        const client = {
+            async getChat() {
+                throw new Error("unused")
+            },
+            async sendChatAction(): Promise<void> {
+                calls.push("typing")
+            },
+            async sendMessage(_chatId: string, text: string): Promise<void> {
+                calls.push(`send:${text}`)
+            },
+            async sendMessageDraft(_chatId: string, _draftId: number, text: string): Promise<void> {
+                calls.push(`draft:${text}`)
+            },
+        }
+
+        const delivery = new GatewayTextDelivery(
+            new GatewayTransportHost(client, store),
+            store,
+            new TelegramProgressiveSupport(client, store, createLogger()),
+            {
+                progressiveRefreshIntervalMs: 10,
+            },
+        )
+
+        const session = await delivery.open(
+            {
+                channel: "telegram",
+                target: "42",
+                topic: null,
+            },
+            "auto",
+        )
+
+        await session.preview("working")
+        await sleep(25)
+
+        const keepaliveTypingCount = calls.filter((call) => call === "typing").length
+        const keepaliveDraftCount = calls.filter((call) => call === "draft:working").length
+
+        expect(keepaliveTypingCount).toBeGreaterThan(1)
+        expect(keepaliveDraftCount).toBeGreaterThan(1)
+
+        await session.finish("final answer")
+        const callsAfterFinish = calls.length
+        await sleep(25)
+
+        expect(calls.at(-2)).toBe("draft:final answer")
+        expect(calls.at(-1)).toBe("send:final answer")
+        expect(calls.length).toBe(callsAfterFinish)
+    } finally {
+        db.close()
+    }
+})
+
+test("GatewayTextDelivery refreshes drafts with the latest preview text", async () => {
+    const db = createMemoryDatabase()
+
+    try {
+        migrateGatewayDatabase(db)
+        const store = new SqliteStore(db)
+        store.putStateValue("telegram.chat_type:42", "private", Date.now())
+
+        const drafts: string[] = []
+        const client = {
+            async getChat() {
+                throw new Error("unused")
+            },
+            async sendChatAction(): Promise<void> {},
+            async sendMessage(): Promise<void> {},
+            async sendMessageDraft(_chatId: string, _draftId: number, text: string): Promise<void> {
+                drafts.push(text)
+            },
+        }
+
+        const delivery = new GatewayTextDelivery(
+            new GatewayTransportHost(client, store),
+            store,
+            new TelegramProgressiveSupport(client, store, createLogger()),
+            {
+                progressiveRefreshIntervalMs: 10,
+            },
+        )
+
+        const session = await delivery.open(
+            {
+                channel: "telegram",
+                target: "42",
+                topic: null,
+            },
+            "auto",
+        )
+
+        await session.preview("first")
+        await sleep(12)
+        await session.preview("second")
+        await sleep(15)
+
+        expect(drafts).toContain("first")
+        expect(drafts).toContain("second")
+        expect(drafts.at(-1)).toBe("second")
     } finally {
         db.close()
     }
@@ -362,7 +476,7 @@ test("GatewayTextDelivery skips whitespace-only draft previews", async () => {
         await session.preview("hello")
         await session.finish("\n\nhello world")
 
-        expect(drafts).toEqual(["hello"])
+        expect(drafts).toEqual(["hello", "hello world"])
         expect(sends).toEqual(["hello world"])
     } finally {
         db.close()
@@ -373,4 +487,10 @@ function createLogger() {
     return {
         log() {},
     }
+}
+
+function sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+        setTimeout(resolve, ms)
+    })
 }
