@@ -15,6 +15,7 @@ import type { OpencodeSdkAdapter } from "../opencode/adapter"
 import type { OpencodeEventHub } from "../opencode/events"
 import type { MailboxEntryRecord, RuntimeJournalEntry, SqliteStore } from "../store/sqlite"
 import { ConversationCoordinator } from "./conversation-coordinator"
+import { delay } from "./delay"
 import { type PromptExecutionResult, runOpencodeDriver } from "./opencode-runner"
 
 const SESSION_ABORT_SETTLE_TIMEOUT_MS = 5_000
@@ -377,7 +378,7 @@ export class GatewayExecutor {
             }
 
             if (attempt < extraPolls) {
-                await Bun.sleep(SESSION_ABORT_POLL_MS)
+                await delay(SESSION_ABORT_POLL_MS)
             }
         }
 
@@ -397,7 +398,7 @@ export class GatewayExecutor {
                 throw new Error(`session remained busy after abort for ${SESSION_ABORT_SETTLE_TIMEOUT_MS}ms`)
             }
 
-            await Bun.sleep(SESSION_ABORT_POLL_MS)
+            await delay(SESSION_ABORT_POLL_MS)
         }
     }
 

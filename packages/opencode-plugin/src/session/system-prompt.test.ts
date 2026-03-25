@@ -1,4 +1,3 @@
-import { Database } from "bun:sqlite"
 import { expect, test } from "bun:test"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -8,12 +7,13 @@ import type { GatewayMemoryConfig } from "../config/memory"
 import { GatewayMemoryPromptProvider } from "../memory/prompt"
 import { migrateGatewayDatabase } from "../store/migrations"
 import { SqliteStore } from "../store/sqlite"
+import { createMemoryDatabase } from "../test/sqlite"
 import { GatewaySessionContext } from "./context"
 import { GatewaySystemPromptBuilder } from "./system-prompt"
 
 test("GatewaySystemPromptBuilder combines gateway target context with memory content", async () => {
     const root = await mkdtemp(join(tmpdir(), "opencode-gateway-system-prompt-"))
-    const db = new Database(":memory:")
+    const db = createMemoryDatabase()
     const memoryFile = join(root, "memory", "project.md")
 
     try {
@@ -63,7 +63,7 @@ test("GatewaySystemPromptBuilder combines gateway target context with memory con
 
 test("GatewaySystemPromptBuilder injects memory for gateway-owned schedule sessions without reply targets", async () => {
     const root = await mkdtemp(join(tmpdir(), "opencode-gateway-system-prompt-"))
-    const db = new Database(":memory:")
+    const db = createMemoryDatabase()
     const memoryFile = join(root, "memory", "project.md")
 
     try {
@@ -96,7 +96,7 @@ test("GatewaySystemPromptBuilder injects memory for gateway-owned schedule sessi
 })
 
 test("GatewaySystemPromptBuilder skips unrelated sessions", async () => {
-    const db = new Database(":memory:")
+    const db = createMemoryDatabase()
 
     try {
         migrateGatewayDatabase(db)

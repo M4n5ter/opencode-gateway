@@ -1,4 +1,3 @@
-import { Database } from "bun:sqlite"
 import { expect, test } from "bun:test"
 
 import type { BindingLoggerHost, GatewayContract } from "../binding"
@@ -9,10 +8,11 @@ import type {
 } from "../runtime/executor"
 import { migrateGatewayDatabase } from "../store/migrations"
 import { SqliteStore } from "../store/sqlite"
+import { createMemoryDatabase } from "../test/sqlite"
 import { GatewayCronRuntime } from "./runtime"
 
 test("cron reconcile skips missed runs and marks stale running rows abandoned", async () => {
-    const db = new Database(":memory:")
+    const db = createMemoryDatabase()
 
     try {
         migrateGatewayDatabase(db)
@@ -48,7 +48,7 @@ test("cron reconcile skips missed runs and marks stale running rows abandoned", 
 })
 
 test("schedule tick executes due cron jobs and appends the run result back into the target conversation", async () => {
-    const db = new Database(":memory:")
+    const db = createMemoryDatabase()
 
     try {
         migrateGatewayDatabase(db)
@@ -102,7 +102,7 @@ test("schedule tick executes due cron jobs and appends the run result back into 
 })
 
 test("schedule_once runs once, disables the job, and exposes succeeded status", async () => {
-    const db = new Database(":memory:")
+    const db = createMemoryDatabase()
     const restoreNow = mockDateNow(1_735_689_500_000)
 
     try {
@@ -142,7 +142,7 @@ test("schedule_once runs once, disables the job, and exposes succeeded status", 
 })
 
 test("cron reconcile rebases enabled jobs when the effective time zone changes", async () => {
-    const db = new Database(":memory:")
+    const db = createMemoryDatabase()
 
     try {
         migrateGatewayDatabase(db)

@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises"
 import { extname, relative } from "node:path"
+import { globSync } from "fast-glob"
 
 import type { BindingLoggerHost } from "../binding"
 import type { GatewayMemoryConfig, GatewayMemoryEntryConfig } from "../config/memory"
@@ -88,8 +89,7 @@ async function collectInjectedFiles(
 }
 
 function addMatchingFiles(result: Set<string>, cwd: string, pattern: string): void {
-    const glob = new Bun.Glob(pattern)
-    for (const match of glob.scanSync({ cwd, absolute: true, onlyFiles: true })) {
+    for (const match of globSync(pattern, { cwd, absolute: true, onlyFiles: true })) {
         result.add(match)
     }
 }

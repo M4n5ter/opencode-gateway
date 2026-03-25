@@ -1,14 +1,14 @@
-import { Database } from "bun:sqlite"
 import { expect, test } from "bun:test"
 
 import type { BindingInboundMessage, BindingLoggerHost } from "../binding"
 import { GatewaySessionContext } from "../session/context"
 import { migrateGatewayDatabase } from "../store/migrations"
 import { SqliteStore } from "../store/sqlite"
+import { createMemoryDatabase } from "../test/sqlite"
 import { GatewayQuestionRuntime } from "./runtime"
 
 test("GatewayQuestionRuntime sends plain-text questions and replies from inbound text", async () => {
-    const db = new Database(":memory:")
+    const db = createMemoryDatabase()
 
     try {
         migrateGatewayDatabase(db)
@@ -89,7 +89,7 @@ test("GatewayQuestionRuntime sends plain-text questions and replies from inbound
 })
 
 test("GatewayQuestionRuntime answers Telegram callback queries using native buttons", async () => {
-    const db = new Database(":memory:")
+    const db = createMemoryDatabase()
 
     try {
         migrateGatewayDatabase(db)

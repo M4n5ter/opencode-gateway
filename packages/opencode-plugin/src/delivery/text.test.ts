@@ -1,14 +1,14 @@
-import { Database } from "bun:sqlite"
 import { expect, test } from "bun:test"
 
 import { GatewayTransportHost } from "../host/transport"
 import { migrateGatewayDatabase } from "../store/migrations"
 import { SqliteStore } from "../store/sqlite"
+import { createMemoryDatabase } from "../test/sqlite"
 import { TelegramProgressiveSupport } from "./telegram"
 import { GatewayTextDelivery } from "./text"
 
 test("GatewayTextDelivery uses draft preview for cached private chats", async () => {
-    const db = new Database(":memory:")
+    const db = createMemoryDatabase()
 
     try {
         migrateGatewayDatabase(db)
@@ -63,7 +63,7 @@ test("GatewayTextDelivery uses draft preview for cached private chats", async ()
 })
 
 test("GatewayTextDelivery falls back to oneshot for non-private Telegram chats", async () => {
-    const db = new Database(":memory:")
+    const db = createMemoryDatabase()
 
     try {
         migrateGatewayDatabase(db)
@@ -122,7 +122,7 @@ test("GatewayTextDelivery falls back to oneshot for non-private Telegram chats",
 })
 
 test("GatewayTextDelivery rejects forced stream mode for non-private chats", async () => {
-    const db = new Database(":memory:")
+    const db = createMemoryDatabase()
 
     try {
         migrateGatewayDatabase(db)
@@ -162,7 +162,7 @@ test("GatewayTextDelivery rejects forced stream mode for non-private chats", asy
 })
 
 test("GatewayTextDelivery records a draft fallback when Telegram draft preview fails", async () => {
-    const db = new Database(":memory:")
+    const db = createMemoryDatabase()
 
     try {
         migrateGatewayDatabase(db)
@@ -214,7 +214,7 @@ test("GatewayTextDelivery records a draft fallback when Telegram draft preview f
 })
 
 test("GatewayTextDelivery records preview_not_established when a progressive session finishes without previews", async () => {
-    const db = new Database(":memory:")
+    const db = createMemoryDatabase()
 
     try {
         migrateGatewayDatabase(db)
@@ -260,7 +260,7 @@ test("GatewayTextDelivery records preview_not_established when a progressive ses
 })
 
 test("GatewayTextDelivery does not emit late drafts after finish starts", async () => {
-    const db = new Database(":memory:")
+    const db = createMemoryDatabase()
 
     try {
         migrateGatewayDatabase(db)
@@ -321,7 +321,7 @@ test("GatewayTextDelivery does not emit late drafts after finish starts", async 
 })
 
 test("GatewayTextDelivery skips whitespace-only draft previews", async () => {
-    const db = new Database(":memory:")
+    const db = createMemoryDatabase()
 
     try {
         migrateGatewayDatabase(db)

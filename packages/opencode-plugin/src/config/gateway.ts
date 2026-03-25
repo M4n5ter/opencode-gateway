@@ -1,5 +1,7 @@
 import { existsSync } from "node:fs"
+import { readFile } from "node:fs/promises"
 import { dirname, isAbsolute, join, resolve } from "node:path"
+import { parse as parseToml } from "smol-toml"
 
 import { type GatewayLogLevel, parseGatewayLogLevel } from "../host/logger"
 import { type CronConfig, parseCronConfig } from "./cron"
@@ -105,8 +107,8 @@ async function readGatewayConfigFile(path: string): Promise<RawGatewayConfig | n
         return null
     }
 
-    const source = await Bun.file(path).text()
-    const parsed = Bun.TOML.parse(source)
+    const source = await readFile(path, "utf8")
+    const parsed = parseToml(source)
 
     if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
         throw new Error(`gateway config must decode to a table: ${path}`)

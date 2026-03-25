@@ -1,14 +1,14 @@
-import { Database } from "bun:sqlite"
 import { expect, test } from "bun:test"
 
 import type { BindingLoggerHost } from "../binding"
 import { migrateGatewayDatabase } from "../store/migrations"
 import { SqliteStore } from "../store/sqlite"
+import { createMemoryDatabase } from "../test/sqlite"
 import { GatewayTelegramRuntime } from "./runtime"
 import type { TelegramBotProfile } from "./types"
 
 test("telegram status performs a live getMe probe and persists bot metadata", async () => {
-    const db = new Database(":memory:")
+    const db = createMemoryDatabase()
 
     try {
         migrateGatewayDatabase(db)
@@ -82,7 +82,7 @@ test("telegram status performs a live getMe probe and persists bot metadata", as
 })
 
 test("telegram sendTest uses explicit targets and records send health", async () => {
-    const db = new Database(":memory:")
+    const db = createMemoryDatabase()
 
     try {
         migrateGatewayDatabase(db)
@@ -163,7 +163,7 @@ test("telegram sendTest uses explicit targets and records send health", async ()
 })
 
 test("telegram status reports stalled polling when the current poll exceeds the timeout budget", async () => {
-    const db = new Database(":memory:")
+    const db = createMemoryDatabase()
 
     try {
         migrateGatewayDatabase(db)

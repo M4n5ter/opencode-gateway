@@ -1,15 +1,17 @@
 import { open } from "node:fs/promises"
+import { lookup as lookupMimeType } from "mime-types"
 
 const FALLBACK_MIME_TYPE = "application/octet-stream"
 
 export async function inferLocalFileMimeType(filePath: string): Promise<string> {
-    const bunMimeType = Bun.file(filePath).type.trim()
-    if (bunMimeType.length > 0 && bunMimeType !== FALLBACK_MIME_TYPE) {
-        return bunMimeType
+    const inferredMimeType = lookupMimeType(filePath)
+    const lookupMime = typeof inferredMimeType === "string" ? inferredMimeType.trim() : ""
+    if (lookupMime.length > 0 && lookupMime !== FALLBACK_MIME_TYPE) {
+        return lookupMime
     }
 
     const header = await readFileHeader(filePath, 16)
-    return inferImageMimeTypeFromHeader(header) ?? (bunMimeType.length > 0 ? bunMimeType : FALLBACK_MIME_TYPE)
+    return inferImageMimeTypeFromHeader(header) ?? (lookupMime.length > 0 ? lookupMime : FALLBACK_MIME_TYPE)
 }
 
 export function isImageMimeType(mimeType: string): boolean {

@@ -1,6 +1,7 @@
 import type { OpencodeClient } from "@opencode-ai/sdk"
 
 import type { BindingLoggerHost } from "../binding"
+import { delay } from "../runtime/delay"
 import { formatError } from "../utils/error"
 import type { OpencodeEventHub, OpencodeRuntimeEvent } from "./events"
 
@@ -68,7 +69,7 @@ export class OpencodeEventStream {
                 this.connected = false
             }
 
-            await Bun.sleep(RECONNECT_DELAY_MS)
+            await delay(RECONNECT_DELAY_MS)
         }
     }
 }

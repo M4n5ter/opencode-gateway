@@ -1,4 +1,3 @@
-import { Database } from "bun:sqlite"
 import { expect, test } from "bun:test"
 
 import type {
@@ -16,10 +15,11 @@ import { OpencodeEventHub } from "../opencode/events"
 import { migrateGatewayDatabase } from "../store/migrations"
 import type { MailboxEntryRecord } from "../store/sqlite"
 import { SqliteStore } from "../store/sqlite"
+import { createMemoryDatabase } from "../test/sqlite"
 import { GatewayExecutor } from "./executor"
 
 test("GatewayExecutor recreates a stale persisted session before completing a oneshot reply", async () => {
-    const db = new Database(":memory:")
+    const db = createMemoryDatabase()
     const now = 1_735_689_600_000
     const restoreNow = mockDateNow(now)
 
@@ -109,7 +109,7 @@ test("GatewayExecutor recreates a stale persisted session before completing a on
 })
 
 test("GatewayExecutor appends earlier prompts and forwards progressive previews for the final prompt", async () => {
-    const db = new Database(":memory:")
+    const db = createMemoryDatabase()
     const now = 1_735_689_600_000
     const restoreNow = mockDateNow(now)
 
@@ -224,7 +224,7 @@ test("GatewayExecutor appends earlier prompts and forwards progressive previews 
 })
 
 test("GatewayExecutor preserves a session binding that changed during execution", async () => {
-    const db = new Database(":memory:")
+    const db = createMemoryDatabase()
     const now = 1_735_689_600_000
     const restoreNow = mockDateNow(now)
 
@@ -309,7 +309,7 @@ test("GatewayExecutor preserves a session binding that changed during execution"
 })
 
 test("GatewayExecutor appends context into the target conversation without triggering delivery", async () => {
-    const db = new Database(":memory:")
+    const db = createMemoryDatabase()
     const now = 1_735_689_600_000
     const restoreNow = mockDateNow(now)
 
@@ -401,7 +401,7 @@ test("GatewayExecutor appends context into the target conversation without trigg
 })
 
 test("GatewayExecutor aborts a residual busy persisted session before dispatching the next prompt", async () => {
-    const db = new Database(":memory:")
+    const db = createMemoryDatabase()
     const now = 1_735_689_600_000
     const restoreNow = mockDateNow(now)
 
@@ -482,7 +482,7 @@ test("GatewayExecutor aborts a residual busy persisted session before dispatchin
 })
 
 test("GatewayExecutor aborts a residual busy session after prompt completion", async () => {
-    const db = new Database(":memory:")
+    const db = createMemoryDatabase()
     const now = 1_735_689_600_000
     const restoreNow = mockDateNow(now)
 
@@ -561,7 +561,7 @@ test("GatewayExecutor aborts a residual busy session after prompt completion", a
 })
 
 test("GatewayExecutor lets a residual busy session settle before aborting it", async () => {
-    const db = new Database(":memory:")
+    const db = createMemoryDatabase()
     const now = 1_735_689_600_000
     const restoreNow = mockDateNow(now)
 

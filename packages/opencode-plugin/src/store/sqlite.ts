@@ -1,9 +1,9 @@
-import { Database } from "bun:sqlite"
 import { mkdir } from "node:fs/promises"
 import { dirname } from "node:path"
 
 import type { BindingDeliveryTarget } from "../binding"
 import type { GatewayQuestionInfo, PendingQuestionRecord } from "../questions/types"
+import type { SqliteDatabaseLike } from "./database"
 import { migrateGatewayDatabase } from "./migrations"
 
 export type RuntimeJournalKind = "inbound_message" | "cron_dispatch" | "delivery" | "mailbox_enqueue" | "mailbox_flush"
@@ -118,7 +118,7 @@ export type PersistPendingQuestionInput = {
 }
 
 export class SqliteStore {
-    constructor(private readonly db: Database) {}
+    constructor(private readonly db: SqliteDatabaseLike) {}
 
     getSessionBinding(conversationKey: string): string | null {
         const row = this.db
@@ -1015,7 +1015,10 @@ function mapMailboxEntryRow(row: MailboxEntryRow, attachments: MailboxEntryAttac
     }
 }
 
-function listMailboxAttachments(db: Database, entryIds: number[]): Map<number, MailboxEntryAttachmentRecord[]> {
+function listMailboxAttachments(
+    db: SqliteDatabaseLike,
+    entryIds: number[],
+): Map<number, MailboxEntryAttachmentRecord[]> {
     if (entryIds.length === 0) {
         return new Map()
     }
@@ -1192,7 +1195,8 @@ function readBooleanField(value: object, field: string, fallback: boolean): bool
 export async function openSqliteStore(path: string): Promise<SqliteStore> {
     await mkdir(dirname(path), { recursive: true })
 
-    const db = new Database(path)
+    const { SqliteDatabase } = await import("./database")
+    const db = new SqliteDatabase(path)
     migrateGatewayDatabase(db)
 
     return new SqliteStore(db)

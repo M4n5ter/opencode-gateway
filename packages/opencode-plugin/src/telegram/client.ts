@@ -1,3 +1,5 @@
+import { readFile, writeFile } from "node:fs/promises"
+
 import { formatError } from "../utils/error"
 import type {
     TelegramApiResponse,
@@ -66,7 +68,7 @@ export class TelegramBotClient {
             )
         }
 
-        await Bun.write(localPath, await response.bytes())
+        await writeFile(localPath, new Uint8Array(await response.arrayBuffer()))
     }
 
     async sendMessage(chatId: string, text: string, messageThreadId: string | null | undefined): Promise<void> {
@@ -102,7 +104,7 @@ export class TelegramBotClient {
         form.set("chat_id", chatId)
         setOptionalFormField(form, "caption", caption)
         setOptionalFormField(form, "message_thread_id", formatMessageThreadId(messageThreadId))
-        form.set("photo", Bun.file(filePath, { type: mimeType }))
+        form.set("photo", await readLocalFileBlob(filePath, mimeType), inferUploadFileName(filePath))
 
         await this.callMultipart("sendPhoto", form)
     }
@@ -118,7 +120,7 @@ export class TelegramBotClient {
         form.set("chat_id", chatId)
         setOptionalFormField(form, "caption", caption)
         setOptionalFormField(form, "message_thread_id", formatMessageThreadId(messageThreadId))
-        form.set("document", Bun.file(filePath, { type: mimeType }))
+        form.set("document", await readLocalFileBlob(filePath, mimeType), inferUploadFileName(filePath))
 
         await this.callMultipart("sendDocument", form)
     }
@@ -218,6 +220,17 @@ export type TelegramSendClientLike = Pick<TelegramBotClient, "sendMessage">
 export type TelegramMediaClientLike = Pick<TelegramBotClient, "getFile" | "downloadFile">
 export type TelegramFileSendClientLike = Pick<TelegramBotClient, "sendPhoto" | "sendDocument">
 export type TelegramChatActionClientLike = Pick<TelegramBotClient, "sendChatAction">
+
+async function readLocalFileBlob(filePath: string, mimeType: string): Promise<Blob> {
+    const bytes = await readFile(filePath)
+    return new Blob([bytes], { type: mimeType })
+}
+
+function inferUploadFileName(filePath: string): string {
+    const normalized = filePath.replaceAll("\\", "/")
+    const segments = normalized.split("/")
+    return segments.at(-1) ?? "upload"
+}
 export type TelegramProbeClientLike = Pick<TelegramBotClient, "getMe">
 export type TelegramChatClientLike = Pick<TelegramBotClient, "getChat">
 export type TelegramDraftClientLike = Pick<TelegramBotClient, "sendMessageDraft">

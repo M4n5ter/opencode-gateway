@@ -1,8 +1,8 @@
-import type { Database } from "bun:sqlite"
+import type { SqliteDatabaseLike } from "./database"
 
 const LATEST_SCHEMA_VERSION = 7
 
-export function migrateGatewayDatabase(db: Database): void {
+export function migrateGatewayDatabase(db: SqliteDatabaseLike): void {
     db.exec("PRAGMA journal_mode = WAL;")
     db.exec("PRAGMA foreign_keys = ON;")
 
@@ -46,12 +46,12 @@ export function migrateGatewayDatabase(db: Database): void {
     }
 }
 
-function readUserVersion(db: Database): number {
+function readUserVersion(db: SqliteDatabaseLike): number {
     const row = db.query<{ user_version: number }, []>("PRAGMA user_version;").get()
     return row?.user_version ?? 0
 }
 
-function migrateToV1(db: Database): void {
+function migrateToV1(db: SqliteDatabaseLike): void {
     db.exec(`
         CREATE TABLE session_bindings (
             conversation_key TEXT PRIMARY KEY NOT NULL,
@@ -73,7 +73,7 @@ function migrateToV1(db: Database): void {
     db.exec("PRAGMA user_version = 1;")
 }
 
-function migrateToV2(db: Database): void {
+function migrateToV2(db: SqliteDatabaseLike): void {
     db.exec(`
         CREATE TABLE kv_state (
             key TEXT PRIMARY KEY NOT NULL,
@@ -84,7 +84,7 @@ function migrateToV2(db: Database): void {
     db.exec("PRAGMA user_version = 2;")
 }
 
-function migrateToV3(db: Database): void {
+function migrateToV3(db: SqliteDatabaseLike): void {
     db.exec(`
         CREATE TABLE cron_jobs (
             id TEXT PRIMARY KEY NOT NULL,
@@ -122,7 +122,7 @@ function migrateToV3(db: Database): void {
     db.exec("PRAGMA user_version = 3;")
 }
 
-function migrateToV4(db: Database): void {
+function migrateToV4(db: SqliteDatabaseLike): void {
     db.exec(`
         CREATE TABLE mailbox_entries (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -146,7 +146,7 @@ function migrateToV4(db: Database): void {
     db.exec("PRAGMA user_version = 4;")
 }
 
-function migrateToV5(db: Database): void {
+function migrateToV5(db: SqliteDatabaseLike): void {
     db.exec(`
         CREATE TABLE mailbox_entry_attachments (
             mailbox_entry_id INTEGER NOT NULL REFERENCES mailbox_entries(id) ON DELETE CASCADE,
@@ -164,7 +164,7 @@ function migrateToV5(db: Database): void {
     db.exec("PRAGMA user_version = 5;")
 }
 
-function migrateToV6(db: Database): void {
+function migrateToV6(db: SqliteDatabaseLike): void {
     db.exec(`
         CREATE TABLE session_reply_targets (
             session_id TEXT NOT NULL,
@@ -204,7 +204,7 @@ function migrateToV6(db: Database): void {
     db.exec("PRAGMA user_version = 6;")
 }
 
-function migrateToV7(db: Database): void {
+function migrateToV7(db: SqliteDatabaseLike): void {
     db.exec(`
         ALTER TABLE cron_jobs
         ADD COLUMN kind TEXT NOT NULL DEFAULT 'cron';

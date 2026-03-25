@@ -80,7 +80,7 @@ test("ChannelFileSender sends non-images as documents", async () => {
         )
 
         expect(result.deliveryKind).toBe("document")
-        expect(sent).toEqual([{ kind: "document", path: filePath, mimeType: "text/plain;charset=utf-8" }])
+        expect(sent).toEqual([{ kind: "document", path: filePath, mimeType: "text/plain" }])
     } finally {
         await rm(root, { recursive: true, force: true })
     }

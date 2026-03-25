@@ -1,13 +1,13 @@
-import { Database } from "bun:sqlite"
 import { expect, test } from "bun:test"
 
 import type { BindingInboundMessage, BindingLoggerHost, BindingPreparedExecution, BindingPromptPart } from "../binding"
 import { migrateGatewayDatabase } from "../store/migrations"
 import { SqliteStore } from "../store/sqlite"
+import { createMemoryDatabase } from "../test/sqlite"
 import { GatewayMailboxRuntime } from "./mailbox"
 
 test("GatewayMailboxRuntime flushes queued entries one by one when batching is disabled", async () => {
-    const db = new Database(":memory:")
+    const db = createMemoryDatabase()
 
     try {
         migrateGatewayDatabase(db)
@@ -60,7 +60,7 @@ test("GatewayMailboxRuntime flushes queued entries one by one when batching is d
 })
 
 test("GatewayMailboxRuntime merges queued entries in the same mailbox when batching is enabled", async () => {
-    const db = new Database(":memory:")
+    const db = createMemoryDatabase()
 
     try {
         migrateGatewayDatabase(db)

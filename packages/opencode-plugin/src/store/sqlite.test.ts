@@ -1,11 +1,11 @@
-import { Database } from "bun:sqlite"
 import { expect, test } from "bun:test"
 
+import { createMemoryDatabase } from "../test/sqlite"
 import { migrateGatewayDatabase } from "./migrations"
 import { SqliteStore } from "./sqlite"
 
 test("sqlite store persists session bindings, offsets, and cron catalog state", () => {
-    const db = new Database(":memory:")
+    const db = createMemoryDatabase()
 
     try {
         migrateGatewayDatabase(db)
@@ -111,7 +111,7 @@ test("sqlite store persists session bindings, offsets, and cron catalog state", 
 })
 
 test("sqlite store deduplicates mailbox entries by source identity", () => {
-    const db = new Database(":memory:")
+    const db = createMemoryDatabase()
 
     try {
         migrateGatewayDatabase(db)
@@ -149,7 +149,7 @@ test("sqlite store deduplicates mailbox entries by source identity", () => {
 })
 
 test("sqlite store persists mailbox entry attachments alongside text", () => {
-    const db = new Database(":memory:")
+    const db = createMemoryDatabase()
 
     try {
         migrateGatewayDatabase(db)
@@ -204,7 +204,7 @@ test("sqlite store persists mailbox entry attachments alongside text", () => {
 })
 
 test("sqlite store persists session reply targets and pending questions", () => {
-    const db = new Database(":memory:")
+    const db = createMemoryDatabase()
 
     try {
         migrateGatewayDatabase(db)
@@ -306,7 +306,7 @@ test("sqlite store persists session reply targets and pending questions", () => 
 })
 
 test("sqlite migration upgrades a v3 database to include mailbox tables", () => {
-    const db = new Database(":memory:")
+    const db = createMemoryDatabase()
 
     try {
         db.exec(`

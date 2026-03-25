@@ -9,6 +9,7 @@ import type {
     BindingOpencodeMessage,
     BindingOpencodeMessagePart,
 } from "../binding"
+import { delay } from "../runtime/delay"
 
 const SESSION_IDLE_POLL_MS = 250
 const PROMPT_RESPONSE_TIMEOUT_MS = 90_000
@@ -182,7 +183,7 @@ export class OpencodeSdkAdapter {
                 }
             }
 
-            await Bun.sleep(SESSION_IDLE_POLL_MS)
+            await delay(SESSION_IDLE_POLL_MS)
         }
     }
 
@@ -266,7 +267,7 @@ export class OpencodeSdkAdapter {
                 )
             }
 
-            await Bun.sleep(SESSION_IDLE_POLL_MS)
+            await delay(SESSION_IDLE_POLL_MS)
         }
     }
 

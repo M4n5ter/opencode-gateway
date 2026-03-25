@@ -1,17 +1,17 @@
-import { Database } from "bun:sqlite"
 import { expect, test } from "bun:test"
 
 import type { BindingInboundMessage, BindingLoggerHost } from "../binding"
 import { GatewayMailboxRouter } from "../mailbox/router"
 import { migrateGatewayDatabase } from "../store/migrations"
 import { SqliteStore } from "../store/sqlite"
+import { createMemoryDatabase } from "../test/sqlite"
 import { TelegramApiError } from "./client"
 import type { TelegramNormalizedInboundMessage } from "./normalize"
 import { TelegramPollingService } from "./poller"
 import type { TelegramUpdate } from "./types"
 
 test("telegram poller aborts stalled getUpdates calls and records a timeout", async () => {
-    const db = new Database(":memory:")
+    const db = createMemoryDatabase()
 
     try {
         migrateGatewayDatabase(db)
@@ -73,7 +73,7 @@ test("telegram poller aborts stalled getUpdates calls and records a timeout", as
 })
 
 test("telegram poller logs recovery after a timeout", async () => {
-    const db = new Database(":memory:")
+    const db = createMemoryDatabase()
 
     try {
         migrateGatewayDatabase(db)
@@ -140,7 +140,7 @@ test("telegram poller logs recovery after a timeout", async () => {
 })
 
 test("telegram poller logs ignored updates at debug level", async () => {
-    const db = new Database(":memory:")
+    const db = createMemoryDatabase()
 
     try {
         migrateGatewayDatabase(db)

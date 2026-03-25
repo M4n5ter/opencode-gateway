@@ -1,12 +1,12 @@
-import { Database } from "bun:sqlite"
 import { expect, test } from "bun:test"
 import { GatewaySessionContext } from "../session/context"
 import { migrateGatewayDatabase } from "../store/migrations"
 import { SqliteStore } from "../store/sqlite"
+import { createMemoryDatabase } from "../test/sqlite"
 import { createChannelSendFileTool } from "./channel-send-file"
 
 test("channel_send_file defaults to the current session reply target", async () => {
-    const db = new Database(":memory:")
+    const db = createMemoryDatabase()
 
     try {
         migrateGatewayDatabase(db)

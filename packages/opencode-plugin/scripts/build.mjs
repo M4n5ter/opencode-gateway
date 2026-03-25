@@ -10,7 +10,18 @@ const pluginOutputPath = `${packageRoot}/dist/index.js`
 await rm(`${packageRoot}/dist`, { recursive: true, force: true })
 
 run("tsc", ["--project", "tsconfig.build.json", "--emitDeclarationOnly"])
-run("bun", ["build", "./src/index.ts", "--outfile", pluginOutputPath, "--target", "bun", "--format", "esm"])
+run("bun", [
+    "build",
+    "./src/index.ts",
+    "--outfile",
+    pluginOutputPath,
+    "--target",
+    "node",
+    "--format",
+    "esm",
+    "--external",
+    "better-sqlite3",
+])
 run("bun", ["build", "./src/cli.ts", "--outfile", cliOutputPath, "--target", "node", "--format", "esm"])
 
 const cliSource = await readFile(cliOutputPath, "utf8")

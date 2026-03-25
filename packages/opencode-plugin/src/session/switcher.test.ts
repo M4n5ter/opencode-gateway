@@ -1,14 +1,14 @@
-import { Database } from "bun:sqlite"
 import { expect, test } from "bun:test"
 
 import { GatewayMailboxRouter } from "../mailbox/router"
 import { migrateGatewayDatabase } from "../store/migrations"
 import { SqliteStore } from "../store/sqlite"
+import { createMemoryDatabase } from "../test/sqlite"
 import { GatewaySessionContext } from "./context"
 import { ChannelSessionSwitcher } from "./switcher"
 
 test("ChannelSessionSwitcher switches the routed conversation key to a fresh session", async () => {
-    const db = new Database(":memory:")
+    const db = createMemoryDatabase()
 
     try {
         migrateGatewayDatabase(db)
