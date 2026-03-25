@@ -1195,8 +1195,8 @@ function readBooleanField(value: object, field: string, fallback: boolean): bool
 export async function openSqliteStore(path: string): Promise<SqliteStore> {
     await mkdir(dirname(path), { recursive: true })
 
-    const { SqliteDatabase } = await import("./database")
-    const db = new SqliteDatabase(path)
+    const { openRuntimeSqliteDatabase } = await import("./database")
+    const db = await openRuntimeSqliteDatabase(path)
     migrateGatewayDatabase(db)
 
     return new SqliteStore(db)
