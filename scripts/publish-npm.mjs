@@ -7,11 +7,11 @@ const packageRoot = join(repoRoot, "packages/opencode-plugin")
 
 const options = parseArgs(process.argv.slice(2))
 
-run("bun", ["run", "check:binding"], repoRoot)
-run("bun", ["run", "check:plugin"], repoRoot)
-run("cargo", ["test"], repoRoot)
-run("cargo", ["clippy", "--all-targets", "--all-features"], repoRoot)
-run("npm", ["pack", "--dry-run"], packageRoot)
+runStep("check:binding", "bun", ["run", "check:binding"], repoRoot)
+runStep("check:plugin", "bun", ["run", "check:plugin"], repoRoot)
+runStep("cargo test", "cargo", ["test"], repoRoot)
+runStep("cargo clippy", "cargo", ["clippy", "--all-targets", "--all-features"], repoRoot)
+runStep("npm pack --dry-run", "npm", ["pack", "--dry-run"], packageRoot)
 
 if (!options.publish) {
     console.log("dry-run complete; rerun with --publish to publish opencode-gateway")
@@ -26,7 +26,7 @@ if (options.otp !== null) {
     publishArgs.push("--otp", options.otp)
 }
 
-run("npm", publishArgs, packageRoot)
+runStep("npm publish", "npm", publishArgs, packageRoot)
 
 function parseArgs(argv) {
     let publish = false
@@ -74,4 +74,9 @@ function run(command, args, cwd) {
     if (result.status !== 0) {
         process.exit(result.status ?? 1)
     }
+}
+
+function runStep(label, command, args, cwd) {
+    console.log(`[publish:npm] ${label}`)
+    run(command, args, cwd)
 }

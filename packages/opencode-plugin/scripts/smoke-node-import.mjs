@@ -58,3 +58,5 @@ try {
     delete process.env.OPENCODE_GATEWAY_CONFIG
     await rm(tempRoot, { recursive: true, force: true })
 }
+
+process.exit(0)
