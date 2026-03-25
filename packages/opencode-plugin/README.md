@@ -28,10 +28,22 @@ Check what it resolved:
 npx opencode-gateway doctor
 ```
 
-Then start OpenCode normally:
+Recommended:
+
+```bash
+opencode-gateway serve
+```
+
+This wraps `opencode serve` and warms the gateway plugin worker immediately, so
+Telegram polling and scheduled jobs do not stay idle until the first
+project-scoped request.
+
+If you still prefer the raw OpenCode command, warm the gateway explicitly after
+startup:
 
 ```bash
 opencode serve
+opencode-gateway warm
 ```
 
 If you want a separate managed config tree instead of editing your existing
@@ -39,9 +51,7 @@ OpenCode config:
 
 ```bash
 npx opencode-gateway init --managed
-export OPENCODE_CONFIG="$HOME/.config/opencode-gateway/opencode/opencode.json"
-export OPENCODE_CONFIG_DIR="$HOME/.config/opencode-gateway/opencode"
-opencode serve
+opencode-gateway serve --managed
 ```
 
 ## Example gateway config

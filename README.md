@@ -139,21 +139,42 @@ This reports:
 - whether `opencode-gateway.toml` exists
 - whether `opencode-gateway` is present in the `plugin` array
 - whether `TELEGRAM_BOT_TOKEN` is set
+- which server origin and workspace directory `opencode-gateway warm` will use
 
 ### 4. Start OpenCode
 
-If you used the default config directory:
+Recommended:
+
+```bash
+opencode-gateway serve
+```
+
+This wraps `opencode serve` and immediately warms the gateway plugin worker, so
+Telegram polling and scheduled jobs start without waiting for a manual
+project-scoped request.
+
+If you still prefer to run OpenCode directly, warm the gateway explicitly after
+startup:
 
 ```bash
 opencode serve
+opencode-gateway warm
 ```
 
-If you used `--managed`, start OpenCode against that directory explicitly:
+If you used `--managed`, start through the wrapper with the same flag:
+
+```bash
+opencode-gateway serve --managed
+```
+
+If you need the raw OpenCode command instead, set the managed config directory
+first and then warm the gateway explicitly:
 
 ```bash
 export OPENCODE_CONFIG="$HOME/.config/opencode-gateway/opencode/opencode.json"
 export OPENCODE_CONFIG_DIR="$HOME/.config/opencode-gateway/opencode"
 opencode serve
+opencode-gateway warm --managed
 ```
 
 If Telegram is enabled, also export:

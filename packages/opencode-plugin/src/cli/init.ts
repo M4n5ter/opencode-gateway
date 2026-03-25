@@ -53,4 +53,6 @@ export async function runInit(options: InitOptions, env: Record<string, string |
     console.log(`opencode config: ${opencodeConfigPath} (${opencodeStatus})`)
     console.log(`gateway config: ${gatewayConfigPath} (${gatewayStatus})`)
     console.log(`gateway workspace: ${workspaceDirPath} (ready)`)
+    console.log("next step: start OpenCode with `opencode-gateway serve`")
+    console.log("fallback: if you still run `opencode serve`, run `opencode-gateway warm` after startup")
 }

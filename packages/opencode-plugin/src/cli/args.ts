@@ -5,7 +5,7 @@ export type CliCommand =
           kind: "help"
       }
     | {
-          kind: "init" | "doctor"
+          kind: "init" | "doctor" | "serve" | "warm"
           managed: boolean
           configDir: string | null
       }
@@ -17,7 +17,7 @@ export function parseCliCommand(argv: string[]): CliCommand {
         return { kind: "help" }
     }
 
-    if (command !== "init" && command !== "doctor") {
+    if (command !== "init" && command !== "doctor" && command !== "serve" && command !== "warm") {
         throw new Error(`unknown command: ${command}`)
     }
 
@@ -68,6 +68,8 @@ export function formatCliHelp(): string {
         "Commands:",
         "  opencode-gateway init [--managed] [--config-dir <path>]",
         "  opencode-gateway doctor [--managed] [--config-dir <path>]",
+        "  opencode-gateway warm [--managed] [--config-dir <path>]",
+        "  opencode-gateway serve [--managed] [--config-dir <path>]",
         "",
         "Defaults:",
         "  init/doctor use OPENCODE_CONFIG_DIR when set, otherwise ~/.config/opencode",

@@ -3,6 +3,8 @@
 import { formatCliHelp, parseCliCommand } from "./cli/args"
 import { runDoctor } from "./cli/doctor"
 import { runInit } from "./cli/init"
+import { runServe } from "./cli/serve"
+import { runWarm } from "./cli/warm"
 
 async function main(): Promise<void> {
     const command = parseCliCommand(process.argv.slice(2))
@@ -16,6 +18,12 @@ async function main(): Promise<void> {
             return
         case "init":
             await runInit(command, process.env)
+            return
+        case "serve":
+            await runServe(command, process.env)
+            return
+        case "warm":
+            await runWarm(command, process.env)
             return
     }
 }
