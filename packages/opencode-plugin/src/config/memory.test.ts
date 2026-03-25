@@ -5,13 +5,13 @@ import { join } from "node:path"
 
 import { parseMemoryConfig } from "./memory"
 
-test("parseMemoryConfig resolves relative file entries against the config file", async () => {
+test("parseMemoryConfig resolves relative file entries against the gateway workspace", async () => {
     const root = await mkdtemp(join(tmpdir(), "opencode-gateway-memory-config-"))
-    const configPath = join(root, "opencode-gateway.toml")
-    const filePath = join(root, "memory", "project.md")
+    const workspaceDirPath = join(root, "opencode-gateway-workspace")
+    const filePath = join(workspaceDirPath, "memory", "project.md")
 
     try {
-        await mkdir(join(root, "memory"), { recursive: true })
+        await mkdir(join(workspaceDirPath, "memory"), { recursive: true })
         await writeFile(filePath, "# Project")
 
         const config = await parseMemoryConfig(
@@ -24,7 +24,7 @@ test("parseMemoryConfig resolves relative file entries against the config file",
                     },
                 ],
             },
-            configPath,
+            workspaceDirPath,
         )
 
         expect(config).toEqual({
@@ -45,8 +45,8 @@ test("parseMemoryConfig resolves relative file entries against the config file",
 
 test("parseMemoryConfig parses directory entries and keeps glob patterns", async () => {
     const root = await mkdtemp(join(tmpdir(), "opencode-gateway-memory-config-"))
-    const configPath = join(root, "opencode-gateway.toml")
-    const directoryPath = join(root, "notes")
+    const workspaceDirPath = join(root, "opencode-gateway-workspace")
+    const directoryPath = join(workspaceDirPath, "notes")
 
     try {
         await mkdir(directoryPath, { recursive: true })
@@ -62,7 +62,7 @@ test("parseMemoryConfig parses directory entries and keeps glob patterns", async
                     },
                 ],
             },
-            configPath,
+            workspaceDirPath,
         )
 
         expect(config).toEqual({
@@ -84,10 +84,11 @@ test("parseMemoryConfig parses directory entries and keeps glob patterns", async
 
 test("parseMemoryConfig rejects directory-only fields on file entries", async () => {
     const root = await mkdtemp(join(tmpdir(), "opencode-gateway-memory-config-"))
-    const configPath = join(root, "opencode-gateway.toml")
+    const workspaceDirPath = join(root, "opencode-gateway-workspace")
 
     try {
-        await writeFile(join(root, "project.md"), "# Project")
+        await mkdir(workspaceDirPath, { recursive: true })
+        await writeFile(join(workspaceDirPath, "project.md"), "# Project")
 
         await expect(
             parseMemoryConfig(
@@ -100,7 +101,7 @@ test("parseMemoryConfig rejects directory-only fields on file entries", async ()
                         },
                     ],
                 },
-                configPath,
+                workspaceDirPath,
             ),
         ).rejects.toThrow("only valid for directory entries")
     } finally {
@@ -110,10 +111,10 @@ test("parseMemoryConfig rejects directory-only fields on file entries", async ()
 
 test("parseMemoryConfig rejects file-only fields on directory entries", async () => {
     const root = await mkdtemp(join(tmpdir(), "opencode-gateway-memory-config-"))
-    const configPath = join(root, "opencode-gateway.toml")
+    const workspaceDirPath = join(root, "opencode-gateway-workspace")
 
     try {
-        await mkdir(join(root, "notes"), { recursive: true })
+        await mkdir(join(workspaceDirPath, "notes"), { recursive: true })
 
         await expect(
             parseMemoryConfig(
@@ -126,7 +127,7 @@ test("parseMemoryConfig rejects file-only fields on directory entries", async ()
                         },
                     ],
                 },
-                configPath,
+                workspaceDirPath,
             ),
         ).rejects.toThrow("only valid for file entries")
     } finally {
@@ -136,7 +137,7 @@ test("parseMemoryConfig rejects file-only fields on directory entries", async ()
 
 test("parseMemoryConfig rejects missing paths", async () => {
     const root = await mkdtemp(join(tmpdir(), "opencode-gateway-memory-config-"))
-    const configPath = join(root, "opencode-gateway.toml")
+    const workspaceDirPath = join(root, "opencode-gateway-workspace")
 
     try {
         await expect(
@@ -149,9 +150,75 @@ test("parseMemoryConfig rejects missing paths", async () => {
                         },
                     ],
                 },
-                configPath,
+                workspaceDirPath,
             ),
         ).rejects.toThrow("does not exist")
+    } finally {
+        await rm(root, { recursive: true, force: true })
+    }
+})
+
+test("parseMemoryConfig keeps absolute paths untouched", async () => {
+    const root = await mkdtemp(join(tmpdir(), "opencode-gateway-memory-config-"))
+    const workspaceDirPath = join(root, "opencode-gateway-workspace")
+    const filePath = join(root, "external", "project.md")
+
+    try {
+        await mkdir(join(root, "external"), { recursive: true })
+        await writeFile(filePath, "# Project")
+
+        const config = await parseMemoryConfig(
+            {
+                entries: [
+                    {
+                        path: filePath,
+                        description: "External memory",
+                    },
+                ],
+            },
+            workspaceDirPath,
+        )
+
+        expect(config.entries[0]).toEqual({
+            kind: "file",
+            path: filePath,
+            displayPath: filePath,
+            description: "External memory",
+            injectContent: false,
+        })
+    } finally {
+        await rm(root, { recursive: true, force: true })
+    }
+})
+
+test("parseMemoryConfig resolves parent traversals from the workspace root", async () => {
+    const root = await mkdtemp(join(tmpdir(), "opencode-gateway-memory-config-"))
+    const workspaceDirPath = join(root, "opencode-gateway-workspace")
+    const filePath = join(root, "shared", "project.md")
+
+    try {
+        await mkdir(join(root, "shared"), { recursive: true })
+        await writeFile(filePath, "# Project")
+
+        const config = await parseMemoryConfig(
+            {
+                entries: [
+                    {
+                        path: "../shared/project.md",
+                        description: "Shared memory",
+                    },
+                ],
+            },
+            workspaceDirPath,
+        )
+
+        expect(config.entries[0]).toEqual({
+            kind: "file",
+            path: filePath,
+            displayPath: "../shared/project.md",
+            description: "Shared memory",
+            injectContent: false,
+        })
     } finally {
         await rm(root, { recursive: true, force: true })
     }

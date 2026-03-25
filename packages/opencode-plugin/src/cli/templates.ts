@@ -21,7 +21,7 @@ export function buildGatewayConfigTemplate(stateDbPath: string): string {
         "allowed_users = []",
         "",
         "# Optional long-lived memory sources injected into gateway-managed sessions.",
-        "# Relative paths are resolved from this config file.",
+        "# Relative paths are resolved from opencode-gateway-workspace.",
         "#",
         "# [[memory.entries]]",
         '# path = "memory/project.md"',

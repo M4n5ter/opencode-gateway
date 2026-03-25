@@ -24,6 +24,43 @@ test("loadGatewayConfig resolves relative state_db against the config file", asy
     }
 })
 
+test("loadGatewayConfig resolves memory paths against the gateway workspace", async () => {
+    const root = await mkdtemp(join(tmpdir(), "opencode-gateway-config-"))
+    const configPath = join(root, "opencode-gateway.toml")
+    const workspaceDirPath = join(root, "opencode-gateway-workspace")
+    const memoryFilePath = join(workspaceDirPath, "memory", "project.md")
+
+    try {
+        await mkdir(join(workspaceDirPath, "memory"), { recursive: true })
+        await writeFile(
+            configPath,
+            [
+                "[[memory.entries]]",
+                'path = "memory/project.md"',
+                'description = "Project conventions"',
+                "inject_content = true",
+            ].join("\n"),
+        )
+        await writeFile(memoryFilePath, "# Project")
+
+        const config = await loadGatewayConfig({
+            OPENCODE_GATEWAY_CONFIG: configPath,
+        })
+
+        expect(config.memory.entries).toEqual([
+            {
+                kind: "file",
+                path: memoryFilePath,
+                displayPath: "memory/project.md",
+                description: "Project conventions",
+                injectContent: true,
+            },
+        ])
+    } finally {
+        await rm(root, { recursive: true, force: true })
+    }
+})
+
 test("loadGatewayConfig prefers OPENCODE_CONFIG_DIR/opencode-gateway.toml when no explicit path is set", async () => {
     const root = await mkdtemp(join(tmpdir(), "opencode-gateway-config-dir-"))
     const configDir = join(root, "opencode")

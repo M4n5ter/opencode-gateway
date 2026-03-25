@@ -65,6 +65,7 @@ type EnvSource = Record<string, string | undefined>
 
 export async function loadGatewayConfig(env: EnvSource = process.env): Promise<GatewayConfig> {
     const configPath = resolveGatewayConfigPath(env)
+    const workspaceDirPath = resolveGatewayWorkspacePath(configPath)
     const rawConfig = await readGatewayConfigFile(configPath)
     const stateDbValue = rawConfig?.gateway?.state_db
 
@@ -78,12 +79,12 @@ export async function loadGatewayConfig(env: EnvSource = process.env): Promise<G
         configPath,
         stateDbPath,
         mediaRootPath: resolveMediaRootPath(stateDbPath),
-        workspaceDirPath: resolveGatewayWorkspacePath(configPath),
+        workspaceDirPath,
         logLevel: parseGatewayLogLevel(rawConfig?.gateway?.log_level, "gateway.log_level"),
         hasLegacyGatewayTimezone: rawConfig?.gateway?.timezone !== undefined,
         legacyGatewayTimezone: readLegacyGatewayTimezone(rawConfig?.gateway?.timezone),
         mailbox: parseMailboxConfig(rawConfig?.gateway?.mailbox),
-        memory: await parseMemoryConfig(rawConfig?.memory, configPath),
+        memory: await parseMemoryConfig(rawConfig?.memory, workspaceDirPath),
         cron: parseCronConfig(rawConfig?.cron),
         telegram: parseTelegramConfig(rawConfig?.channels?.telegram, env),
     }

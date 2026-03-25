@@ -93,7 +93,8 @@ Memory rules:
 - `inject_markdown_contents = true` recursively injects `*.md` and `*.markdown`
 - `globs` are evaluated relative to the configured directory and may match other
   UTF-8 text files
-- relative paths are resolved from `opencode-gateway.toml`
+- relative paths are resolved from `opencode-gateway-workspace`
+- absolute paths are still allowed
 - memory is injected only into gateway-managed sessions, including scheduled
   runs and channel-bound sessions
 

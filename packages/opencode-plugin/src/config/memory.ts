@@ -1,5 +1,5 @@
 import { stat } from "node:fs/promises"
-import { dirname, resolve } from "node:path"
+import { resolve } from "node:path"
 
 export type GatewayMemoryConfig = {
     entries: GatewayMemoryEntryConfig[]
@@ -34,9 +34,9 @@ type RawMemoryEntryConfig = {
     globs?: unknown
 }
 
-export async function parseMemoryConfig(value: unknown, configPath: string): Promise<GatewayMemoryConfig> {
+export async function parseMemoryConfig(value: unknown, workspaceDirPath: string): Promise<GatewayMemoryConfig> {
     const table = readMemoryTable(value)
-    const entries = await readMemoryEntries(table.entries, configPath)
+    const entries = await readMemoryEntries(table.entries, workspaceDirPath)
     return { entries }
 }
 
@@ -52,7 +52,7 @@ function readMemoryTable(value: unknown): RawMemoryConfig {
     return value as RawMemoryConfig
 }
 
-async function readMemoryEntries(value: unknown, configPath: string): Promise<GatewayMemoryEntryConfig[]> {
+async function readMemoryEntries(value: unknown, workspaceDirPath: string): Promise<GatewayMemoryEntryConfig[]> {
     if (value === undefined) {
         return []
     }
@@ -61,10 +61,14 @@ async function readMemoryEntries(value: unknown, configPath: string): Promise<Ga
         throw new Error("memory.entries must be an array when present")
     }
 
-    return await Promise.all(value.map((entry, index) => readMemoryEntry(entry, index, configPath)))
+    return await Promise.all(value.map((entry, index) => readMemoryEntry(entry, index, workspaceDirPath)))
 }
 
-async function readMemoryEntry(value: unknown, index: number, configPath: string): Promise<GatewayMemoryEntryConfig> {
+async function readMemoryEntry(
+    value: unknown,
+    index: number,
+    workspaceDirPath: string,
+): Promise<GatewayMemoryEntryConfig> {
     const field = `memory.entries[${index}]`
     if (value === null || typeof value !== "object" || Array.isArray(value)) {
         throw new Error(`${field} must be a table`)
@@ -73,7 +77,7 @@ async function readMemoryEntry(value: unknown, index: number, configPath: string
     const entry = value as RawMemoryEntryConfig
     const displayPath = readRequiredString(entry.path, `${field}.path`)
     const description = readRequiredString(entry.description, `${field}.description`)
-    const resolvedPath = resolve(dirname(configPath), displayPath)
+    const resolvedPath = resolve(workspaceDirPath, displayPath)
     const metadata = await statPath(resolvedPath, `${field}.path`)
 
     if (metadata.isFile()) {
