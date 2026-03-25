@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -135,24 +135,65 @@ test("parseMemoryConfig rejects file-only fields on directory entries", async ()
     }
 })
 
-test("parseMemoryConfig rejects missing paths", async () => {
+test("parseMemoryConfig creates a missing file entry when the path looks like a file", async () => {
     const root = await mkdtemp(join(tmpdir(), "opencode-gateway-memory-config-"))
     const workspaceDirPath = join(root, "opencode-gateway-workspace")
+    const filePath = join(workspaceDirPath, "missing.md")
 
     try {
-        await expect(
-            parseMemoryConfig(
-                {
-                    entries: [
-                        {
-                            path: "missing.md",
-                            description: "Missing",
-                        },
-                    ],
-                },
-                workspaceDirPath,
-            ),
-        ).rejects.toThrow("does not exist")
+        const config = await parseMemoryConfig(
+            {
+                entries: [
+                    {
+                        path: "missing.md",
+                        description: "Missing",
+                    },
+                ],
+            },
+            workspaceDirPath,
+        )
+
+        expect(config.entries[0]).toEqual({
+            kind: "file",
+            path: filePath,
+            displayPath: "missing.md",
+            description: "Missing",
+            injectContent: false,
+        })
+        expect(await stat(filePath)).toBeDefined()
+    } finally {
+        await rm(root, { recursive: true, force: true })
+    }
+})
+
+test("parseMemoryConfig creates a missing directory entry when directory-only fields are present", async () => {
+    const root = await mkdtemp(join(tmpdir(), "opencode-gateway-memory-config-"))
+    const workspaceDirPath = join(root, "opencode-gateway-workspace")
+    const directoryPath = join(workspaceDirPath, "memory", "daily")
+
+    try {
+        const config = await parseMemoryConfig(
+            {
+                entries: [
+                    {
+                        path: "memory/daily",
+                        description: "Daily notes",
+                        inject_markdown_contents: true,
+                    },
+                ],
+            },
+            workspaceDirPath,
+        )
+
+        expect(config.entries[0]).toEqual({
+            kind: "directory",
+            path: directoryPath,
+            displayPath: "memory/daily",
+            description: "Daily notes",
+            injectMarkdownContents: true,
+            globs: [],
+        })
+        expect((await stat(directoryPath)).isDirectory()).toBe(true)
     } finally {
         await rm(root, { recursive: true, force: true })
     }

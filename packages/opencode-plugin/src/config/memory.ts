@@ -1,5 +1,5 @@
-import { stat } from "node:fs/promises"
-import { resolve } from "node:path"
+import { mkdir, stat, writeFile } from "node:fs/promises"
+import { basename, extname, resolve } from "node:path"
 
 export type GatewayMemoryConfig = {
     entries: GatewayMemoryEntryConfig[]
@@ -78,7 +78,7 @@ async function readMemoryEntry(
     const displayPath = readRequiredString(entry.path, `${field}.path`)
     const description = readRequiredString(entry.description, `${field}.description`)
     const resolvedPath = resolve(workspaceDirPath, displayPath)
-    const metadata = await statPath(resolvedPath, `${field}.path`)
+    const metadata = await ensurePathMetadata(resolvedPath, displayPath, entry, `${field}.path`)
 
     if (metadata.isFile()) {
         ensureDirectoryOnlyFieldIsAbsent(entry.inject_markdown_contents, `${field}.inject_markdown_contents`)
@@ -113,12 +113,56 @@ async function readMemoryEntry(
     throw new Error(`${field}.path must point to a regular file or directory`)
 }
 
-async function statPath(path: string, field: string) {
+async function ensurePathMetadata(path: string, displayPath: string, entry: RawMemoryEntryConfig, field: string) {
     try {
         return await stat(path)
     } catch (error) {
-        throw new Error(`${field} does not exist: ${path}`, { cause: error })
+        if (!isMissingPathError(error)) {
+            throw error
+        }
+
+        const kind = inferMissingEntryKind(displayPath, entry)
+        await createMissingEntryPath(path, kind)
+        return await stat(path)
     }
+}
+
+function isMissingPathError(error: unknown): boolean {
+    return error instanceof Error && "code" in error && error.code === "ENOENT"
+}
+
+function inferMissingEntryKind(displayPath: string, entry: RawMemoryEntryConfig): "file" | "directory" {
+    if (entry.inject_content !== undefined) {
+        return "file"
+    }
+
+    if (entry.inject_markdown_contents !== undefined || entry.globs !== undefined) {
+        return "directory"
+    }
+
+    const trimmedPath = displayPath.trim()
+    if (trimmedPath.endsWith("/") || trimmedPath.endsWith("\\")) {
+        return "directory"
+    }
+
+    const name = basename(trimmedPath)
+    if (name.startsWith(".") || extname(name).length > 0) {
+        return "file"
+    }
+
+    return "directory"
+}
+
+async function createMissingEntryPath(path: string, kind: "file" | "directory"): Promise<void> {
+    if (kind === "directory") {
+        await mkdir(path, { recursive: true })
+        return
+    }
+
+    const lastSlash = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"))
+    const parentPath = lastSlash >= 0 ? path.slice(0, lastSlash) : "."
+    await mkdir(parentPath, { recursive: true })
+    await writeFile(path, "", { flag: "a" })
 }
 
 function ensureDirectoryOnlyFieldIsAbsent(value: unknown, field: string): void {
