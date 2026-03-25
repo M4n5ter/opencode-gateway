@@ -22,12 +22,16 @@ export class TelegramApiError extends Error {
 export class TelegramBotClient {
     constructor(private readonly botToken: string) {}
 
-    async getUpdates(offset: number | null, timeoutSeconds: number): Promise<TelegramUpdate[]> {
-        return this.call("getUpdates", {
-            offset,
-            timeout: timeoutSeconds,
-            allowed_updates: ["message", "callback_query"],
-        })
+    async getUpdates(offset: number | null, timeoutSeconds: number, signal?: AbortSignal): Promise<TelegramUpdate[]> {
+        return this.call(
+            "getUpdates",
+            {
+                offset,
+                timeout: timeoutSeconds,
+                allowed_updates: ["message", "callback_query"],
+            },
+            signal,
+        )
     }
 
     async getMe(): Promise<TelegramBotProfile> {
@@ -152,7 +156,7 @@ export class TelegramBotClient {
         })
     }
 
-    private async call<Result>(method: string, body: Record<string, unknown>): Promise<Result> {
+    private async call<Result>(method: string, body: Record<string, unknown>, signal?: AbortSignal): Promise<Result> {
         let response: Response
 
         try {
@@ -162,6 +166,7 @@ export class TelegramBotClient {
                     "content-type": "application/json",
                 },
                 body: JSON.stringify(stripUndefined(body)),
+                signal,
             })
         } catch (error) {
             throw new TelegramApiError(`Telegram ${method} request failed: ${formatError(error)}`, true)

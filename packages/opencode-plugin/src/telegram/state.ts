@@ -3,8 +3,12 @@ import type { TelegramBotProfile, TelegramChatType } from "./types"
 
 const TELEGRAM_UPDATE_OFFSET_KEY = "telegram.update_offset"
 const TELEGRAM_LAST_POLL_SUCCESS_MS_KEY = "telegram.last_poll_success_ms"
+const TELEGRAM_LAST_POLL_STARTED_MS_KEY = "telegram.last_poll_started_ms"
+const TELEGRAM_LAST_POLL_COMPLETED_MS_KEY = "telegram.last_poll_completed_ms"
 const TELEGRAM_LAST_POLL_ERROR_AT_MS_KEY = "telegram.last_poll_error_at_ms"
 const TELEGRAM_LAST_POLL_ERROR_MESSAGE_KEY = "telegram.last_poll_error_message"
+const TELEGRAM_LAST_POLL_TIMEOUT_AT_MS_KEY = "telegram.last_poll_timeout_at_ms"
+const TELEGRAM_LAST_POLL_TIMEOUT_MESSAGE_KEY = "telegram.last_poll_timeout_message"
 const TELEGRAM_LAST_SEND_SUCCESS_MS_KEY = "telegram.last_send_success_ms"
 const TELEGRAM_LAST_SEND_ERROR_AT_MS_KEY = "telegram.last_send_error_at_ms"
 const TELEGRAM_LAST_SEND_ERROR_MESSAGE_KEY = "telegram.last_send_error_message"
@@ -29,8 +33,12 @@ export type TelegramStreamingFallbackReason =
 export type TelegramHealthSnapshot = {
     updateOffset: number | null
     lastPollSuccessMs: number | null
+    lastPollStartedMs: number | null
+    lastPollCompletedMs: number | null
     lastPollErrorAtMs: number | null
     lastPollErrorMessage: string | null
+    lastPollTimeoutAtMs: number | null
+    lastPollTimeoutMessage: string | null
     lastSendSuccessMs: number | null
     lastSendErrorAtMs: number | null
     lastSendErrorMessage: string | null
@@ -51,8 +59,12 @@ export function readTelegramHealthSnapshot(store: SqliteStore): TelegramHealthSn
     return {
         updateOffset: readStoredInteger(store, TELEGRAM_UPDATE_OFFSET_KEY),
         lastPollSuccessMs: readStoredInteger(store, TELEGRAM_LAST_POLL_SUCCESS_MS_KEY),
+        lastPollStartedMs: readStoredInteger(store, TELEGRAM_LAST_POLL_STARTED_MS_KEY),
+        lastPollCompletedMs: readStoredInteger(store, TELEGRAM_LAST_POLL_COMPLETED_MS_KEY),
         lastPollErrorAtMs: readStoredInteger(store, TELEGRAM_LAST_POLL_ERROR_AT_MS_KEY),
         lastPollErrorMessage: readStoredText(store, TELEGRAM_LAST_POLL_ERROR_MESSAGE_KEY),
+        lastPollTimeoutAtMs: readStoredInteger(store, TELEGRAM_LAST_POLL_TIMEOUT_AT_MS_KEY),
+        lastPollTimeoutMessage: readStoredText(store, TELEGRAM_LAST_POLL_TIMEOUT_MESSAGE_KEY),
         lastSendSuccessMs: readStoredInteger(store, TELEGRAM_LAST_SEND_SUCCESS_MS_KEY),
         lastSendErrorAtMs: readStoredInteger(store, TELEGRAM_LAST_SEND_ERROR_AT_MS_KEY),
         lastSendErrorMessage: readStoredText(store, TELEGRAM_LAST_SEND_ERROR_MESSAGE_KEY),
@@ -70,15 +82,31 @@ export function readTelegramHealthSnapshot(store: SqliteStore): TelegramHealthSn
     }
 }
 
+export function recordTelegramPollStarted(store: SqliteStore, recordedAtMs: number): void {
+    store.putStateValue(TELEGRAM_LAST_POLL_STARTED_MS_KEY, String(recordedAtMs), recordedAtMs)
+}
+
+export function recordTelegramPollCompleted(store: SqliteStore, recordedAtMs: number): void {
+    store.putStateValue(TELEGRAM_LAST_POLL_COMPLETED_MS_KEY, String(recordedAtMs), recordedAtMs)
+}
+
 export function recordTelegramPollSuccess(store: SqliteStore, recordedAtMs: number): void {
     store.putStateValue(TELEGRAM_LAST_POLL_SUCCESS_MS_KEY, String(recordedAtMs), recordedAtMs)
     store.putStateValue(TELEGRAM_LAST_POLL_ERROR_AT_MS_KEY, "", recordedAtMs)
     store.putStateValue(TELEGRAM_LAST_POLL_ERROR_MESSAGE_KEY, "", recordedAtMs)
+    store.putStateValue(TELEGRAM_LAST_POLL_TIMEOUT_AT_MS_KEY, "", recordedAtMs)
+    store.putStateValue(TELEGRAM_LAST_POLL_TIMEOUT_MESSAGE_KEY, "", recordedAtMs)
 }
 
 export function recordTelegramPollFailure(store: SqliteStore, message: string, recordedAtMs: number): void {
     store.putStateValue(TELEGRAM_LAST_POLL_ERROR_AT_MS_KEY, String(recordedAtMs), recordedAtMs)
     store.putStateValue(TELEGRAM_LAST_POLL_ERROR_MESSAGE_KEY, message, recordedAtMs)
+}
+
+export function recordTelegramPollTimeout(store: SqliteStore, message: string, recordedAtMs: number): void {
+    store.putStateValue(TELEGRAM_LAST_POLL_TIMEOUT_AT_MS_KEY, String(recordedAtMs), recordedAtMs)
+    store.putStateValue(TELEGRAM_LAST_POLL_TIMEOUT_MESSAGE_KEY, message, recordedAtMs)
+    recordTelegramPollFailure(store, message, recordedAtMs)
 }
 
 export function recordTelegramSendSuccess(store: SqliteStore, recordedAtMs: number): void {

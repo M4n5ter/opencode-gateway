@@ -69,6 +69,7 @@ test("telegram status performs a live getMe probe and persists bot metadata", as
         const status = await runtime.status()
 
         expect(status.enabled).toBe(true)
+        expect(status.pollState).toBe("idle")
         expect(status.liveProbe).toBe("ok")
         expect(status.liveBotId).toBe("42")
         expect(status.liveBotUsername).toBe("gateway_bot")
@@ -156,6 +157,89 @@ test("telegram sendTest uses explicit targets and records send health", async ()
         })
         expect(result.text).toBe("hello test")
         expect(result.mode).toBe("oneshot")
+    } finally {
+        db.close()
+    }
+})
+
+test("telegram status reports stalled polling when the current poll exceeds the timeout budget", async () => {
+    const db = new Database(":memory:")
+
+    try {
+        migrateGatewayDatabase(db)
+        const store = new SqliteStore(db)
+        const now = Date.now()
+        store.putStateValue("telegram.last_poll_started_ms", String(now - 31_000), now)
+        const runtime = new GatewayTelegramRuntime(
+            {
+                async getMe(): Promise<TelegramBotProfile> {
+                    return {
+                        id: 42,
+                        is_bot: true,
+                        username: "gateway_bot",
+                    }
+                },
+                async sendMessage(): Promise<void> {
+                    throw new Error("unused")
+                },
+                async sendChatAction(): Promise<void> {
+                    throw new Error("unused")
+                },
+                async getChat() {
+                    throw new Error("unused")
+                },
+                async getFile() {
+                    throw new Error("unused")
+                },
+                async downloadFile() {
+                    throw new Error("unused")
+                },
+                async sendPhoto() {
+                    throw new Error("unused")
+                },
+                async sendDocument() {
+                    throw new Error("unused")
+                },
+                async sendMessageDraft() {
+                    throw new Error("unused")
+                },
+            },
+            {
+                async sendTest() {
+                    throw new Error("unused")
+                },
+            },
+            store,
+            new MemoryLogger(),
+            {
+                enabled: true,
+                botToken: "secret",
+                botTokenEnv: "TELEGRAM_BOT_TOKEN",
+                pollTimeoutSeconds: 15,
+                allowedChats: ["-100123"],
+                allowedUsers: ["7"],
+            },
+            {
+                isRunning() {
+                    return true
+                },
+                currentPollStartedAtMs() {
+                    return now - 31_000
+                },
+                requestTimeoutMs() {
+                    return 25_000
+                },
+                recoveryRecordedAtMs() {
+                    return null
+                },
+                start() {},
+            },
+            createEventStream(),
+        )
+
+        const status = await runtime.status()
+
+        expect(status.pollState).toBe("stalled")
     } finally {
         db.close()
     }

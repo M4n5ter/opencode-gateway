@@ -8,11 +8,32 @@ import { formatError } from "../utils/error"
 import { TelegramApiError, type TelegramPollingClientLike } from "./client"
 import type { TelegramInboundMediaStore } from "./media"
 import { buildTelegramAllowlist, normalizeTelegramUpdate } from "./normalize"
-import { recordTelegramChatType, recordTelegramPollFailure, recordTelegramPollSuccess } from "./state"
+import {
+    recordTelegramChatType,
+    recordTelegramPollCompleted,
+    recordTelegramPollFailure,
+    recordTelegramPollStarted,
+    recordTelegramPollSuccess,
+    recordTelegramPollTimeout,
+} from "./state"
+
+const POLL_TIMEOUT_FLOOR_MS = 15_000
+const POLL_TIMEOUT_GRACE_MS = 10_000
+const POLL_STALL_GRACE_MS = 5_000
+
+type PollerTiming = {
+    timeoutFloorMs: number
+    timeoutGraceMs: number
+    stallGraceMs: number
+}
 
 export class TelegramPollingService {
     private readonly allowlist
+    private readonly timing: PollerTiming
     private running = false
+    private inFlightStartedAtMs: number | null = null
+    private consecutiveFailures = 0
+    private recoveredAtMs: number | null = null
 
     constructor(
         private readonly client: TelegramPollingClientLike,
@@ -20,11 +41,17 @@ export class TelegramPollingService {
         private readonly store: SqliteStore,
         private readonly logger: BindingLoggerHost,
         private readonly config: Extract<TelegramConfig, { enabled: true }>,
-        private readonly mailboxRouter: GatewayMailboxRouter,
-        private readonly mediaStore: TelegramInboundMediaStore,
-        private readonly questions: GatewayQuestionRuntime,
+        private readonly mailboxRouter: MailboxRouterLike,
+        private readonly mediaStore: TelegramInboundMediaStoreLike,
+        private readonly questions: GatewayQuestionRuntimeLike,
+        timing?: Partial<PollerTiming>,
     ) {
         this.allowlist = buildTelegramAllowlist(config)
+        this.timing = {
+            timeoutFloorMs: timing?.timeoutFloorMs ?? POLL_TIMEOUT_FLOOR_MS,
+            timeoutGraceMs: timing?.timeoutGraceMs ?? POLL_TIMEOUT_GRACE_MS,
+            stallGraceMs: timing?.stallGraceMs ?? POLL_STALL_GRACE_MS,
+        }
     }
 
     start(): void {
@@ -42,21 +69,52 @@ export class TelegramPollingService {
         return this.running
     }
 
+    currentPollStartedAtMs(): number | null {
+        return this.inFlightStartedAtMs
+    }
+
+    requestTimeoutMs(): number {
+        return Math.max(this.config.pollTimeoutSeconds * 1_000 + this.timing.timeoutGraceMs, this.timing.timeoutFloorMs)
+    }
+
+    recoveryRecordedAtMs(): number | null {
+        return this.recoveredAtMs
+    }
+
     private async runLoop(): Promise<void> {
         let offset = this.store.getTelegramUpdateOffset()
         let retryDelayMs = 1_000
 
         for (;;) {
+            const pollStartedAtMs = Date.now()
+            recordTelegramPollStarted(this.store, pollStartedAtMs)
+
+            const controller = new AbortController()
+            const timeoutHandle = setTimeout(() => {
+                controller.abort()
+            }, this.requestTimeoutMs() + this.timing.stallGraceMs)
+            this.inFlightStartedAtMs = pollStartedAtMs
+
             try {
-                const updates = await this.client.getUpdates(offset, this.config.pollTimeoutSeconds)
-                recordTelegramPollSuccess(this.store, Date.now())
+                const updates = await this.client.getUpdates(offset, this.config.pollTimeoutSeconds, controller.signal)
+                const recordedAtMs = Date.now()
+                recordTelegramPollCompleted(this.store, recordedAtMs)
+                recordTelegramPollSuccess(this.store, recordedAtMs)
+
+                if (this.consecutiveFailures > 0) {
+                    this.recoveredAtMs = recordedAtMs
+                    this.logger.log(
+                        "info",
+                        `telegram poller recovered after ${this.consecutiveFailures} consecutive failure(s)`,
+                    )
+                }
 
                 for (const update of updates) {
                     const nextOffset = update.update_id + 1
                     const normalized = normalizeTelegramUpdate(update, this.allowlist, this.mailboxRouter)
 
                     if (normalized.kind === "ignore") {
-                        this.logger.log("info", `ignoring telegram update ${update.update_id}: ${normalized.reason}`)
+                        this.logger.log("debug", `ignoring telegram update ${update.update_id}: ${normalized.reason}`)
                         offset = this.advanceOffset(nextOffset)
                         continue
                     }
@@ -90,18 +148,31 @@ export class TelegramPollingService {
                     offset = this.advanceOffset(nextOffset)
                 }
 
+                this.consecutiveFailures = 0
                 retryDelayMs = 1_000
             } catch (error) {
-                recordTelegramPollFailure(this.store, formatTelegramPollerError(error), Date.now())
+                const recordedAtMs = Date.now()
+                recordTelegramPollCompleted(this.store, recordedAtMs)
+                const pollError = classifyTelegramPollError(error, this.requestTimeoutMs())
+                this.consecutiveFailures += 1
+
+                if (pollError.kind === "timeout") {
+                    recordTelegramPollTimeout(this.store, pollError.message, recordedAtMs)
+                } else {
+                    recordTelegramPollFailure(this.store, pollError.message, recordedAtMs)
+                }
 
                 if (isPermanentTelegramFailure(error)) {
-                    this.logger.log("error", formatTelegramPollerError(error))
+                    this.logger.log("error", pollError.message)
                     return
                 }
 
-                this.logger.log("warn", formatTelegramPollerError(error))
+                this.logger.log("warn", pollError.message)
                 await sleep(retryDelayMs)
                 retryDelayMs = Math.min(retryDelayMs * 2, 15_000)
+            } finally {
+                clearTimeout(timeoutHandle)
+                this.inFlightStartedAtMs = null
             }
         }
     }
@@ -115,6 +186,9 @@ export class TelegramPollingService {
 }
 
 type GatewayMailboxRuntimeLike = Pick<GatewayMailboxRuntime, "enqueueInboundMessage">
+type MailboxRouterLike = Pick<GatewayMailboxRouter, "resolve">
+type TelegramInboundMediaStoreLike = Pick<TelegramInboundMediaStore, "materializeInboundMessage">
+type GatewayQuestionRuntimeLike = Pick<GatewayQuestionRuntime, "handleTelegramCallbackQuery">
 
 function isPermanentTelegramFailure(error: unknown): boolean {
     return error instanceof TelegramApiError && !error.retryable
@@ -122,6 +196,35 @@ function isPermanentTelegramFailure(error: unknown): boolean {
 
 function formatTelegramPollerError(error: unknown): string {
     return `telegram poller failure: ${formatError(error)}`
+}
+
+function classifyTelegramPollError(
+    error: unknown,
+    requestTimeoutMs: number,
+): { kind: "timeout" | "error"; message: string } {
+    if (isAbortError(error)) {
+        return {
+            kind: "timeout",
+            message: `telegram poller timeout after ${requestTimeoutMs}ms`,
+        }
+    }
+
+    return {
+        kind: "error",
+        message: formatTelegramPollerError(error),
+    }
+}
+
+function isAbortError(error: unknown): boolean {
+    if (error instanceof DOMException) {
+        return error.name === "AbortError"
+    }
+
+    if (error instanceof Error) {
+        return error.name === "AbortError"
+    }
+
+    return false
 }
 
 function sleep(durationMs: number): Promise<void> {

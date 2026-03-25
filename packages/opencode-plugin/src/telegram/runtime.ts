@@ -25,6 +25,7 @@ type OpencodeEventStreamLike = {
 export type GatewayTelegramStatus = TelegramHealthSnapshot & {
     enabled: boolean
     polling: boolean
+    pollState: "disabled" | "idle" | "running" | "stalled" | "recovering"
     allowlistMode: "disabled" | "explicit"
     allowedChatsCount: number
     allowedUsersCount: number
@@ -46,6 +47,13 @@ export type TelegramSendTestResult = {
 }
 
 type TelegramTextDeliveryLike = Pick<GatewayTextDelivery, "sendTest">
+type TelegramPollingStateLike = Pick<
+    TelegramPollingService,
+    "currentPollStartedAtMs" | "isRunning" | "recoveryRecordedAtMs" | "requestTimeoutMs" | "start"
+>
+
+const RECENT_RECOVERY_WINDOW_MS = 60_000
+const POLL_STALLED_GRACE_MS = 5_000
 
 export class GatewayTelegramRuntime {
     constructor(
@@ -54,7 +62,7 @@ export class GatewayTelegramRuntime {
         private readonly store: SqliteStore,
         private readonly logger: BindingLoggerHost,
         private readonly config: TelegramConfig,
-        private readonly polling: TelegramPollingService | null,
+        private readonly polling: TelegramPollingStateLike | null,
         private readonly opencodeEvents: OpencodeEventStreamLike,
     ) {}
 
@@ -81,6 +89,7 @@ export class GatewayTelegramRuntime {
                 ...snapshot,
                 enabled: false,
                 polling: false,
+                pollState: "disabled",
                 allowlistMode: "disabled",
                 allowedChatsCount: 0,
                 allowedUsersCount: 0,
@@ -102,7 +111,7 @@ export class GatewayTelegramRuntime {
             return buildEnabledStatus(
                 this.config,
                 readTelegramHealthSnapshot(this.store),
-                this.isPolling(),
+                this.polling,
                 "ok",
                 null,
                 bot,
@@ -117,7 +126,7 @@ export class GatewayTelegramRuntime {
             return buildEnabledStatus(
                 this.config,
                 readTelegramHealthSnapshot(this.store),
-                this.isPolling(),
+                this.polling,
                 "failed",
                 message,
                 null,
@@ -175,16 +184,19 @@ export class GatewayTelegramRuntime {
 function buildEnabledStatus(
     config: EnabledTelegramConfig,
     snapshot: TelegramHealthSnapshot,
-    polling: boolean,
+    polling: TelegramPollingStateLike | null,
     liveProbe: "ok" | "failed",
     liveProbeError: string | null,
     bot: TelegramBotProfile | null,
     opencodeEvents: OpencodeEventStreamLike,
 ): GatewayTelegramStatus {
+    const pollingEnabled = polling?.isRunning() ?? false
+
     return {
         ...snapshot,
         enabled: true,
-        polling,
+        polling: pollingEnabled,
+        pollState: resolvePollState(snapshot, polling),
         allowlistMode: "explicit",
         allowedChatsCount: config.allowedChats.length,
         allowedUsersCount: config.allowedUsers.length,
@@ -196,6 +208,35 @@ function buildEnabledStatus(
         opencodeEventStreamConnected: opencodeEvents.isConnected(),
         lastEventStreamError: opencodeEvents.lastStreamError(),
     }
+}
+
+function resolvePollState(
+    snapshot: TelegramHealthSnapshot,
+    polling: TelegramPollingStateLike | null,
+): GatewayTelegramStatus["pollState"] {
+    if (polling === null || !polling.isRunning()) {
+        return "idle"
+    }
+
+    const now = Date.now()
+    const inFlightStartedAtMs = polling.currentPollStartedAtMs()
+    if (
+        inFlightStartedAtMs !== null &&
+        now - inFlightStartedAtMs > polling.requestTimeoutMs() + POLL_STALLED_GRACE_MS
+    ) {
+        return "stalled"
+    }
+
+    const recoveredAtMs = polling.recoveryRecordedAtMs()
+    if (recoveredAtMs !== null && now - recoveredAtMs <= RECENT_RECOVERY_WINDOW_MS) {
+        return "recovering"
+    }
+
+    if (snapshot.lastPollStartedMs !== null) {
+        return "running"
+    }
+
+    return "idle"
 }
 
 function normalizeRequiredField(value: string, field: string): string {
