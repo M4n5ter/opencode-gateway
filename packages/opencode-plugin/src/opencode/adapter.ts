@@ -361,19 +361,27 @@ function listAssistantResponses(messages: MessageResponse[], userMessageId: stri
 function selectAssistantResponse(assistantChildren: AssistantMessageResponse[]): AssistantMessageResponse | null {
     for (let index = assistantChildren.length - 1; index >= 0; index -= 1) {
         const candidate = assistantChildren[index]
-        if (hasVisibleText(candidate)) {
+        if (isTerminalAssistantMessage(candidate) && hasVisibleText(candidate)) {
             return candidate
         }
     }
 
     for (let index = assistantChildren.length - 1; index >= 0; index -= 1) {
         const candidate = assistantChildren[index]
-        if (candidate.info?.finish === "stop" || candidate.info?.error !== undefined) {
+        if (isTerminalAssistantMessage(candidate)) {
             return candidate
         }
     }
 
     return null
+}
+
+function isTerminalAssistantMessage(message: AssistantMessageResponse): boolean {
+    if (message.info.error !== undefined) {
+        return true
+    }
+
+    return typeof message.info.finish === "string" && message.info.finish !== "tool-calls"
 }
 
 function createAssistantProgressKey(messages: AssistantMessageResponse[]): string {

@@ -279,6 +279,122 @@ test("OpencodeSdkAdapter ignores a trailing empty assistant stub when waiting fo
     expect(calls).toBeGreaterThanOrEqual(2)
 })
 
+test("OpencodeSdkAdapter does not finalize on a tool-calling assistant that already emitted visible text", async () => {
+    let calls = 0
+    const adapter = new OpencodeSdkAdapter(
+        {
+            session: {
+                async messages() {
+                    calls += 1
+                    return {
+                        data:
+                            calls === 1
+                                ? [
+                                      {
+                                          info: {
+                                              id: "msg_user_1",
+                                              role: "user",
+                                          },
+                                          parts: [],
+                                      },
+                                      {
+                                          info: {
+                                              id: "msg_assistant_in_progress",
+                                              role: "assistant",
+                                              parentID: "msg_user_1",
+                                              finish: "tool-calls",
+                                          },
+                                          parts: [
+                                              {
+                                                  id: "part_in_progress_text",
+                                                  messageID: "msg_assistant_in_progress",
+                                                  type: "text",
+                                                  text: "Let me fetch that for you:",
+                                              },
+                                              {
+                                                  id: "part_in_progress_tool",
+                                                  messageID: "msg_assistant_in_progress",
+                                                  type: "tool",
+                                              },
+                                          ],
+                                      },
+                                  ]
+                                : [
+                                      {
+                                          info: {
+                                              id: "msg_user_1",
+                                              role: "user",
+                                          },
+                                          parts: [],
+                                      },
+                                      {
+                                          info: {
+                                              id: "msg_assistant_in_progress",
+                                              role: "assistant",
+                                              parentID: "msg_user_1",
+                                              finish: "tool-calls",
+                                          },
+                                          parts: [
+                                              {
+                                                  id: "part_in_progress_text",
+                                                  messageID: "msg_assistant_in_progress",
+                                                  type: "text",
+                                                  text: "Let me fetch that for you:",
+                                              },
+                                              {
+                                                  id: "part_in_progress_tool",
+                                                  messageID: "msg_assistant_in_progress",
+                                                  type: "tool",
+                                              },
+                                          ],
+                                      },
+                                      {
+                                          info: {
+                                              id: "msg_assistant_final",
+                                              role: "assistant",
+                                              parentID: "msg_user_1",
+                                              finish: "stop",
+                                          },
+                                          parts: [
+                                              {
+                                                  id: "part_final",
+                                                  messageID: "msg_assistant_final",
+                                                  type: "text",
+                                                  text: "final answer",
+                                              },
+                                          ],
+                                      },
+                                  ],
+                    }
+                },
+            },
+        } as never,
+        "/workspace",
+    )
+
+    expect(
+        await adapter.execute({
+            kind: "awaitPromptResponse",
+            sessionId: "ses_1",
+            messageId: "msg_user_1",
+        }),
+    ).toEqual({
+        kind: "awaitPromptResponse",
+        sessionId: "ses_1",
+        messageId: "msg_assistant_final",
+        parts: [
+            {
+                messageId: "msg_assistant_final",
+                partId: "part_final",
+                type: "text",
+                text: "final answer",
+                ignored: false,
+            },
+        ],
+    })
+    expect(calls).toBeGreaterThanOrEqual(2)
+})
+
 test("OpencodeSdkAdapter extends the response deadline while the session is still making progress", async () => {
     let calls = 0
     let now = 0
