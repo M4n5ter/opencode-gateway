@@ -12,14 +12,15 @@ export type GatewayMemoryEntryConfig =
           displayPath: string
           description: string
           injectContent: boolean
+          searchOnly: boolean
       }
     | {
           kind: "directory"
           path: string
           displayPath: string
           description: string
-          injectMarkdownContents: boolean
           globs: string[]
+          searchOnly: boolean
       }
 
 type RawMemoryConfig = {
@@ -32,6 +33,7 @@ type RawMemoryEntryConfig = {
     inject_content?: unknown
     inject_markdown_contents?: unknown
     globs?: unknown
+    search_only?: unknown
 }
 
 export async function parseMemoryConfig(value: unknown, workspaceDirPath: string): Promise<GatewayMemoryConfig> {
@@ -75,38 +77,50 @@ async function readMemoryEntry(
     }
 
     const entry = value as RawMemoryEntryConfig
+    if (entry.inject_markdown_contents !== undefined) {
+        throw new Error(
+            `${field}.inject_markdown_contents has been removed; use globs for directory injection or search_only for on-demand access`,
+        )
+    }
+
     const displayPath = readRequiredString(entry.path, `${field}.path`)
     const description = readRequiredString(entry.description, `${field}.description`)
     const resolvedPath = resolve(workspaceDirPath, displayPath)
     const metadata = await ensurePathMetadata(resolvedPath, displayPath, entry, `${field}.path`)
+    const searchOnly = readBoolean(entry.search_only, `${field}.search_only`, false)
 
     if (metadata.isFile()) {
-        ensureDirectoryOnlyFieldIsAbsent(entry.inject_markdown_contents, `${field}.inject_markdown_contents`)
         ensureDirectoryOnlyFieldIsAbsent(entry.globs, `${field}.globs`)
+
+        const injectContent = readBoolean(entry.inject_content, `${field}.inject_content`, false)
+        if (searchOnly && injectContent) {
+            throw new Error(`${field} cannot enable both inject_content and search_only`)
+        }
 
         return {
             kind: "file",
             path: resolvedPath,
             displayPath,
             description,
-            injectContent: readBoolean(entry.inject_content, `${field}.inject_content`, false),
+            injectContent,
+            searchOnly,
         }
     }
 
     if (metadata.isDirectory()) {
         ensureFileOnlyFieldIsAbsent(entry.inject_content, `${field}.inject_content`)
+        const globs = readGlobList(entry.globs, `${field}.globs`)
+        if (searchOnly && globs.length > 0) {
+            throw new Error(`${field} cannot enable both globs and search_only`)
+        }
 
         return {
             kind: "directory",
             path: resolvedPath,
             displayPath,
             description,
-            injectMarkdownContents: readBoolean(
-                entry.inject_markdown_contents,
-                `${field}.inject_markdown_contents`,
-                false,
-            ),
-            globs: readGlobList(entry.globs, `${field}.globs`),
+            globs,
+            searchOnly,
         }
     }
 
@@ -136,7 +150,7 @@ function inferMissingEntryKind(displayPath: string, entry: RawMemoryEntryConfig)
         return "file"
     }
 
-    if (entry.inject_markdown_contents !== undefined || entry.globs !== undefined) {
+    if (entry.globs !== undefined) {
         return "directory"
     }
 

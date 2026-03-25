@@ -6,7 +6,7 @@ import { join } from "node:path"
 import type { GatewayMemoryConfig } from "../config/memory"
 import { GatewayMemoryPromptProvider } from "./prompt"
 
-test("GatewayMemoryPromptProvider expands recursive markdown and explicit globbed text files", async () => {
+test("GatewayMemoryPromptProvider auto-injects only glob-matched directory files", async () => {
     const root = await mkdtemp(join(tmpdir(), "opencode-gateway-memory-prompt-"))
     const memoryDir = join(root, "memory")
     const warnings: string[] = []
@@ -26,8 +26,8 @@ test("GatewayMemoryPromptProvider expands recursive markdown and explicit globbe
                     path: memoryDir,
                     displayPath: "memory",
                     description: "Long-lived notes",
-                    injectMarkdownContents: true,
-                    globs: ["**/*.txt", "**/*.bin"],
+                    globs: ["**/*.md", "**/*.txt", "**/*.bin"],
+                    searchOnly: false,
                 },
             ],
         }
@@ -42,12 +42,46 @@ test("GatewayMemoryPromptProvider expands recursive markdown and explicit globbe
         expect(prompt).not.toBeNull()
         expect(prompt).toContain("Gateway memory:")
         expect(prompt).toContain("Configured path: memory")
-        expect(prompt).toContain("File: memory/docs/notes.markdown")
+        expect(prompt).toContain("Access: globs are auto-injected")
+        expect(prompt).toContain("Auto-injected globs: **/*.md, **/*.txt, **/*.bin")
         expect(prompt).toContain("File: memory/docs/project.md")
         expect(prompt).toContain("File: memory/extra/info.txt")
+        expect(prompt).not.toContain("File: memory/docs/notes.markdown")
         expect(prompt).not.toContain("File: memory/extra/blob.bin")
         expect(warnings).toHaveLength(1)
         expect(warnings[0]).toContain("memory file looks binary")
+    } finally {
+        await rm(root, { recursive: true, force: true })
+    }
+})
+
+test("GatewayMemoryPromptProvider marks search-only entries without injecting their content", async () => {
+    const root = await mkdtemp(join(tmpdir(), "opencode-gateway-memory-prompt-"))
+    const memoryFile = join(root, "USER.md")
+
+    try {
+        await writeFile(memoryFile, "# User")
+
+        const config: GatewayMemoryConfig = {
+            entries: [
+                {
+                    kind: "file",
+                    path: memoryFile,
+                    displayPath: "USER.md",
+                    description: "User profile",
+                    injectContent: false,
+                    searchOnly: true,
+                },
+            ],
+        }
+
+        const prompt = await new GatewayMemoryPromptProvider(config, { log() {} }).buildPrompt()
+
+        expect(prompt).not.toBeNull()
+        expect(prompt).toContain("Configured path: USER.md")
+        expect(prompt).toContain("Access: search-only")
+        expect(prompt).not.toContain("File: USER.md")
+        expect(prompt).not.toContain("# User")
     } finally {
         await rm(root, { recursive: true, force: true })
     }

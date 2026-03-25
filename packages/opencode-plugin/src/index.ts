@@ -8,6 +8,8 @@ import { createCronRunTool } from "./tools/cron-run"
 import { createCronUpsertTool } from "./tools/cron-upsert"
 import { createGatewayDispatchCronTool } from "./tools/gateway-dispatch-cron"
 import { createGatewayStatusTool } from "./tools/gateway-status"
+import { createMemoryGetTool } from "./tools/memory-get"
+import { createMemorySearchTool } from "./tools/memory-search"
 import { createScheduleCancelTool } from "./tools/schedule-cancel"
 import { createScheduleListTool } from "./tools/schedule-list"
 import { createScheduleOnceTool } from "./tools/schedule-once"
@@ -31,6 +33,11 @@ export const OpencodeGatewayPlugin: Plugin = async (input) => {
         schedule_list: createScheduleListTool(runtime.cron),
         schedule_once: createScheduleOnceTool(runtime.cron, runtime.sessionContext),
         schedule_status: createScheduleStatusTool(runtime.cron),
+    }
+
+    if (runtime.memory.hasEntries()) {
+        tools.memory_search = createMemorySearchTool(runtime.memory)
+        tools.memory_get = createMemoryGetTool(runtime.memory)
     }
 
     if (runtime.files.hasEnabledChannel()) {

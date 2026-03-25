@@ -44,6 +44,7 @@ test("GatewaySystemPromptBuilder combines gateway target context with memory con
                     displayPath: "memory/project.md",
                     description: "Project conventions",
                     injectContent: true,
+                    searchOnly: false,
                 },
             ],
         }).buildPrompts("ses_gateway")
@@ -81,6 +82,7 @@ test("GatewaySystemPromptBuilder injects memory for gateway-owned schedule sessi
                     displayPath: "memory/project.md",
                     description: "Project conventions",
                     injectContent: false,
+                    searchOnly: false,
                 },
             ],
         }).buildPrompts("ses_schedule")

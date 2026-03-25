@@ -35,6 +35,7 @@ test("parseMemoryConfig resolves relative file entries against the gateway works
                     displayPath: "memory/project.md",
                     description: "Project conventions",
                     injectContent: true,
+                    searchOnly: false,
                 },
             ],
         })
@@ -57,8 +58,7 @@ test("parseMemoryConfig parses directory entries and keeps glob patterns", async
                     {
                         path: "notes",
                         description: "Long-lived notes",
-                        inject_markdown_contents: true,
-                        globs: ["**/*.txt", "ops/**/*.yaml"],
+                        globs: ["**/*.md", "ops/**/*.yaml"],
                     },
                 ],
             },
@@ -72,11 +72,37 @@ test("parseMemoryConfig parses directory entries and keeps glob patterns", async
                     path: directoryPath,
                     displayPath: "notes",
                     description: "Long-lived notes",
-                    injectMarkdownContents: true,
-                    globs: ["**/*.txt", "ops/**/*.yaml"],
+                    globs: ["**/*.md", "ops/**/*.yaml"],
+                    searchOnly: false,
                 },
             ],
         })
+    } finally {
+        await rm(root, { recursive: true, force: true })
+    }
+})
+
+test("parseMemoryConfig rejects the removed inject_markdown_contents option", async () => {
+    const root = await mkdtemp(join(tmpdir(), "opencode-gateway-memory-config-"))
+    const workspaceDirPath = join(root, "opencode-gateway-workspace")
+
+    try {
+        await mkdir(join(workspaceDirPath, "notes"), { recursive: true })
+
+        await expect(
+            parseMemoryConfig(
+                {
+                    entries: [
+                        {
+                            path: "notes",
+                            description: "Long-lived notes",
+                            inject_markdown_contents: true,
+                        },
+                    ],
+                },
+                workspaceDirPath,
+            ),
+        ).rejects.toThrow("inject_markdown_contents has been removed")
     } finally {
         await rm(root, { recursive: true, force: true })
     }
@@ -135,6 +161,63 @@ test("parseMemoryConfig rejects file-only fields on directory entries", async ()
     }
 })
 
+test("parseMemoryConfig rejects inject_content when search_only is enabled on a file entry", async () => {
+    const root = await mkdtemp(join(tmpdir(), "opencode-gateway-memory-config-"))
+    const workspaceDirPath = join(root, "opencode-gateway-workspace")
+    const filePath = join(workspaceDirPath, "USER.md")
+
+    try {
+        await mkdir(workspaceDirPath, { recursive: true })
+        await writeFile(filePath, "# User")
+
+        await expect(
+            parseMemoryConfig(
+                {
+                    entries: [
+                        {
+                            path: "USER.md",
+                            description: "User profile",
+                            inject_content: true,
+                            search_only: true,
+                        },
+                    ],
+                },
+                workspaceDirPath,
+            ),
+        ).rejects.toThrow("cannot enable both inject_content and search_only")
+    } finally {
+        await rm(root, { recursive: true, force: true })
+    }
+})
+
+test("parseMemoryConfig rejects globs when search_only is enabled on a directory entry", async () => {
+    const root = await mkdtemp(join(tmpdir(), "opencode-gateway-memory-config-"))
+    const workspaceDirPath = join(root, "opencode-gateway-workspace")
+    const directoryPath = join(workspaceDirPath, "notes")
+
+    try {
+        await mkdir(directoryPath, { recursive: true })
+
+        await expect(
+            parseMemoryConfig(
+                {
+                    entries: [
+                        {
+                            path: "notes",
+                            description: "Long-lived notes",
+                            globs: ["**/*.md"],
+                            search_only: true,
+                        },
+                    ],
+                },
+                workspaceDirPath,
+            ),
+        ).rejects.toThrow("cannot enable both globs and search_only")
+    } finally {
+        await rm(root, { recursive: true, force: true })
+    }
+})
+
 test("parseMemoryConfig creates a missing file entry when the path looks like a file", async () => {
     const root = await mkdtemp(join(tmpdir(), "opencode-gateway-memory-config-"))
     const workspaceDirPath = join(root, "opencode-gateway-workspace")
@@ -159,6 +242,7 @@ test("parseMemoryConfig creates a missing file entry when the path looks like a 
             displayPath: "missing.md",
             description: "Missing",
             injectContent: false,
+            searchOnly: false,
         })
         expect(await stat(filePath)).toBeDefined()
     } finally {
@@ -166,7 +250,7 @@ test("parseMemoryConfig creates a missing file entry when the path looks like a 
     }
 })
 
-test("parseMemoryConfig creates a missing directory entry when directory-only fields are present", async () => {
+test("parseMemoryConfig creates a missing directory entry when glob injection is configured", async () => {
     const root = await mkdtemp(join(tmpdir(), "opencode-gateway-memory-config-"))
     const workspaceDirPath = join(root, "opencode-gateway-workspace")
     const directoryPath = join(workspaceDirPath, "memory", "daily")
@@ -178,7 +262,7 @@ test("parseMemoryConfig creates a missing directory entry when directory-only fi
                     {
                         path: "memory/daily",
                         description: "Daily notes",
-                        inject_markdown_contents: true,
+                        globs: ["**/*.md"],
                     },
                 ],
             },
@@ -190,8 +274,8 @@ test("parseMemoryConfig creates a missing directory entry when directory-only fi
             path: directoryPath,
             displayPath: "memory/daily",
             description: "Daily notes",
-            injectMarkdownContents: true,
-            globs: [],
+            globs: ["**/*.md"],
+            searchOnly: false,
         })
         expect((await stat(directoryPath)).isDirectory()).toBe(true)
     } finally {
@@ -214,6 +298,7 @@ test("parseMemoryConfig keeps absolute paths untouched", async () => {
                     {
                         path: filePath,
                         description: "External memory",
+                        search_only: true,
                     },
                 ],
             },
@@ -226,6 +311,7 @@ test("parseMemoryConfig keeps absolute paths untouched", async () => {
             displayPath: filePath,
             description: "External memory",
             injectContent: false,
+            searchOnly: true,
         })
     } finally {
         await rm(root, { recursive: true, force: true })
@@ -259,6 +345,7 @@ test("parseMemoryConfig resolves parent traversals from the workspace root", asy
             displayPath: "../shared/project.md",
             description: "Shared memory",
             injectContent: false,
+            searchOnly: false,
         })
     } finally {
         await rm(root, { recursive: true, force: true })

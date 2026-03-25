@@ -92,8 +92,12 @@ inject_content = true
 [[memory.entries]]
 path = "memory/notes"
 description = "Domain notes and operating docs"
-inject_markdown_contents = true
-globs = ["**/*.rs", "notes/**/*.txt"]
+search_only = true
+
+[[memory.entries]]
+path = "memory/snippets"
+description = "Selected files are auto-injected; the rest stay searchable on demand"
+globs = ["**/*.md", "notes/**/*.txt"]
 ```
 
 When `cron.timezone` is omitted, recurring cron expressions are interpreted in
@@ -112,17 +116,20 @@ Mailbox rules:
 Memory rules:
 
 - all entries inject their configured path and description
-- file contents are injected only when `inject_content = true`
-- directory entries default to description-only
-- `inject_markdown_contents = true` recursively injects `*.md` and `*.markdown`
-- `globs` are evaluated relative to the configured directory and may match other
-  UTF-8 text files
+- file contents are auto-injected only when `inject_content = true`
+- `search_only = true` keeps an entry available to `memory_search` and `memory_get`
+  without auto-injecting its content
+- directory entries default to description-only plus on-demand search
+- directory `globs` are evaluated relative to the configured directory and define
+  which files are auto-injected; other UTF-8 text files remain searchable on demand
 - relative paths are resolved from `opencode-gateway-workspace`
 - absolute paths are still allowed
 - missing files and directories are created automatically on load
 - the default template includes `USER.md` as persistent user-profile memory
 - memory is injected only into gateway-managed sessions, including scheduled
   runs and channel-bound sessions
+- `memory_search` returns matching snippets and paths; `memory_get` reads a
+  specific configured memory file by path and optional line window
 
 ### 3. Verify the generated config
 

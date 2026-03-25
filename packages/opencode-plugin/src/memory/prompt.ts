@@ -1,12 +1,6 @@
-import { readFile } from "node:fs/promises"
-import { extname, relative } from "node:path"
-import { globSync } from "fast-glob"
-
 import type { BindingLoggerHost } from "../binding"
 import type { GatewayMemoryConfig, GatewayMemoryEntryConfig } from "../config/memory"
-
-const MARKDOWN_GLOBS = ["**/*.md", "**/*.markdown"] as const
-const UTF8_TEXT_DECODER = new TextDecoder("utf-8", { fatal: true })
+import { codeFence, collectInjectedMemoryFiles } from "./files"
 
 export class GatewayMemoryPromptProvider {
     constructor(
@@ -24,8 +18,16 @@ export class GatewayMemoryPromptProvider {
     }
 
     private async buildEntrySection(entry: GatewayMemoryEntryConfig): Promise<string> {
-        const lines = [`Configured path: ${entry.displayPath}`, `Description: ${entry.description}`]
-        const injectedFiles = await collectInjectedFiles(entry, this.logger)
+        const lines = [
+            `Configured path: ${entry.displayPath}`,
+            `Description: ${entry.description}`,
+            `Access: ${describeMemoryAccess(entry)}`,
+        ]
+        const injectedFiles = await collectInjectedMemoryFiles(entry, this.logger)
+
+        if (entry.kind === "directory" && entry.globs.length > 0 && !entry.searchOnly) {
+            lines.push(`Auto-injected globs: ${entry.globs.join(", ")}`)
+        }
 
         for (const file of injectedFiles) {
             lines.push("")
@@ -37,122 +39,22 @@ export class GatewayMemoryPromptProvider {
     }
 }
 
-async function collectInjectedFiles(
-    entry: GatewayMemoryEntryConfig,
-    logger: Pick<BindingLoggerHost, "log">,
-): Promise<InjectedMemoryFile[]> {
+function describeMemoryAccess(entry: GatewayMemoryEntryConfig): string {
     if (entry.kind === "file") {
-        if (!entry.injectContent) {
-            return []
+        if (entry.injectContent && !entry.searchOnly) {
+            return "auto-injected; use memory_search or memory_get for targeted follow-up"
         }
 
-        const text = await readTextFile(entry.path, logger)
-        if (text === null) {
-            return []
-        }
-
-        return [
-            {
-                displayPath: entry.displayPath,
-                infoString: inferFenceInfoString(entry.path),
-                text,
-            },
-        ]
+        return "search-only; use memory_search or memory_get when this file is relevant"
     }
 
-    const filePaths = new Set<string>()
-    if (entry.injectMarkdownContents) {
-        for (const pattern of MARKDOWN_GLOBS) {
-            addMatchingFiles(filePaths, entry.path, pattern)
-        }
+    if (entry.searchOnly) {
+        return "search-only; all UTF-8 text files under this directory are available via memory_search or memory_get"
     }
 
-    for (const pattern of entry.globs) {
-        addMatchingFiles(filePaths, entry.path, pattern)
+    if (entry.globs.length > 0) {
+        return "globs are auto-injected; all UTF-8 text files under this directory remain available via memory_search or memory_get"
     }
 
-    const injectedFiles: InjectedMemoryFile[] = []
-    for (const filePath of [...filePaths].sort((left, right) => left.localeCompare(right))) {
-        const text = await readTextFile(filePath, logger)
-        if (text === null) {
-            continue
-        }
-
-        injectedFiles.push({
-            displayPath: relativeDisplayPath(entry.path, entry.displayPath, filePath),
-            infoString: inferFenceInfoString(filePath),
-            text,
-        })
-    }
-
-    return injectedFiles
-}
-
-function addMatchingFiles(result: Set<string>, cwd: string, pattern: string): void {
-    for (const match of globSync(pattern, { cwd, absolute: true, onlyFiles: true })) {
-        result.add(match)
-    }
-}
-
-async function readTextFile(path: string, logger: Pick<BindingLoggerHost, "log">): Promise<string | null> {
-    let bytes: Uint8Array
-
-    try {
-        bytes = await readFile(path)
-    } catch (error) {
-        logger.log("warn", `memory file could not be read and will be skipped: ${path}: ${formatError(error)}`)
-        return null
-    }
-
-    let text: string
-    try {
-        text = UTF8_TEXT_DECODER.decode(bytes)
-    } catch {
-        logger.log("warn", `memory file is not valid UTF-8 and will be skipped: ${path}`)
-        return null
-    }
-
-    if (text.includes("\u0000")) {
-        logger.log("warn", `memory file looks binary and will be skipped: ${path}`)
-        return null
-    }
-
-    return text
-}
-
-function relativeDisplayPath(rootPath: string, rootDisplayPath: string, filePath: string): string {
-    const suffix = relative(rootPath, filePath)
-    if (suffix.length === 0) {
-        return rootDisplayPath
-    }
-
-    return `${rootDisplayPath}/${suffix.replaceAll("\\", "/")}`
-}
-
-function inferFenceInfoString(path: string): string {
-    const extension = extname(path).slice(1).toLowerCase()
-    if (!/^[a-z0-9_+-]+$/.test(extension)) {
-        return ""
-    }
-
-    return extension
-}
-
-function codeFence(infoString: string, text: string): string {
-    const language = infoString.length === 0 ? "" : infoString
-    return [`\`\`\`${language}`, text, "```"].join("\n")
-}
-
-function formatError(error: unknown): string {
-    if (error instanceof Error && error.message.trim().length > 0) {
-        return error.message
-    }
-
-    return String(error)
-}
-
-type InjectedMemoryFile = {
-    displayPath: string
-    infoString: string
-    text: string
+    return "search-only by default; use memory_search or memory_get when this directory is relevant"
 }

@@ -11,6 +11,7 @@ import { ConsoleLoggerHost } from "./host/logger"
 import { GatewayTransportHost } from "./host/transport"
 import { GatewayMailboxRouter } from "./mailbox/router"
 import { GatewayMemoryPromptProvider } from "./memory/prompt"
+import { GatewayMemoryRuntime } from "./memory/runtime"
 import { OpencodeSdkAdapter } from "./opencode/adapter"
 import { OpencodeEventStream } from "./opencode/event-stream"
 import { OpencodeEventHub } from "./opencode/events"
@@ -53,6 +54,7 @@ export class GatewayPluginRuntime {
         readonly channelSessions: ChannelSessionSwitcher,
         readonly sessionContext: GatewaySessionContext,
         readonly systemPrompts: GatewaySystemPromptBuilder,
+        readonly memory: GatewayMemoryRuntime,
     ) {}
 
     status(): GatewayPluginStatus {
@@ -90,6 +92,7 @@ export async function createGatewayRuntime(
         const effectiveCronTimeZone = resolveEffectiveCronTimeZone(module, config)
         const store = await openSqliteStore(config.stateDbPath)
         const sessionContext = new GatewaySessionContext(store)
+        const memory = new GatewayMemoryRuntime(config.memory, logger)
         const memoryPrompts = new GatewayMemoryPromptProvider(config.memory, logger)
         const systemPrompts = new GatewaySystemPromptBuilder(sessionContext, memoryPrompts)
         const telegramClient = config.telegram.enabled ? new TelegramBotClient(config.telegram.botToken) : null
@@ -176,6 +179,7 @@ export async function createGatewayRuntime(
             channelSessions,
             sessionContext,
             systemPrompts,
+            memory,
         )
     })
 }
