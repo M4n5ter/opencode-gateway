@@ -54,6 +54,17 @@ Edit `opencode-gateway.toml`. Minimal example:
 state_db = "/home/you/.local/share/opencode-gateway/state.db"
 # log_level = "warn"
 
+# Optional mailbox batching and route overrides.
+# [gateway.mailbox]
+# batch_replies = false
+# batch_window_ms = 1500
+#
+# [[gateway.mailbox.routes]]
+# channel = "telegram"
+# target = "6212645712"
+# topic = "12345"
+# mailbox_key = "shared:telegram:dev"
+
 [cron]
 enabled = true
 tick_seconds = 5
@@ -64,8 +75,14 @@ max_concurrent_runs = 1
 enabled = false
 bot_token_env = "TELEGRAM_BOT_TOKEN"
 poll_timeout_seconds = 25
+# Configure at least one allowlist when Telegram is enabled.
 allowed_chats = []
 allowed_users = []
+
+[[memory.entries]]
+path = "USER.md"
+description = "Persistent user profile and preference memory. Keep this file accurate and concise. Record stable preferences, communication style, workflow habits, project conventions, tool constraints, review expectations, and other recurring facts that should shape future assistance. Update it proactively when you learn something durable about the user. Do not store one-off task details or transient context here."
+inject_content = true
 
 [[memory.entries]]
 path = "memory/project.md"
@@ -85,6 +102,13 @@ the runtime's local time zone.
 Gateway plugin logs are disabled by default. Set `gateway.log_level` to one of
 `error`, `warn`, `info`, or `debug` to print that level and anything above it.
 
+Mailbox rules:
+
+- `gateway.mailbox.batch_replies` defaults to `false`
+- `gateway.mailbox.batch_window_ms` defaults to `1500`
+- `gateway.mailbox.routes` lets multiple ingress targets share one logical mailbox/session
+- each route needs `channel`, `target`, optional `topic`, and a `mailbox_key`
+
 Memory rules:
 
 - all entries inject their configured path and description
@@ -95,6 +119,8 @@ Memory rules:
   UTF-8 text files
 - relative paths are resolved from `opencode-gateway-workspace`
 - absolute paths are still allowed
+- missing files and directories are created automatically on load
+- the default template includes `USER.md` as persistent user-profile memory
 - memory is injected only into gateway-managed sessions, including scheduled
   runs and channel-bound sessions
 

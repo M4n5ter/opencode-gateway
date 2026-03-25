@@ -113,7 +113,7 @@ async function readMemoryEntry(
     throw new Error(`${field}.path must point to a regular file or directory`)
 }
 
-async function ensurePathMetadata(path: string, displayPath: string, entry: RawMemoryEntryConfig, field: string) {
+async function ensurePathMetadata(path: string, displayPath: string, entry: RawMemoryEntryConfig, _field: string) {
     try {
         return await stat(path)
     } catch (error) {
