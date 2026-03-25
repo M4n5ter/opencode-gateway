@@ -12,7 +12,9 @@ import type {
 import { delay } from "../runtime/delay"
 
 const SESSION_IDLE_POLL_MS = 250
-const PROMPT_RESPONSE_TIMEOUT_MS = 90_000
+const PROMPT_RESPONSE_PROGRESS_TIMEOUT_MS = 90_000
+const PROMPT_RESPONSE_MAX_TIMEOUT_MS = 10 * 60_000
+const PROMPT_RESPONSE_SETTLE_MS = 1_000
 
 type OpencodeClient = PluginInput["client"]
 
@@ -230,8 +232,12 @@ export class OpencodeSdkAdapter {
     private async awaitPromptResponse(
         command: Extract<BindingOpencodeCommand, { kind: "awaitPromptResponse" }>,
     ): Promise<BindingOpencodeCommandResult> {
-        const deadline = Date.now() + PROMPT_RESPONSE_TIMEOUT_MS
+        const startedAtMs = Date.now()
+        const maxDeadline = startedAtMs + PROMPT_RESPONSE_MAX_TIMEOUT_MS
+        let progressDeadline = startedAtMs + PROMPT_RESPONSE_PROGRESS_TIMEOUT_MS
         let stableCandidateKey: string | null = null
+        let stableCandidateSinceMs: number | null = null
+        let progressKey: string | null = null
 
         for (;;) {
             const messages = await this.client.session.messages({
@@ -243,25 +249,37 @@ export class OpencodeSdkAdapter {
                 responseStyle: "data",
                 throwOnError: true,
             })
-            const response = selectAssistantResponse(unwrapData<MessageResponse[]>(messages), command.messageId)
+            const assistantChildren = listAssistantResponses(unwrapData<MessageResponse[]>(messages), command.messageId)
+            const nextProgressKey = createAssistantProgressKey(assistantChildren)
+            const now = Date.now()
+
+            if (progressKey !== nextProgressKey) {
+                progressKey = nextProgressKey
+                progressDeadline = now + PROMPT_RESPONSE_PROGRESS_TIMEOUT_MS
+            }
+
+            const response = selectAssistantResponse(assistantChildren)
 
             if (response !== null) {
                 const candidateKey = createAssistantCandidateKey(response)
                 if (stableCandidateKey === candidateKey) {
-                    return {
-                        kind: "awaitPromptResponse",
-                        sessionId: command.sessionId,
-                        messageId: response.info.id,
-                        parts: response.parts.flatMap(toBindingMessagePart),
+                    if (stableCandidateSinceMs !== null && now - stableCandidateSinceMs >= PROMPT_RESPONSE_SETTLE_MS) {
+                        return toAwaitPromptResponseResult(command.sessionId, response)
                     }
+                } else {
+                    stableCandidateKey = candidateKey
+                    stableCandidateSinceMs = now
                 }
-
-                stableCandidateKey = candidateKey
             } else {
                 stableCandidateKey = null
+                stableCandidateSinceMs = null
             }
 
-            if (Date.now() >= deadline) {
+            if (now >= progressDeadline || now >= maxDeadline) {
+                if (response !== null) {
+                    return toAwaitPromptResponseResult(command.sessionId, response)
+                }
+
                 throw new Error(
                     `assistant message for prompt ${command.messageId} is unavailable after prompt completion`,
                 )
@@ -336,9 +354,11 @@ function toSessionPromptPart(part: BindingOpencodeCommandPart): PromptInputPart 
     }
 }
 
-function selectAssistantResponse(messages: MessageResponse[], userMessageId: string): AssistantMessageResponse | null {
-    const assistantChildren = messages.filter(isAssistantChildMessage(userMessageId))
+function listAssistantResponses(messages: MessageResponse[], userMessageId: string): AssistantMessageResponse[] {
+    return messages.filter(isAssistantChildMessage(userMessageId))
+}
 
+function selectAssistantResponse(assistantChildren: AssistantMessageResponse[]): AssistantMessageResponse | null {
     for (let index = assistantChildren.length - 1; index >= 0; index -= 1) {
         const candidate = assistantChildren[index]
         if (hasVisibleText(candidate)) {
@@ -354,6 +374,10 @@ function selectAssistantResponse(messages: MessageResponse[], userMessageId: str
     }
 
     return null
+}
+
+function createAssistantProgressKey(messages: AssistantMessageResponse[]): string {
+    return JSON.stringify(messages.map(createAssistantCandidateKey))
 }
 
 function createAssistantCandidateKey(message: AssistantMessageResponse): string {
@@ -375,6 +399,18 @@ function isAssistantChildMessage(
 ): (message: MessageResponse) => message is AssistantMessageResponse {
     return (message): message is AssistantMessageResponse =>
         message.info?.role === "assistant" && message.info.parentID === userMessageId
+}
+
+function toAwaitPromptResponseResult(
+    sessionId: string,
+    message: AssistantMessageResponse,
+): Extract<BindingOpencodeCommandResult, { kind: "awaitPromptResponse" }> {
+    return {
+        kind: "awaitPromptResponse",
+        sessionId,
+        messageId: message.info.id,
+        parts: message.parts.flatMap(toBindingMessagePart),
+    }
 }
 
 function toBindingMessagePart(part: SessionPromptPart): BindingOpencodeMessagePart[] {

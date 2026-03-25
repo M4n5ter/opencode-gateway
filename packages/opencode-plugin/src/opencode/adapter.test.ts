@@ -177,7 +177,7 @@ test("OpencodeSdkAdapter waits for the final assistant child message", async () 
             },
         ],
     })
-    expect(calls).toBe(3)
+    expect(calls).toBeGreaterThanOrEqual(3)
 })
 
 test("OpencodeSdkAdapter ignores a trailing empty assistant stub when waiting for the final response", async () => {
@@ -276,5 +276,101 @@ test("OpencodeSdkAdapter ignores a trailing empty assistant stub when waiting fo
             },
         ],
     })
-    expect(calls).toBe(2)
+    expect(calls).toBeGreaterThanOrEqual(2)
+})
+
+test("OpencodeSdkAdapter extends the response deadline while the session is still making progress", async () => {
+    let calls = 0
+    let now = 0
+    const originalNow = Date.now
+    Date.now = () => now
+
+    try {
+        const adapter = new OpencodeSdkAdapter(
+            {
+                session: {
+                    async messages() {
+                        calls += 1
+                        now += 30_000
+
+                        if (calls < 4) {
+                            return {
+                                data: [
+                                    {
+                                        info: {
+                                            id: "msg_user_1",
+                                            role: "user",
+                                        },
+                                        parts: [],
+                                    },
+                                    {
+                                        info: {
+                                            id: `msg_assistant_tool_${calls}`,
+                                            role: "assistant",
+                                            parentID: "msg_user_1",
+                                            finish: "tool-calls",
+                                        },
+                                        parts: [],
+                                    },
+                                ],
+                            }
+                        }
+
+                        return {
+                            data: [
+                                {
+                                    info: {
+                                        id: "msg_user_1",
+                                        role: "user",
+                                    },
+                                    parts: [],
+                                },
+                                {
+                                    info: {
+                                        id: "msg_assistant_final",
+                                        role: "assistant",
+                                        parentID: "msg_user_1",
+                                        finish: "stop",
+                                    },
+                                    parts: [
+                                        {
+                                            id: "part_final",
+                                            messageID: "msg_assistant_final",
+                                            type: "text",
+                                            text: "final answer",
+                                        },
+                                    ],
+                                },
+                            ],
+                        }
+                    },
+                },
+            } as never,
+            "/workspace",
+        )
+
+        expect(
+            await adapter.execute({
+                kind: "awaitPromptResponse",
+                sessionId: "ses_1",
+                messageId: "msg_user_1",
+            }),
+        ).toEqual({
+            kind: "awaitPromptResponse",
+            sessionId: "ses_1",
+            messageId: "msg_assistant_final",
+            parts: [
+                {
+                    messageId: "msg_assistant_final",
+                    partId: "part_final",
+                    type: "text",
+                    text: "final answer",
+                    ignored: false,
+                },
+            ],
+        })
+        expect(calls).toBe(5)
+    } finally {
+        Date.now = originalNow
+    }
 })
