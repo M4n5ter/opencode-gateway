@@ -1,4 +1,4 @@
-import type { BindingExecutionObservation } from "../binding"
+import type { BindingExecutionObservation, BindingExecutionPartKind } from "../binding"
 
 type MessageInfo =
     | {
@@ -72,7 +72,8 @@ export function normalizeExecutionObservation(event: OpencodeRuntimeEvent): Bind
 
     if (isMessagePartUpdatedEvent(event)) {
         const part = event.properties.part
-        if (part.type !== "text") {
+        const partKind = toExecutionPartKind(part.type)
+        if (partKind === null) {
             return null
         }
 
@@ -81,6 +82,7 @@ export function normalizeExecutionObservation(event: OpencodeRuntimeEvent): Bind
             sessionId: part.sessionID,
             messageId: part.messageID,
             partId: part.id,
+            partKind,
             text: typeof part.text === "string" ? part.text : null,
             delta: typeof event.properties.delta === "string" ? event.properties.delta : null,
             ignored: part.ignored === true,
@@ -113,4 +115,12 @@ function isMessagePartUpdatedEvent(event: OpencodeRuntimeEvent): event is Messag
 
 function isMessagePartDeltaEvent(event: OpencodeRuntimeEvent): event is MessagePartDeltaEvent {
     return event.type === "message.part.delta" && typeof event.properties === "object" && event.properties !== null
+}
+
+function toExecutionPartKind(value: string): BindingExecutionPartKind | null {
+    if (value === "text" || value === "reasoning") {
+        return value
+    }
+
+    return null
 }

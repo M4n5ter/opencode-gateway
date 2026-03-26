@@ -2,6 +2,7 @@ import type { BindingHostAck, BindingOutboundMessage, BindingTransportHost } fro
 import type { SqliteStore } from "../store/sqlite"
 import type { TelegramSendClientLike } from "../telegram/client"
 import { recordTelegramSendFailure, recordTelegramSendSuccess } from "../telegram/state"
+import { renderTelegramFinalMessage } from "../telegram/stream-render"
 import { formatError } from "../utils/error"
 
 export class GatewayTransportHost implements BindingTransportHost {
@@ -25,7 +26,14 @@ export class GatewayTransportHost implements BindingTransportHost {
                 throw new Error("telegram outbound message body must not be empty")
             }
 
-            await this.telegramClient.sendMessage(message.deliveryTarget.target, body, message.deliveryTarget.topic)
+            await this.telegramClient.sendMessage(
+                message.deliveryTarget.target,
+                renderTelegramFinalMessage(body),
+                message.deliveryTarget.topic,
+                {
+                    parseMode: "HTML",
+                },
+            )
             recordTelegramSendSuccess(this.store, Date.now())
             return {
                 errorMessage: null,

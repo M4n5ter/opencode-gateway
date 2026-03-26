@@ -39,6 +39,12 @@ pub enum ExecutionRole {
     Other(String),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutionPartKind {
+    Text,
+    Reasoning,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExecutionObservation {
     MessageUpdated {
@@ -51,6 +57,7 @@ pub enum ExecutionObservation {
         session_id: String,
         message_id: String,
         part_id: String,
+        part_kind: ExecutionPartKind,
         text: Option<String>,
         delta: Option<String>,
         ignored: bool,
@@ -68,6 +75,7 @@ pub struct ExecutionState {
     user_message_id: Option<String>,
     assistant_message_id: Option<String>,
     process_segments: Vec<String>,
+    reasoning_segments: Vec<String>,
     text_parts: HashMap<String, TrackedTextPart>,
     next_order: u64,
     progressive: ProgressiveTextState,
@@ -84,6 +92,7 @@ impl ExecutionState {
             user_message_id: None,
             assistant_message_id: None,
             process_segments: Vec::new(),
+            reasoning_segments: Vec::new(),
             text_parts: HashMap::new(),
             next_order: 0,
             progressive: ProgressiveTextState::new(mode, flush_interval_ms),
@@ -106,11 +115,12 @@ impl ExecutionState {
                 session_id,
                 message_id,
                 part_id,
+                part_kind,
                 text,
                 delta,
                 ignored,
             } => self.observe_text_part(
-                session_id, message_id, part_id, text, delta, ignored, now_ms,
+                session_id, message_id, part_id, part_kind, text, delta, ignored, now_ms,
             ),
             ExecutionObservation::TextPartDelta {
                 message_id,
@@ -169,6 +179,7 @@ impl ExecutionState {
         session_id: String,
         message_id: String,
         part_id: String,
+        part_kind: ExecutionPartKind,
         text: Option<String>,
         delta: Option<String>,
         ignored: bool,
@@ -182,11 +193,12 @@ impl ExecutionState {
         }
 
         let tracked_part = self.text_parts.entry(part_id).or_insert_with(|| {
-            TrackedTextPart::new(text.as_deref().unwrap_or(""), self.next_order)
+            TrackedTextPart::new(text.as_deref().unwrap_or(""), part_kind, self.next_order)
         });
         if tracked_part.order == self.next_order {
             self.next_order = self.next_order.saturating_add(1);
         }
+        tracked_part.kind = part_kind;
 
         if let Some(text) = text {
             tracked_part.text = text;
@@ -219,11 +231,28 @@ impl ExecutionState {
     }
 
     fn render_preview_snapshot(&self) -> ProgressivePreview {
-        ProgressivePreview::new(self.render_process_text(), self.render_active_text())
+        ProgressivePreview::new(
+            self.render_process_text(),
+            self.render_reasoning_text(),
+            self.render_active_text(),
+        )
     }
 
     fn render_active_text(&self) -> Option<String> {
-        let mut parts = self.text_parts.values().cloned().collect::<Vec<_>>();
+        self.render_active_parts(ExecutionPartKind::Text)
+    }
+
+    fn render_active_reasoning(&self) -> Option<String> {
+        self.render_active_parts(ExecutionPartKind::Reasoning)
+    }
+
+    fn render_active_parts(&self, kind: ExecutionPartKind) -> Option<String> {
+        let mut parts = self
+            .text_parts
+            .values()
+            .filter(|part| part.kind == kind)
+            .cloned()
+            .collect::<Vec<_>>();
         parts.sort_by_key(|part| part.order);
 
         let snapshot = parts
@@ -240,25 +269,38 @@ impl ExecutionState {
         (!self.process_segments.is_empty()).then(|| self.process_segments.join("\n\n"))
     }
 
-    fn freeze_active_preview_into_process(&mut self) {
-        let Some(active_text) = self.render_active_text() else {
-            return;
-        };
+    fn render_reasoning_text(&self) -> Option<String> {
+        let mut segments = self.reasoning_segments.clone();
+        if let Some(active_reasoning) = self.render_active_reasoning() {
+            segments.push(active_reasoning);
+        }
 
-        self.process_segments.push(active_text);
+        (!segments.is_empty()).then(|| segments.join("\n\n"))
+    }
+
+    fn freeze_active_preview_into_process(&mut self) {
+        if let Some(active_reasoning) = self.render_active_reasoning() {
+            self.reasoning_segments.push(active_reasoning);
+        }
+
+        if let Some(active_text) = self.render_active_text() {
+            self.process_segments.push(active_text);
+        }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TrackedTextPart {
     text: String,
+    kind: ExecutionPartKind,
     order: u64,
 }
 
 impl TrackedTextPart {
-    fn new(text: &str, order: u64) -> Self {
+    fn new(text: &str, kind: ExecutionPartKind, order: u64) -> Self {
         Self {
             text: text.to_owned(),
+            kind,
             order,
         }
     }
@@ -271,7 +313,9 @@ mod tests {
         ProgressivePreview, PromptPart, TargetKey,
     };
 
-    use super::{ExecutionObservation, ExecutionRole, ExecutionState, PreparedExecution};
+    use super::{
+        ExecutionObservation, ExecutionPartKind, ExecutionRole, ExecutionState, PreparedExecution,
+    };
 
     #[test]
     fn prepared_execution_for_inbound_uses_conversation_key_and_reply_target() {
@@ -346,6 +390,7 @@ mod tests {
                     session_id: "ses_1".to_owned(),
                     message_id: "msg_assistant_1".to_owned(),
                     part_id: "part_1".to_owned(),
+                    part_kind: ExecutionPartKind::Text,
                     text: None,
                     delta: Some("hel".to_owned()),
                     ignored: false,
@@ -404,6 +449,7 @@ mod tests {
                     session_id: "ses_1".to_owned(),
                     message_id: "msg_assistant_1".to_owned(),
                     part_id: "part_1".to_owned(),
+                    part_kind: ExecutionPartKind::Text,
                     text: Some("hello".to_owned()),
                     delta: Some("lo".to_owned()),
                     ignored: false,
@@ -463,6 +509,7 @@ mod tests {
                     session_id: "ses_1".to_owned(),
                     message_id: "msg_assistant_2".to_owned(),
                     part_id: "part_2".to_owned(),
+                    part_kind: ExecutionPartKind::Text,
                     text: Some("second".to_owned()),
                     delta: None,
                     ignored: false,
@@ -509,6 +556,7 @@ mod tests {
                     session_id: "ses_1".to_owned(),
                     message_id: "msg_assistant_1".to_owned(),
                     part_id: "part_1".to_owned(),
+                    part_kind: ExecutionPartKind::Text,
                     text: Some("first".to_owned()),
                     delta: None,
                     ignored: false,
@@ -537,6 +585,7 @@ mod tests {
                     session_id: "ses_1".to_owned(),
                     message_id: "msg_assistant_2".to_owned(),
                     part_id: "part_2".to_owned(),
+                    part_kind: ExecutionPartKind::Text,
                     text: Some("second".to_owned()),
                     delta: None,
                     ignored: false,
@@ -545,7 +594,92 @@ mod tests {
             ),
             ProgressiveDirective::Preview(ProgressivePreview::new(
                 Some("first".to_owned()),
+                None,
                 Some("second".to_owned()),
+            ))
+        );
+    }
+
+    #[test]
+    fn execution_state_moves_visible_reasoning_into_reasoning_preview() {
+        let mut state = ExecutionState::new("ses_1", ProgressiveMode::Progressive, 0);
+
+        assert_eq!(
+            state.observe(
+                ExecutionObservation::MessageUpdated {
+                    session_id: "ses_1".to_owned(),
+                    message_id: "msg_user_1".to_owned(),
+                    role: ExecutionRole::User,
+                    parent_id: None,
+                },
+                0,
+            ),
+            ProgressiveDirective::Noop
+        );
+
+        assert_eq!(
+            state.observe(
+                ExecutionObservation::MessageUpdated {
+                    session_id: "ses_1".to_owned(),
+                    message_id: "msg_assistant_1".to_owned(),
+                    role: ExecutionRole::Assistant,
+                    parent_id: Some("msg_user_1".to_owned()),
+                },
+                1,
+            ),
+            ProgressiveDirective::Noop
+        );
+
+        assert_eq!(
+            state.observe(
+                ExecutionObservation::TextPartUpdated {
+                    session_id: "ses_1".to_owned(),
+                    message_id: "msg_assistant_1".to_owned(),
+                    part_id: "part_reasoning".to_owned(),
+                    part_kind: ExecutionPartKind::Reasoning,
+                    text: Some("thinking".to_owned()),
+                    delta: None,
+                    ignored: false,
+                },
+                2,
+            ),
+            ProgressiveDirective::Preview(ProgressivePreview::new(
+                None,
+                Some("thinking".to_owned()),
+                None,
+            ))
+        );
+
+        assert_eq!(
+            state.observe(
+                ExecutionObservation::MessageUpdated {
+                    session_id: "ses_1".to_owned(),
+                    message_id: "msg_assistant_2".to_owned(),
+                    role: ExecutionRole::Assistant,
+                    parent_id: Some("msg_user_1".to_owned()),
+                },
+                3,
+            ),
+            ProgressiveDirective::Noop
+        );
+
+        assert_eq!(
+            state.observe(
+                ExecutionObservation::TextPartUpdated {
+                    session_id: "ses_1".to_owned(),
+                    message_id: "msg_assistant_2".to_owned(),
+                    part_id: "part_text".to_owned(),
+                    part_kind: ExecutionPartKind::Text,
+                    text: Some("final".to_owned()),
+                    delta: None,
+                    ignored: false,
+                },
+                4,
+            ),
+            ProgressiveDirective::Preview(ProgressivePreview::new(
+                None,
+                Some("thinking".to_owned()),
+                Some("final".to_owned()),
             ))
         );
     }

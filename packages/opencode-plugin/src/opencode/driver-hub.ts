@@ -89,6 +89,7 @@ export class OpencodeEventHub {
         void Promise.resolve(
             driver.onPreview({
                 processText: directive.processText,
+                reasoningText: directive.reasoningText,
                 answerText: directive.answerText,
             }),
         ).catch(() => {

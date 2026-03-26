@@ -1,40 +1,71 @@
 import type { TextDeliveryPreview } from "../delivery/text"
+import { escapeTelegramHtml, renderTelegramMarkdownHtml } from "./markdown"
 
 const TELEGRAM_VISIBLE_TEXT_LIMIT = 4_096
 
+export function renderTelegramFinalMessage(text: string): string {
+    return renderTelegramMarkdownHtml(text)
+}
+
 export function renderTelegramStreamMessage(preview: TextDeliveryPreview): string {
     const processText = normalizeVisibleText(preview.processText)
+    const reasoningText = normalizeVisibleText(preview.reasoningText)
     const answerText = normalizeVisibleText(preview.answerText)
 
-    if (processText !== null && answerText !== null) {
-        if (visibleLength(processText, answerText) <= TELEGRAM_VISIBLE_TEXT_LIMIT) {
-            return `${renderBlockquote(processText)}\n\n${escapeHtml(answerText)}`
-        }
-
-        return escapeHtml(answerText)
-    }
-
-    if (processText !== null) {
-        return renderBlockquote(processText)
+    const answerBody = answerText === null ? null : renderTelegramFinalMessage(answerText)
+    const allSections = buildSections(reasoningText, processText, answerBody)
+    if (visibleLength(reasoningText, processText, answerText) <= TELEGRAM_VISIBLE_TEXT_LIMIT) {
+        return allSections
     }
 
     if (answerText !== null) {
-        return escapeHtml(answerText)
+        const withoutReasoning = buildSections(null, processText, answerBody)
+        if (visibleLength(null, processText, answerText) <= TELEGRAM_VISIBLE_TEXT_LIMIT) {
+            return withoutReasoning
+        }
+
+        return buildSections(null, null, answerBody)
     }
 
-    return ""
+    if (processText !== null && reasoningText !== null) {
+        return buildSections(null, processText, null)
+    }
+
+    return allSections
 }
 
-function renderBlockquote(text: string): string {
-    return `<blockquote>${escapeHtml(text)}</blockquote>`
+function buildSections(reasoningText: string | null, processText: string | null, answerBody: string | null): string {
+    return [renderReasoningBlock(reasoningText), renderProcessBlock(processText), answerBody]
+        .filter((section): section is string => section !== null && section.length > 0)
+        .join("\n\n")
 }
 
-function escapeHtml(text: string): string {
-    return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
+function renderReasoningBlock(text: string | null): string | null {
+    if (text === null) {
+        return null
+    }
+
+    return `<blockquote expandable><i>${escapeTelegramHtml(text)}</i></blockquote>`
 }
 
-function visibleLength(processText: string, answerText: string): number {
-    return processText.length + answerText.length + 2
+function renderProcessBlock(text: string | null): string | null {
+    if (text === null) {
+        return null
+    }
+
+    return `<blockquote>${escapeTelegramHtml(text)}</blockquote>`
+}
+
+function visibleLength(reasoningText: string | null, processText: string | null, answerText: string | null): number {
+    const segments = [reasoningText, processText, answerText].filter(
+        (segment): segment is string => segment !== null && segment.length > 0,
+    )
+
+    if (segments.length === 0) {
+        return 0
+    }
+
+    return segments.reduce((length, segment) => length + segment.length, 0) + (segments.length - 1) * 2
 }
 
 function normalizeVisibleText(value: string | null): string | null {

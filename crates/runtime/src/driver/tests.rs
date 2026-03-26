@@ -1,6 +1,6 @@
 use opencode_gateway_core::{
-    ExecutionObservation, ExecutionRole, ProgressiveDirective, ProgressiveMode,
-    ProgressivePreview,
+    ExecutionObservation, ExecutionPartKind, ExecutionRole, ProgressiveDirective,
+    ProgressiveMode, ProgressivePreview,
 };
 
 use crate::{
@@ -137,6 +137,7 @@ fn observe_emits_preview_for_matching_assistant_events() {
                 session_id: "session-1".to_owned(),
                 message_id: "msg_assistant_1".to_owned(),
                 part_id: "part-1".to_owned(),
+                part_kind: ExecutionPartKind::Text,
                 text: None,
                 delta: Some("hello".to_owned()),
                 ignored: false,

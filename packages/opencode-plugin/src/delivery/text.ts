@@ -7,6 +7,7 @@ import type { DeliveryModePreference, TelegramProgressiveSupport } from "./teleg
 
 export type TextDeliveryPreview = {
     processText: string | null
+    reasoningText: string | null
     answerText: string | null
 }
 
@@ -100,6 +101,7 @@ export class GatewayTextDelivery {
         if (session.mode === "progressive") {
             await session.preview({
                 processText: null,
+                reasoningText: null,
                 answerText: text.slice(0, Math.max(1, Math.ceil(text.length / 2))),
             })
         }
@@ -226,6 +228,7 @@ class ProgressiveTextDeliverySession implements TextDeliverySession {
             if (!this.previewFailed && this.streamMessageId !== null) {
                 const finalPreview = normalizePreview({
                     processText: this.latestPreview?.processText ?? null,
+                    reasoningText: this.latestPreview?.reasoningText ?? null,
                     answerText: normalizedFinalText,
                 })
 
@@ -423,13 +426,15 @@ class ProgressiveTextDeliverySession implements TextDeliverySession {
 
 function normalizePreview(preview: TextDeliveryPreview): TextDeliveryPreview | null {
     const processText = normalizeVisibleText(preview.processText)
+    const reasoningText = normalizeVisibleText(preview.reasoningText)
     const answerText = normalizeVisibleText(preview.answerText)
-    if (processText === null && answerText === null) {
+    if (processText === null && reasoningText === null && answerText === null) {
         return null
     }
 
     return {
         processText,
+        reasoningText,
         answerText,
     }
 }

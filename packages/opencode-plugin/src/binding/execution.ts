@@ -1,3 +1,5 @@
+export type BindingExecutionPartKind = "text" | "reasoning"
+
 export type BindingExecutionObservation =
     | {
           kind: "messageUpdated"
@@ -11,6 +13,7 @@ export type BindingExecutionObservation =
           sessionId: string
           messageId: string
           partId: string
+          partKind: BindingExecutionPartKind
           text: string | null
           delta: string | null
           ignored: boolean
@@ -24,6 +27,7 @@ export type BindingExecutionObservation =
 
 export type BindingProgressivePreview = {
     processText: string | null
+    reasoningText: string | null
     answerText: string | null
 }
 
@@ -34,6 +38,7 @@ export type BindingProgressiveDirective =
     | {
           kind: "preview"
           processText: string | null
+          reasoningText: string | null
           answerText: string | null
       }
     | {

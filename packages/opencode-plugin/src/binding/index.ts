@@ -3,7 +3,12 @@ import { access, readFile } from "node:fs/promises"
 import type { BindingCronJobSpec, BindingInboundMessage, BindingPreparedExecution, GatewayContract } from "./gateway"
 import type { BindingOpencodeExecutionInput, OpencodeExecutionDriver } from "./opencode"
 
-export type { BindingExecutionObservation, BindingProgressiveDirective, BindingProgressivePreview } from "./execution"
+export type {
+    BindingExecutionObservation,
+    BindingExecutionPartKind,
+    BindingProgressiveDirective,
+    BindingProgressivePreview,
+} from "./execution"
 export type {
     BindingCronJobSpec,
     BindingDeliveryTarget,

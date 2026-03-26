@@ -13,7 +13,9 @@ pub use channel::{ChannelKind, TargetKey};
 pub use conversation::ConversationKey;
 pub use cron::{CronJobId, CronJobSpec, CronValidationError, normalize_cron_time_zone};
 pub use engine::{GatewayEngine, GatewayPlan};
-pub use execution::{ExecutionObservation, ExecutionRole, ExecutionState, PreparedExecution};
+pub use execution::{
+    ExecutionObservation, ExecutionPartKind, ExecutionRole, ExecutionState, PreparedExecution,
+};
 pub use message::{
     DeliveryTarget, InboundAttachment, InboundAttachmentKind, InboundMessage,
     MessageValidationError, OutboundMessage, PromptPart, PromptRequest, PromptSource,

@@ -4,7 +4,7 @@ mod execution;
 mod gateway;
 mod opencode;
 
-use opencode_gateway_core::{ChannelKind, ExecutionRole, ProgressiveMode};
+use opencode_gateway_core::{ChannelKind, ExecutionPartKind, ExecutionRole, ProgressiveMode};
 use opencode_gateway_runtime::OpencodeCommandErrorCode;
 
 pub use execution::{BindingExecutionObservation, BindingProgressiveDirective};
@@ -38,6 +38,14 @@ pub(crate) fn parse_progressive_mode(value: &str) -> Result<ProgressiveMode, Str
         "progressive" => Ok(ProgressiveMode::Progressive),
         "oneshot" => Ok(ProgressiveMode::Oneshot),
         other => Err(format!("unsupported progressive mode: {other}")),
+    }
+}
+
+pub(crate) fn parse_execution_part_kind(value: String) -> Result<ExecutionPartKind, String> {
+    match value.trim() {
+        "text" => Ok(ExecutionPartKind::Text),
+        "reasoning" => Ok(ExecutionPartKind::Reasoning),
+        other => Err(format!("unsupported execution part kind: {other}")),
     }
 }
 

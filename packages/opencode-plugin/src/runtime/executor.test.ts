@@ -119,7 +119,11 @@ test("GatewayExecutor appends earlier prompts and forwards progressive previews 
         const events = new OpencodeEventHub()
 
         const commands: BindingOpencodeCommand[] = []
-        const previewSnapshots: Array<{ processText: string | null; answerText: string | null }> = []
+        const previewSnapshots: Array<{
+            processText: string | null
+            reasoningText: string | null
+            answerText: string | null
+        }> = []
         const deliveredBodies: Array<string | null> = []
         const executor = new GatewayExecutor(
             createModule(),
@@ -217,6 +221,7 @@ test("GatewayExecutor appends earlier prompts and forwards progressive previews 
         expect(previewSnapshots).toEqual([
             {
                 processText: null,
+                reasoningText: null,
                 answerText: "preview",
             },
         ])
@@ -835,7 +840,8 @@ class FakeOpencodeExecutionDriver {
             return {
                 kind: "preview",
                 processText: null,
-                answerText: observation.text,
+                reasoningText: observation.partKind === "reasoning" ? observation.text : null,
+                answerText: observation.partKind === "text" ? observation.text : null,
             }
         }
 

@@ -9,23 +9,31 @@ pub enum ProgressiveMode {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProgressivePreview {
     pub process_text: Option<String>,
+    pub reasoning_text: Option<String>,
     pub answer_text: Option<String>,
 }
 
 impl ProgressivePreview {
-    pub fn new(process_text: Option<String>, answer_text: Option<String>) -> Self {
+    pub fn new(
+        process_text: Option<String>,
+        reasoning_text: Option<String>,
+        answer_text: Option<String>,
+    ) -> Self {
         Self {
             process_text: normalize_visible_text(process_text),
+            reasoning_text: normalize_visible_text(reasoning_text),
             answer_text: normalize_visible_text(answer_text),
         }
     }
 
     pub fn answer(text: impl Into<String>) -> Self {
-        Self::new(None, Some(text.into()))
+        Self::new(None, None, Some(text.into()))
     }
 
     pub fn is_empty(&self) -> bool {
-        self.process_text.is_none() && self.answer_text.is_none()
+        self.process_text.is_none()
+            && self.reasoning_text.is_none()
+            && self.answer_text.is_none()
     }
 }
 
@@ -159,9 +167,14 @@ mod tests {
     #[test]
     fn preview_normalizes_whitespace_only_segments() {
         assert_eq!(
-            ProgressivePreview::new(Some(" \n ".to_owned()), Some("hello".to_owned())),
+            ProgressivePreview::new(
+                Some(" \n ".to_owned()),
+                Some(" \n ".to_owned()),
+                Some("hello".to_owned()),
+            ),
             ProgressivePreview {
                 process_text: None,
+                reasoning_text: None,
                 answer_text: Some("hello".to_owned()),
             }
         );

@@ -1,7 +1,9 @@
 use opencode_gateway_core::{ExecutionObservation, ProgressiveDirective, ProgressivePreview};
 use serde::{Deserialize, Serialize};
 
-use super::{normalize_optional_identifier, parse_execution_role, parse_required};
+use super::{
+    normalize_optional_identifier, parse_execution_part_kind, parse_execution_role, parse_required,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(
@@ -20,6 +22,7 @@ pub enum BindingExecutionObservation {
         session_id: String,
         message_id: String,
         part_id: String,
+        part_kind: String,
         text: Option<String>,
         delta: Option<String>,
         ignored: bool,
@@ -51,6 +54,7 @@ impl TryFrom<BindingExecutionObservation> for ExecutionObservation {
                 session_id,
                 message_id,
                 part_id,
+                part_kind,
                 text,
                 delta,
                 ignored,
@@ -58,6 +62,7 @@ impl TryFrom<BindingExecutionObservation> for ExecutionObservation {
                 session_id: parse_required(session_id, "execution sessionId")?,
                 message_id: parse_required(message_id, "execution messageId")?,
                 part_id: parse_required(part_id, "execution partId")?,
+                part_kind: parse_execution_part_kind(part_kind)?,
                 text,
                 delta,
                 ignored,
@@ -81,6 +86,7 @@ pub enum BindingProgressiveDirective {
     Noop,
     Preview {
         process_text: Option<String>,
+        reasoning_text: Option<String>,
         answer_text: Option<String>,
     },
     Final {
@@ -94,9 +100,11 @@ impl From<ProgressiveDirective> for BindingProgressiveDirective {
             ProgressiveDirective::Noop => Self::Noop,
             ProgressiveDirective::Preview(ProgressivePreview {
                 process_text,
+                reasoning_text,
                 answer_text,
             }) => Self::Preview {
                 process_text,
+                reasoning_text,
                 answer_text,
             },
             ProgressiveDirective::Final(text) => Self::Final { text },

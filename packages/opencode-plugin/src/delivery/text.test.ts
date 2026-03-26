@@ -78,11 +78,13 @@ test("GatewayTextDelivery opens a single editable Telegram message for slow priv
         expect(session.mode).toBe("progressive")
         await session.preview({
             processText: null,
+            reasoningText: null,
             answerText: "hello",
         })
         await sleep(20)
         await session.preview({
             processText: null,
+            reasoningText: null,
             answerText: "hello world",
         })
         await sleep(20)
@@ -167,6 +169,7 @@ test("GatewayTextDelivery keeps fast private replies in oneshot mode before the 
 
         await session.preview({
             processText: null,
+            reasoningText: null,
             answerText: "hello",
         })
         await session.finish("hello world")
@@ -174,7 +177,7 @@ test("GatewayTextDelivery keeps fast private replies in oneshot mode before the 
         expect(sends).toEqual([
             {
                 text: "hello world",
-                parseMode: null,
+                parseMode: "HTML",
             },
         ])
         expect(store.getStateValue("telegram.last_stream_fallback_reason")).toBe("preview_not_established")
@@ -243,6 +246,7 @@ test("GatewayTextDelivery renders tool progress in a Telegram blockquote above t
 
         await session.preview({
             processText: "Let me fetch that for you:",
+            reasoningText: null,
             answerText: null,
         })
         await sleep(10)
@@ -368,7 +372,7 @@ test("GatewayTextDelivery falls back to oneshot when opening the stream message 
         store.putStateValue("telegram.chat_type:42", "private", Date.now())
 
         const calls = {
-            plainSends: [] as string[],
+            sends: [] as string[],
         }
         const client = {
             async getChat() {
@@ -379,15 +383,16 @@ test("GatewayTextDelivery falls back to oneshot when opening the stream message 
                 _chatId: string,
                 text: string,
                 _topic?: string | null,
-                options?: { parseMode?: string },
+                _options?: { parseMode?: string },
             ): Promise<{ message_id: number }> {
-                if (options?.parseMode === "HTML") {
+                if (calls.sends.length === 0) {
+                    calls.sends.push(text)
                     throw new Error("stream open failed")
                 }
 
-                calls.plainSends.push(text)
+                calls.sends.push(text)
                 return {
-                    message_id: 1,
+                    message_id: calls.sends.length,
                 }
             },
             async editMessageText(): Promise<void> {
@@ -417,12 +422,13 @@ test("GatewayTextDelivery falls back to oneshot when opening the stream message 
 
         await session.preview({
             processText: null,
+            reasoningText: null,
             answerText: "hello",
         })
         await sleep(10)
         await session.finish("hello world")
 
-        expect(calls.plainSends).toEqual(["hello world"])
+        expect(calls.sends).toEqual(["hello", "hello world"])
         expect(store.getStateValue("telegram.last_stream_fallback_reason")).toBe("stream_send_failed")
     } finally {
         db.close()
@@ -438,8 +444,7 @@ test("GatewayTextDelivery falls back to oneshot when the final stream edit fails
         store.putStateValue("telegram.chat_type:42", "private", Date.now())
 
         const calls = {
-            plainSends: [] as string[],
-            streamSends: 0,
+            sends: [] as string[],
         }
         const client = {
             async getChat() {
@@ -450,18 +455,11 @@ test("GatewayTextDelivery falls back to oneshot when the final stream edit fails
                 _chatId: string,
                 text: string,
                 _topic?: string | null,
-                options?: { parseMode?: string },
+                _options?: { parseMode?: string },
             ): Promise<{ message_id: number }> {
-                if (options?.parseMode === "HTML") {
-                    calls.streamSends += 1
-                    return {
-                        message_id: 5,
-                    }
-                }
-
-                calls.plainSends.push(text)
+                calls.sends.push(text)
                 return {
-                    message_id: 6,
+                    message_id: calls.sends.length + 4,
                 }
             },
             async editMessageText(): Promise<void> {
@@ -491,13 +489,13 @@ test("GatewayTextDelivery falls back to oneshot when the final stream edit fails
 
         await session.preview({
             processText: null,
+            reasoningText: null,
             answerText: "hello",
         })
         await sleep(10)
         await session.finish("hello world")
 
-        expect(calls.streamSends).toBe(1)
-        expect(calls.plainSends).toEqual(["hello world"])
+        expect(calls.sends).toEqual(["hello", "hello world"])
         expect(store.getStateValue("telegram.last_stream_fallback_reason")).toBe("stream_edit_failed")
     } finally {
         db.close()
