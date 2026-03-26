@@ -2,6 +2,7 @@ type EnvSource = Record<string, string | undefined>
 
 type RawTelegramConfig = {
     enabled?: unknown
+    bot_token?: unknown
     bot_token_env?: unknown
     poll_timeout_seconds?: unknown
     allowed_chats?: unknown
@@ -15,7 +16,7 @@ export type TelegramConfig =
     | {
           enabled: true
           botToken: string
-          botTokenEnv: string
+          botTokenEnv: string | null
           pollTimeoutSeconds: number
           allowedChats: string[]
           allowedUsers: string[]
@@ -29,11 +30,19 @@ export function parseTelegramConfig(value: unknown, env: EnvSource): TelegramCon
         return { enabled: false }
     }
 
-    const botTokenEnv = readString(table.bot_token_env, "channels.telegram.bot_token_env", "TELEGRAM_BOT_TOKEN")
+    const configuredBotToken = readOptionalString(table.bot_token, "channels.telegram.bot_token")
+    if (configuredBotToken !== null && table.bot_token_env !== undefined) {
+        throw new Error("channels.telegram.bot_token and channels.telegram.bot_token_env are mutually exclusive")
+    }
+
+    const botTokenEnv =
+        configuredBotToken === null
+            ? readString(table.bot_token_env, "channels.telegram.bot_token_env", "TELEGRAM_BOT_TOKEN")
+            : null
     const pollTimeoutSeconds = readPollTimeoutSeconds(table.poll_timeout_seconds)
     const allowedChats = readIdentifierList(table.allowed_chats, "channels.telegram.allowed_chats")
     const allowedUsers = readIdentifierList(table.allowed_users, "channels.telegram.allowed_users")
-    const botToken = env[botTokenEnv]?.trim()
+    const botToken = configuredBotToken ?? (botTokenEnv === null ? null : env[botTokenEnv]?.trim() ?? null)
 
     if (!botToken) {
         throw new Error(`Telegram is enabled but ${botTokenEnv} is not set`)
@@ -92,6 +101,14 @@ function readString(value: unknown, field: string, fallback: string): string {
     }
 
     return trimmed
+}
+
+function readOptionalString(value: unknown, field: string): string | null {
+    if (value === undefined) {
+        return null
+    }
+
+    return readString(value, field, "")
 }
 
 function readPollTimeoutSeconds(value: unknown): number {

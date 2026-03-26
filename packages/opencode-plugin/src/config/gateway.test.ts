@@ -264,6 +264,59 @@ test("loadGatewayConfig requires an explicit telegram allowlist when Telegram is
     }
 })
 
+test("loadGatewayConfig accepts a direct Telegram bot token from config", async () => {
+    const root = await mkdtemp(join(tmpdir(), "opencode-gateway-config-"))
+    const configPath = join(root, "config.toml")
+
+    try {
+        await writeFile(
+            configPath,
+            ["[channels.telegram]", "enabled = true", 'bot_token = "direct-secret"', "allowed_users = [42]"].join("\n"),
+        )
+
+        const config = await loadGatewayConfig({
+            OPENCODE_GATEWAY_CONFIG: configPath,
+        })
+
+        expect(config.telegram).toEqual({
+            enabled: true,
+            botToken: "direct-secret",
+            botTokenEnv: null,
+            pollTimeoutSeconds: 25,
+            allowedChats: [],
+            allowedUsers: ["42"],
+        })
+    } finally {
+        await rm(root, { recursive: true, force: true })
+    }
+})
+
+test("loadGatewayConfig rejects configuring both bot_token and bot_token_env", async () => {
+    const root = await mkdtemp(join(tmpdir(), "opencode-gateway-config-"))
+    const configPath = join(root, "config.toml")
+
+    try {
+        await writeFile(
+            configPath,
+            [
+                "[channels.telegram]",
+                "enabled = true",
+                'bot_token = "direct-secret"',
+                'bot_token_env = "TELEGRAM_BOT_TOKEN"',
+                "allowed_users = [42]",
+            ].join("\n"),
+        )
+
+        await expect(
+            loadGatewayConfig({
+                OPENCODE_GATEWAY_CONFIG: configPath,
+            }),
+        ).rejects.toThrow("mutually exclusive")
+    } finally {
+        await rm(root, { recursive: true, force: true })
+    }
+})
+
 test("loadGatewayConfig normalizes Telegram allowlist identifiers", async () => {
     const root = await mkdtemp(join(tmpdir(), "opencode-gateway-config-"))
     const configPath = join(root, "config.toml")

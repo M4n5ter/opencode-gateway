@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises"
+import { parse as parseToml } from "smol-toml"
 
 import { inspectGatewayPlugin, parseOpencodeConfig } from "./opencode-config"
 import { resolveOpencodeConfigFile } from "./opencode-config-file"
@@ -26,11 +27,51 @@ export async function runDoctor(options: DoctorOptions, env: Record<string, stri
     console.log(`  warm directory: ${serveTarget.workspaceDirPath}`)
     console.log(`  gateway config override: ${gatewayOverride ?? "not set"}`)
     console.log(`  plugin configured: ${opencodeStatus.pluginConfigured}`)
-    console.log(`  TELEGRAM_BOT_TOKEN: ${env.TELEGRAM_BOT_TOKEN?.trim() ? "set" : "missing"}`)
+    console.log(`  telegram token: ${await inspectTelegramToken(serveTarget.gatewayConfigPath, env)}`)
 
     if (opencodeStatus.error !== null) {
         console.log(`  opencode config error: ${opencodeStatus.error}`)
     }
+}
+
+async function inspectTelegramToken(
+    gatewayConfigPath: string,
+    env: Record<string, string | undefined>,
+): Promise<string> {
+    if (!(await pathExists(gatewayConfigPath))) {
+        return "unknown (gateway config missing)"
+    }
+
+    try {
+        const parsed = parseToml(await readFile(gatewayConfigPath, "utf8")) as Record<string, unknown>
+        const channels = asTable(parsed.channels)
+        const telegram = asTable(channels?.telegram)
+
+        if (telegram?.enabled !== true) {
+            return "not configured"
+        }
+
+        const directToken = typeof telegram.bot_token === "string" ? telegram.bot_token.trim() : ""
+        if (directToken.length > 0) {
+            return "configured directly via channels.telegram.bot_token"
+        }
+
+        const tokenEnv =
+            typeof telegram.bot_token_env === "string" && telegram.bot_token_env.trim().length > 0
+                ? telegram.bot_token_env.trim()
+                : "TELEGRAM_BOT_TOKEN"
+        return `${tokenEnv}: ${env[tokenEnv]?.trim() ? "set" : "missing"}`
+    } catch (error) {
+        return `unknown (${error instanceof Error ? error.message : String(error)})`
+    }
+}
+
+function asTable(value: unknown): Record<string, unknown> | null {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+        return null
+    }
+
+    return value as Record<string, unknown>
 }
 
 async function describePath(path: string): Promise<string> {

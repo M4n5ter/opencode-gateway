@@ -2,12 +2,38 @@
 
 Gateway plugin for OpenCode.
 
+## Stability Note
+
+The gateway is still under fast iteration. Expect occasional regressions,
+startup failures, or state/cache mismatches after upgrades.
+
+When the installed package stops behaving correctly, these two cleanup steps
+resolve a large share of issues:
+
+- remove the gateway state database at `~/.local/share/opencode-gateway/state.db`
+- remove the OpenCode plugin cache at `~/.cache/opencode/node_modules/opencode-gateway`
+
+After that, run `bunx opencode-gateway@latest init` again if needed, then start
+the gateway normally.
+
 ## Quick Start
+
+Recommended user-facing commands use `bunx` with the published latest package:
+
+```bash
+bunx opencode-gateway@latest <command>
+```
+
+If you prefer npm, replace `bunx` with:
+
+```bash
+npx opencode-gateway@latest <command>
+```
 
 Initialize your OpenCode config:
 
 ```bash
-npx opencode-gateway init
+bunx opencode-gateway@latest init
 ```
 
 This ensures:
@@ -25,13 +51,13 @@ writes to:
 Check what it resolved:
 
 ```bash
-npx opencode-gateway doctor
+bunx opencode-gateway@latest doctor
 ```
 
 Recommended:
 
 ```bash
-opencode-gateway serve
+bunx opencode-gateway@latest serve
 ```
 
 This wraps `opencode serve` and warms the gateway plugin worker immediately, so
@@ -43,15 +69,15 @@ startup:
 
 ```bash
 opencode serve
-opencode-gateway warm
+bunx opencode-gateway@latest warm
 ```
 
 If you want a separate managed config tree instead of editing your existing
 OpenCode config:
 
 ```bash
-npx opencode-gateway init --managed
-opencode-gateway serve --managed
+bunx opencode-gateway@latest init --managed
+bunx opencode-gateway@latest serve --managed
 ```
 
 ## Example gateway config
@@ -79,9 +105,13 @@ max_concurrent_runs = 1
 
 [channels.telegram]
 enabled = false
+# Ask @BotFather for the bot token. Choose exactly one credential source.
+# bot_token = "123456:ABCDEF"
+# Or load it from an environment variable:
 bot_token_env = "TELEGRAM_BOT_TOKEN"
 poll_timeout_seconds = 25
 # Configure at least one allowlist when Telegram is enabled.
+# Ask @userinfobot for your numeric Telegram user id for private-chat allowlists.
 allowed_chats = []
 allowed_users = []
 
@@ -89,6 +119,16 @@ allowed_users = []
 path = "USER.md"
 description = "Persistent user profile and preference memory. Keep this file accurate and concise. Record stable preferences, communication style, workflow habits, project conventions, tool constraints, review expectations, and other recurring facts that should shape future assistance. Update it proactively when you learn something durable about the user. Do not store one-off task details or transient context here."
 inject_content = true
+
+[[memory.entries]]
+path = "RULES.md"
+description = "Behavior rules and standing operating constraints for the assistant. Keep this file concise, explicit, and current. Use it for durable expectations about behavior, review standards, output style, safety boundaries, and other rules that should consistently shape future responses."
+inject_content = true
+
+[[memory.entries]]
+path = "memory/daily"
+description = "Daily notes stored as YYYY-MM-DD.md files. Use this directory for dated logs, short-lived findings, and day-specific working context that should remain searchable without being auto-injected."
+search_only = true
 
 [[memory.entries]]
 path = "memory/project.md"
@@ -106,8 +146,8 @@ description = "Selected files are auto-injected; the rest stay searchable on dem
 globs = ["**/*.md", "notes/**/*.txt"]
 ```
 
-When Telegram is enabled, export the bot token through the configured
-environment variable, for example:
+When Telegram is enabled, either set `channels.telegram.bot_token` directly or
+export the token through the configured environment variable, for example:
 
 ```bash
 export TELEGRAM_BOT_TOKEN="..."
@@ -135,7 +175,7 @@ Memory rules:
 - relative paths are resolved from `opencode-gateway-workspace`
 - absolute paths are still allowed
 - missing files and directories are created automatically on load
-- the default template includes `USER.md` as persistent user-profile memory
+- the default template includes `USER.md`, `RULES.md`, and `memory/daily`
 - memory is injected only into gateway-managed sessions
 - `memory_search` returns matching snippets and paths; `memory_get` reads a
   specific configured memory file by path and optional line window
