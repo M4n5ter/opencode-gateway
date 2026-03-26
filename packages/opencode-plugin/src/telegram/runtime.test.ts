@@ -22,7 +22,10 @@ test("telegram status performs a live getMe probe and persists bot metadata", as
                         username: "gateway_bot",
                     }
                 },
-                async sendMessage(): Promise<void> {
+                async sendMessage(): Promise<{ message_id: number }> {
+                    throw new Error("unused")
+                },
+                async editMessageText(): Promise<void> {
                     throw new Error("unused")
                 },
                 async sendChatAction(): Promise<void> {
@@ -41,9 +44,6 @@ test("telegram status performs a live getMe probe and persists bot metadata", as
                     throw new Error("unused")
                 },
                 async sendDocument() {
-                    throw new Error("unused")
-                },
-                async sendMessageDraft() {
                     throw new Error("unused")
                 },
             },
@@ -95,7 +95,10 @@ test("telegram sendTest uses explicit targets and records send health", async ()
                 async getMe(): Promise<TelegramBotProfile> {
                     throw new Error("unused")
                 },
-                async sendMessage(): Promise<void> {
+                async sendMessage(): Promise<{ message_id: number }> {
+                    throw new Error("unused")
+                },
+                async editMessageText(): Promise<void> {
                     throw new Error("unused")
                 },
                 async sendChatAction(): Promise<void> {
@@ -114,9 +117,6 @@ test("telegram sendTest uses explicit targets and records send health", async ()
                     throw new Error("unused")
                 },
                 async sendDocument() {
-                    throw new Error("unused")
-                },
-                async sendMessageDraft() {
                     throw new Error("unused")
                 },
             },
@@ -179,7 +179,10 @@ test("telegram status reports stalled polling when the current poll exceeds the 
                         username: "gateway_bot",
                     }
                 },
-                async sendMessage(): Promise<void> {
+                async sendMessage(): Promise<{ message_id: number }> {
+                    throw new Error("unused")
+                },
+                async editMessageText(): Promise<void> {
                     throw new Error("unused")
                 },
                 async sendChatAction(): Promise<void> {
@@ -198,9 +201,6 @@ test("telegram status reports stalled polling when the current poll exceeds the 
                     throw new Error("unused")
                 },
                 async sendDocument() {
-                    throw new Error("unused")
-                },
-                async sendMessageDraft() {
                     throw new Error("unused")
                 },
             },

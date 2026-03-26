@@ -2,19 +2,35 @@ import type { BindingDeliveryTarget } from "../binding"
 import type { GatewayTransportHost } from "../host/transport"
 import type { SqliteStore } from "../store/sqlite"
 import { recordTelegramPreviewEmit, recordTelegramStreamFallback } from "../telegram/state"
-import { createDraftId, type DeliveryModePreference, type TelegramProgressiveSupport } from "./telegram"
+import { renderTelegramStreamMessage } from "../telegram/stream-render"
+import type { DeliveryModePreference, TelegramProgressiveSupport } from "./telegram"
+
+export type TextDeliveryPreview = {
+    processText: string | null
+    answerText: string | null
+}
 
 export type TextDeliverySession = {
     mode: "oneshot" | "progressive"
-    preview(text: string): Promise<void>
+    preview(preview: TextDeliveryPreview): Promise<void>
     finish(finalText: string | null): Promise<boolean>
 }
 
 export type TextDeliveryOptions = {
-    progressiveRefreshIntervalMs?: number
+    streamOpenDelayMs?: number
+    streamEditIntervalMs?: number
+    typingKeepaliveIntervalMs?: number
 }
 
-const DEFAULT_PROGRESSIVE_REFRESH_INTERVAL_MS = 3_000
+type ProgressiveTextDeliveryOptions = {
+    streamOpenDelayMs: number
+    streamEditIntervalMs: number
+    typingKeepaliveIntervalMs: number
+}
+
+const DEFAULT_STREAM_OPEN_DELAY_MS = 1_200
+const DEFAULT_STREAM_EDIT_INTERVAL_MS = 1_000
+const DEFAULT_TYPING_KEEPALIVE_INTERVAL_MS = 3_000
 
 export class GatewayTextDelivery {
     constructor(
@@ -47,7 +63,15 @@ export class GatewayTextDelivery {
                         this.transport,
                         this.telegramSupport,
                         this.store,
-                        this.options.progressiveRefreshIntervalMs ?? DEFAULT_PROGRESSIVE_REFRESH_INTERVAL_MS,
+                        {
+                            streamOpenDelayMs:
+                                preference === "stream"
+                                    ? 0
+                                    : (this.options.streamOpenDelayMs ?? DEFAULT_STREAM_OPEN_DELAY_MS),
+                            streamEditIntervalMs: this.options.streamEditIntervalMs ?? DEFAULT_STREAM_EDIT_INTERVAL_MS,
+                            typingKeepaliveIntervalMs:
+                                this.options.typingKeepaliveIntervalMs ?? DEFAULT_TYPING_KEEPALIVE_INTERVAL_MS,
+                        },
                     )
                     session.start()
                     return session
@@ -74,7 +98,10 @@ export class GatewayTextDelivery {
     }> {
         const session = await this.open(target, preference)
         if (session.mode === "progressive") {
-            await session.preview(text.slice(0, Math.max(1, Math.ceil(text.length / 2))))
+            await session.preview({
+                processText: null,
+                answerText: text.slice(0, Math.max(1, Math.ceil(text.length / 2))),
+            })
         }
 
         return {
@@ -87,7 +114,7 @@ export class GatewayTextDelivery {
 class NoopTextDeliverySession implements TextDeliverySession {
     readonly mode = "oneshot" as const
 
-    async preview(_text: string): Promise<void> {}
+    async preview(_preview: TextDeliveryPreview): Promise<void> {}
 
     async finish(_finalText: string | null): Promise<boolean> {
         return false
@@ -101,8 +128,8 @@ class FanoutTextDeliverySession implements TextDeliverySession {
         this.mode = sessions.some((session) => session.mode === "progressive") ? "progressive" : "oneshot"
     }
 
-    async preview(text: string): Promise<void> {
-        await Promise.all(this.sessions.map((session) => session.preview(text)))
+    async preview(preview: TextDeliveryPreview): Promise<void> {
+        await Promise.all(this.sessions.map((session) => session.preview(preview)))
     }
 
     async finish(finalText: string | null): Promise<boolean> {
@@ -124,7 +151,7 @@ class OneshotTextDeliverySession implements TextDeliverySession {
         private readonly transport: GatewayTransportHost,
     ) {}
 
-    async preview(_text: string): Promise<void> {}
+    async preview(_preview: TextDeliveryPreview): Promise<void> {}
 
     async finish(finalText: string | null): Promise<boolean> {
         if (finalText === null || finalText.trim().length === 0) {
@@ -146,46 +173,48 @@ class OneshotTextDeliverySession implements TextDeliverySession {
 
 class ProgressiveTextDeliverySession implements TextDeliverySession {
     readonly mode = "progressive" as const
+    private readonly startedAtMs = Date.now()
     private previewFailed = false
-    private previewDelivered = false
     private acceptingPreviews = true
     private finished = false
-    private latestPreviewText: string | null = null
-    private pendingPreviewCount = 0
-    private pendingPreview = Promise.resolve()
-    private keepaliveTimer: ReturnType<typeof setTimeout> | null = null
-    private readonly draftId = createDraftId()
+    private latestPreview: TextDeliveryPreview | null = null
+    private streamMessageId: number | null = null
+    private lastRenderedBody: string | null = null
+    private lastStreamUpdateAtMs = 0
+    private pendingWork = Promise.resolve()
+    private openTimer: ReturnType<typeof setTimeout> | null = null
+    private flushTimer: ReturnType<typeof setTimeout> | null = null
+    private typingKeepaliveTimer: ReturnType<typeof setTimeout> | null = null
 
     constructor(
         private readonly target: BindingDeliveryTarget,
         private readonly transport: GatewayTransportHost,
         private readonly telegramSupport: TelegramProgressiveSupport,
         private readonly store: SqliteStore,
-        private readonly refreshIntervalMs: number,
+        private readonly options: ProgressiveTextDeliveryOptions,
     ) {}
 
     start(): void {
         this.telegramSupport.startTyping(this.target)
-        this.ensureKeepalive()
+        this.ensureTypingKeepalive()
     }
 
-    async preview(text: string): Promise<void> {
-        if (this.previewFailed || !this.acceptingPreviews || this.finished || text.trim().length === 0) {
+    async preview(preview: TextDeliveryPreview): Promise<void> {
+        const normalizedPreview = normalizePreview(preview)
+        if (this.previewFailed || !this.acceptingPreviews || this.finished || normalizedPreview === null) {
             return
         }
 
-        this.latestPreviewText = text
-        await this.enqueueDraftSend(() => this.latestPreviewText, true)
-
-        if (!this.previewFailed && this.previewDelivered) {
-            this.ensureKeepalive()
-        }
+        this.latestPreview = normalizedPreview
+        this.scheduleOpenOrFlush()
     }
 
     async finish(finalText: string | null): Promise<boolean> {
         this.acceptingPreviews = false
-        this.stopKeepalive()
-        await this.awaitPendingPreview()
+        this.stopTypingKeepalive()
+        this.cancelOpenTimer()
+        this.cancelFlushTimer()
+        await this.awaitPendingWork()
 
         const normalizedFinalText = finalText?.trim() ?? ""
         if (normalizedFinalText.length === 0) {
@@ -193,107 +222,224 @@ class ProgressiveTextDeliverySession implements TextDeliverySession {
             return false
         }
 
-        if (!this.previewDelivered && !this.previewFailed) {
-            recordTelegramStreamFallback(this.store, "preview_not_established", Date.now())
-        }
-
-        if (this.previewDelivered && !this.previewFailed && this.latestPreviewText !== normalizedFinalText) {
-            this.latestPreviewText = normalizedFinalText
-            await this.enqueueDraftSend(() => this.latestPreviewText, false)
-        }
-
         try {
-            const ack = await this.transport.sendMessage({
-                deliveryTarget: this.target,
-                body: normalizedFinalText,
-            })
+            if (!this.previewFailed && this.streamMessageId !== null) {
+                const finalPreview = normalizePreview({
+                    processText: this.latestPreview?.processText ?? null,
+                    answerText: normalizedFinalText,
+                })
 
-            if (ack.errorMessage !== null) {
-                throw new Error(ack.errorMessage)
+                if (finalPreview !== null) {
+                    try {
+                        await this.commitFinalBody(renderTelegramStreamMessage(finalPreview))
+                        return true
+                    } catch {
+                        recordTelegramStreamFallback(this.store, "stream_edit_failed", Date.now())
+                    }
+                }
             }
 
-            return true
+            if (!this.previewFailed && this.streamMessageId === null) {
+                recordTelegramStreamFallback(this.store, "preview_not_established", Date.now())
+            }
+
+            return await this.sendFinalOneshot(normalizedFinalText)
         } finally {
             this.finished = true
-            this.stopKeepalive()
+            this.stopTypingKeepalive()
+            this.cancelOpenTimer()
+            this.cancelFlushTimer()
         }
     }
 
-    private async enqueueDraftSend(getText: () => string | null, recordEmit: boolean): Promise<void> {
-        const runPreview = async (): Promise<void> => {
-            try {
-                if (this.finished || this.previewFailed) {
-                    return
-                }
-
-                const text = getText()
-                if (text === null || text.trim().length === 0) {
-                    return
-                }
-
-                try {
-                    if (recordEmit) {
-                        recordTelegramPreviewEmit(this.store, Date.now())
-                    }
-                    await this.telegramSupport.sendDraft(this.target, this.draftId, text)
-                    this.previewDelivered = true
-                } catch {
-                    this.previewFailed = true
-                    this.stopKeepalive()
-                }
-            } finally {
-                this.pendingPreviewCount = Math.max(0, this.pendingPreviewCount - 1)
-            }
-        }
-
-        this.pendingPreviewCount += 1
-        this.pendingPreview = this.pendingPreview.then(runPreview, runPreview)
-        await this.pendingPreview
-    }
-
-    private async awaitPendingPreview(): Promise<void> {
-        if (this.pendingPreviewCount > 0) {
-            await this.pendingPreview
-        }
-    }
-
-    private ensureKeepalive(): void {
-        if (!this.shouldKeepalive() || this.keepaliveTimer !== null) {
+    private scheduleOpenOrFlush(): void {
+        if (this.latestPreview === null || this.previewFailed || this.finished) {
             return
         }
 
-        this.keepaliveTimer = setTimeout(() => {
-            this.keepaliveTimer = null
-            if (!this.shouldKeepalive()) {
+        if (this.streamMessageId === null) {
+            const elapsedMs = Date.now() - this.startedAtMs
+            if (elapsedMs >= this.options.streamOpenDelayMs) {
+                this.cancelOpenTimer()
+                this.requestImmediateFlush()
+                return
+            }
+
+            if (this.openTimer !== null) {
+                return
+            }
+
+            this.openTimer = setTimeout(() => {
+                this.openTimer = null
+                this.requestImmediateFlush()
+            }, this.options.streamOpenDelayMs - elapsedMs)
+            return
+        }
+
+        this.scheduleEditFlush()
+    }
+
+    private requestImmediateFlush(): void {
+        if (this.latestPreview === null || this.previewFailed || this.finished) {
+            return
+        }
+
+        this.cancelFlushTimer()
+        void this.enqueueWork(async () => {
+            await this.flushLatestPreview()
+        })
+    }
+
+    private scheduleEditFlush(): void {
+        if (this.flushTimer !== null) {
+            return
+        }
+
+        const remainingMs = Math.max(0, this.options.streamEditIntervalMs - (Date.now() - this.lastStreamUpdateAtMs))
+        if (remainingMs === 0) {
+            this.requestImmediateFlush()
+            return
+        }
+
+        this.flushTimer = setTimeout(() => {
+            this.flushTimer = null
+            this.requestImmediateFlush()
+        }, remainingMs)
+    }
+
+    private async flushLatestPreview(): Promise<void> {
+        if (this.previewFailed || this.finished || this.latestPreview === null) {
+            return
+        }
+
+        recordTelegramPreviewEmit(this.store, Date.now())
+        await this.commitPreviewBody(renderTelegramStreamMessage(this.latestPreview))
+    }
+
+    private async commitPreviewBody(body: string): Promise<void> {
+        if (this.lastRenderedBody === body) {
+            return
+        }
+
+        try {
+            if (this.streamMessageId === null) {
+                this.streamMessageId = await this.telegramSupport.sendStreamMessage(this.target, body)
+                this.stopTypingKeepalive()
+            } else {
+                await this.telegramSupport.editStreamMessage(this.target, this.streamMessageId, body)
+            }
+
+            this.lastRenderedBody = body
+            this.lastStreamUpdateAtMs = Date.now()
+        } catch {
+            this.previewFailed = true
+            this.stopTypingKeepalive()
+        }
+    }
+
+    private async commitFinalBody(body: string): Promise<void> {
+        if (this.streamMessageId === null || this.lastRenderedBody === body) {
+            return
+        }
+
+        await this.telegramSupport.editStreamMessage(this.target, this.streamMessageId, body)
+        this.lastRenderedBody = body
+        this.lastStreamUpdateAtMs = Date.now()
+    }
+
+    private async sendFinalOneshot(finalText: string): Promise<boolean> {
+        const ack = await this.transport.sendMessage({
+            deliveryTarget: this.target,
+            body: finalText,
+        })
+
+        if (ack.errorMessage !== null) {
+            throw new Error(ack.errorMessage)
+        }
+
+        return true
+    }
+
+    private async awaitPendingWork(): Promise<void> {
+        await this.pendingWork
+    }
+
+    private enqueueWork(task: () => Promise<void>): Promise<void> {
+        const run = async (): Promise<void> => {
+            await task()
+        }
+
+        this.pendingWork = this.pendingWork.then(run, run)
+        return this.pendingWork
+    }
+
+    private ensureTypingKeepalive(): void {
+        if (!this.shouldKeepTyping() || this.typingKeepaliveTimer !== null) {
+            return
+        }
+
+        this.typingKeepaliveTimer = setTimeout(() => {
+            this.typingKeepaliveTimer = null
+            if (!this.shouldKeepTyping()) {
                 return
             }
 
             this.telegramSupport.startTyping(this.target)
-            const keepaliveWork =
-                this.previewDelivered && !this.previewFailed && this.latestPreviewText !== null
-                    ? this.enqueueDraftSend(() => this.latestPreviewText, false)
-                    : Promise.resolve()
-
-            void keepaliveWork.finally(() => {
-                if (this.shouldKeepalive()) {
-                    this.ensureKeepalive()
-                }
-            })
-        }, this.refreshIntervalMs)
+            this.ensureTypingKeepalive()
+        }, this.options.typingKeepaliveIntervalMs)
     }
 
-    private stopKeepalive(): void {
-        if (this.keepaliveTimer === null) {
+    private stopTypingKeepalive(): void {
+        if (this.typingKeepaliveTimer === null) {
             return
         }
 
-        clearTimeout(this.keepaliveTimer)
-        this.keepaliveTimer = null
+        clearTimeout(this.typingKeepaliveTimer)
+        this.typingKeepaliveTimer = null
     }
 
-    private shouldKeepalive(): boolean {
-        return this.acceptingPreviews && !this.finished
+    private shouldKeepTyping(): boolean {
+        return this.acceptingPreviews && !this.finished && this.streamMessageId === null
     }
+
+    private cancelOpenTimer(): void {
+        if (this.openTimer === null) {
+            return
+        }
+
+        clearTimeout(this.openTimer)
+        this.openTimer = null
+    }
+
+    private cancelFlushTimer(): void {
+        if (this.flushTimer === null) {
+            return
+        }
+
+        clearTimeout(this.flushTimer)
+        this.flushTimer = null
+    }
+}
+
+function normalizePreview(preview: TextDeliveryPreview): TextDeliveryPreview | null {
+    const processText = normalizeVisibleText(preview.processText)
+    const answerText = normalizeVisibleText(preview.answerText)
+    if (processText === null && answerText === null) {
+        return null
+    }
+
+    return {
+        processText,
+        answerText,
+    }
+}
+
+function normalizeVisibleText(value: string | null): string | null {
+    if (value === null) {
+        return null
+    }
+
+    return value.trim().length === 0 ? null : value
 }
 
 function dedupeTargets(targets: BindingDeliveryTarget[]): BindingDeliveryTarget[] {

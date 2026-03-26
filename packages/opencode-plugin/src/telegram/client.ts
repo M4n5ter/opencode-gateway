@@ -11,6 +11,10 @@ import type {
     TelegramUpdate,
 } from "./types"
 
+type TelegramTextOptions = {
+    parseMode?: "HTML" | "MarkdownV2" | "Markdown"
+}
+
 export class TelegramApiError extends Error {
     constructor(
         message: string,
@@ -71,11 +75,17 @@ export class TelegramBotClient {
         await writeFile(localPath, new Uint8Array(await response.arrayBuffer()))
     }
 
-    async sendMessage(chatId: string, text: string, messageThreadId: string | null | undefined): Promise<void> {
-        await this.call("sendMessage", {
+    async sendMessage(
+        chatId: string,
+        text: string,
+        messageThreadId: string | null | undefined,
+        options: TelegramTextOptions = {},
+    ): Promise<TelegramSentMessage> {
+        return await this.call("sendMessage", {
             chat_id: chatId,
             text,
             message_thread_id: parseMessageThreadId(messageThreadId),
+            parse_mode: options.parseMode,
         })
     }
 
@@ -133,21 +143,21 @@ export class TelegramBotClient {
         })
     }
 
-    async sendMessageDraft(
+    async editMessageText(
         chatId: string,
-        draftId: number,
+        messageId: number,
         text: string,
-        messageThreadId: string | null | undefined,
+        options: TelegramTextOptions = {},
     ): Promise<void> {
-        if (!Number.isSafeInteger(draftId) || draftId === 0) {
-            throw new Error(`invalid Telegram draft id: ${draftId}`)
+        if (!Number.isSafeInteger(messageId) || messageId <= 0) {
+            throw new Error(`invalid Telegram message id: ${messageId}`)
         }
 
-        await this.call("sendMessageDraft", {
+        await this.call("editMessageText", {
             chat_id: chatId,
-            draft_id: draftId,
+            message_id: messageId,
             text,
-            message_thread_id: parseMessageThreadId(messageThreadId),
+            parse_mode: options.parseMode,
         })
     }
 
@@ -220,6 +230,7 @@ export type TelegramSendClientLike = Pick<TelegramBotClient, "sendMessage">
 export type TelegramMediaClientLike = Pick<TelegramBotClient, "getFile" | "downloadFile">
 export type TelegramFileSendClientLike = Pick<TelegramBotClient, "sendPhoto" | "sendDocument">
 export type TelegramChatActionClientLike = Pick<TelegramBotClient, "sendChatAction">
+export type TelegramMessageEditClientLike = Pick<TelegramBotClient, "editMessageText">
 
 async function readLocalFileBlob(filePath: string, mimeType: string): Promise<Blob> {
     const bytes = await readFile(filePath)
@@ -233,11 +244,10 @@ function inferUploadFileName(filePath: string): string {
 }
 export type TelegramProbeClientLike = Pick<TelegramBotClient, "getMe">
 export type TelegramChatClientLike = Pick<TelegramBotClient, "getChat">
-export type TelegramDraftClientLike = Pick<TelegramBotClient, "sendMessageDraft">
 export type TelegramQuestionClientLike = Pick<TelegramBotClient, "sendInteractiveMessage" | "answerCallbackQuery">
 export type TelegramOpsClientLike = TelegramSendClientLike & TelegramProbeClientLike
 export type TelegramDeliveryClientLike = TelegramSendClientLike &
-    TelegramDraftClientLike &
+    TelegramMessageEditClientLike &
     TelegramChatClientLike &
     TelegramChatActionClientLike
 export type TelegramRuntimeClientLike = TelegramOpsClientLike &

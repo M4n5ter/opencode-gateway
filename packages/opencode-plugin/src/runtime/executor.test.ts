@@ -119,7 +119,7 @@ test("GatewayExecutor appends earlier prompts and forwards progressive previews 
         const events = new OpencodeEventHub()
 
         const commands: BindingOpencodeCommand[] = []
-        const previewSnapshots: string[] = []
+        const previewSnapshots: Array<{ processText: string | null; answerText: string | null }> = []
         const deliveredBodies: Array<string | null> = []
         const executor = new GatewayExecutor(
             createModule(),
@@ -168,8 +168,8 @@ test("GatewayExecutor appends earlier prompts and forwards progressive previews 
                     return [
                         {
                             mode: "progressive" as const,
-                            async preview(text: string): Promise<void> {
-                                previewSnapshots.push(text)
+                            async preview(preview): Promise<void> {
+                                previewSnapshots.push(preview)
                             },
                             async finish(finalText: string | null): Promise<boolean> {
                                 deliveredBodies.push(finalText)
@@ -214,7 +214,12 @@ test("GatewayExecutor appends earlier prompts and forwards progressive previews 
             },
             { kind: "awaitPromptResponse", messageId: `msg_gateway_mailbox_2_${now}` },
         ])
-        expect(previewSnapshots).toEqual(["preview"])
+        expect(previewSnapshots).toEqual([
+            {
+                processText: null,
+                answerText: "preview",
+            },
+        ])
         expect(deliveredBodies).toEqual(["hello back"])
         expect(report.responseText).toBe("hello back")
     } finally {
@@ -829,13 +834,13 @@ class FakeOpencodeExecutionDriver {
         if (observation.kind === "textPartUpdated" && observation.text !== null) {
             return {
                 kind: "preview",
-                text: observation.text,
+                processText: null,
+                answerText: observation.text,
             }
         }
 
         return {
             kind: "noop",
-            text: null,
         }
     }
 

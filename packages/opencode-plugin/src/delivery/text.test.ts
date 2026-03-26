@@ -7,7 +7,7 @@ import { createMemoryDatabase } from "../test/sqlite"
 import { TelegramProgressiveSupport } from "./telegram"
 import { GatewayTextDelivery } from "./text"
 
-test("GatewayTextDelivery uses draft preview for cached private chats", async () => {
+test("GatewayTextDelivery opens a single editable Telegram message for slow private replies", async () => {
     const db = createMemoryDatabase()
 
     try {
@@ -17,8 +17,8 @@ test("GatewayTextDelivery uses draft preview for cached private chats", async ()
 
         const calls = {
             typing: 0,
-            drafts: [] as string[],
-            sends: [] as string[],
+            sends: [] as Array<{ text: string; parseMode: string | null }>,
+            edits: [] as Array<{ messageId: number; text: string; parseMode: string | null }>,
         }
         const client = {
             async getChat() {
@@ -27,11 +27,31 @@ test("GatewayTextDelivery uses draft preview for cached private chats", async ()
             async sendChatAction(): Promise<void> {
                 calls.typing += 1
             },
-            async sendMessage(_chatId: string, text: string): Promise<void> {
-                calls.sends.push(text)
+            async sendMessage(
+                _chatId: string,
+                text: string,
+                _topic?: string | null,
+                options?: { parseMode?: string },
+            ): Promise<{ message_id: number }> {
+                calls.sends.push({
+                    text,
+                    parseMode: options?.parseMode ?? null,
+                })
+                return {
+                    message_id: calls.sends.length,
+                }
             },
-            async sendMessageDraft(_chatId: string, _draftId: number, text: string): Promise<void> {
-                calls.drafts.push(text)
+            async editMessageText(
+                _chatId: string,
+                messageId: number,
+                text: string,
+                options?: { parseMode?: string },
+            ): Promise<void> {
+                calls.edits.push({
+                    messageId,
+                    text,
+                    parseMode: options?.parseMode ?? null,
+                })
             },
         }
 
@@ -39,6 +59,11 @@ test("GatewayTextDelivery uses draft preview for cached private chats", async ()
             new GatewayTransportHost(client, store),
             store,
             new TelegramProgressiveSupport(client, store, createLogger()),
+            {
+                streamOpenDelayMs: 10,
+                streamEditIntervalMs: 10,
+                typingKeepaliveIntervalMs: 10,
+            },
         )
 
         const session = await delivery.open(
@@ -51,12 +76,180 @@ test("GatewayTextDelivery uses draft preview for cached private chats", async ()
         )
 
         expect(session.mode).toBe("progressive")
-        await session.preview("hello")
+        await session.preview({
+            processText: null,
+            answerText: "hello",
+        })
+        await sleep(20)
+        await session.preview({
+            processText: null,
+            answerText: "hello world",
+        })
+        await sleep(20)
+        await session.finish("hello world!")
+
+        expect(calls.typing).toBeGreaterThanOrEqual(1)
+        expect(calls.sends).toEqual([
+            {
+                text: "hello",
+                parseMode: "HTML",
+            },
+        ])
+        expect(calls.edits).toEqual([
+            {
+                messageId: 1,
+                text: "hello world",
+                parseMode: "HTML",
+            },
+            {
+                messageId: 1,
+                text: "hello world!",
+                parseMode: "HTML",
+            },
+        ])
+    } finally {
+        db.close()
+    }
+})
+
+test("GatewayTextDelivery keeps fast private replies in oneshot mode before the stream window opens", async () => {
+    const db = createMemoryDatabase()
+
+    try {
+        migrateGatewayDatabase(db)
+        const store = new SqliteStore(db)
+        store.putStateValue("telegram.chat_type:42", "private", Date.now())
+
+        const sends: Array<{ text: string; parseMode: string | null }> = []
+        const client = {
+            async getChat() {
+                throw new Error("unused")
+            },
+            async sendChatAction(): Promise<void> {},
+            async sendMessage(
+                _chatId: string,
+                text: string,
+                _topic?: string | null,
+                options?: { parseMode?: string },
+            ): Promise<{ message_id: number }> {
+                sends.push({
+                    text,
+                    parseMode: options?.parseMode ?? null,
+                })
+                return {
+                    message_id: 1,
+                }
+            },
+            async editMessageText(): Promise<void> {
+                throw new Error("unused")
+            },
+        }
+
+        const delivery = new GatewayTextDelivery(
+            new GatewayTransportHost(client, store),
+            store,
+            new TelegramProgressiveSupport(client, store, createLogger()),
+            {
+                streamOpenDelayMs: 50,
+                streamEditIntervalMs: 10,
+                typingKeepaliveIntervalMs: 10,
+            },
+        )
+
+        const session = await delivery.open(
+            {
+                channel: "telegram",
+                target: "42",
+                topic: null,
+            },
+            "auto",
+        )
+
+        await session.preview({
+            processText: null,
+            answerText: "hello",
+        })
         await session.finish("hello world")
 
-        expect(calls.typing).toBe(1)
-        expect(calls.drafts).toEqual(["hello", "hello world"])
-        expect(calls.sends).toEqual(["hello world"])
+        expect(sends).toEqual([
+            {
+                text: "hello world",
+                parseMode: null,
+            },
+        ])
+        expect(store.getStateValue("telegram.last_stream_fallback_reason")).toBe("preview_not_established")
+    } finally {
+        db.close()
+    }
+})
+
+test("GatewayTextDelivery renders tool progress in a Telegram blockquote above the final answer", async () => {
+    const db = createMemoryDatabase()
+
+    try {
+        migrateGatewayDatabase(db)
+        const store = new SqliteStore(db)
+        store.putStateValue("telegram.chat_type:42", "private", Date.now())
+
+        const calls = {
+            sends: [] as string[],
+            edits: [] as string[],
+        }
+        const client = {
+            async getChat() {
+                throw new Error("unused")
+            },
+            async sendChatAction(): Promise<void> {},
+            async sendMessage(
+                _chatId: string,
+                text: string,
+                _topic?: string | null,
+                _options?: { parseMode?: string },
+            ): Promise<{ message_id: number }> {
+                calls.sends.push(text)
+                return {
+                    message_id: 7,
+                }
+            },
+            async editMessageText(
+                _chatId: string,
+                _messageId: number,
+                text: string,
+                _options?: { parseMode?: string },
+            ): Promise<void> {
+                calls.edits.push(text)
+            },
+        }
+
+        const delivery = new GatewayTextDelivery(
+            new GatewayTransportHost(client, store),
+            store,
+            new TelegramProgressiveSupport(client, store, createLogger()),
+            {
+                streamOpenDelayMs: 0,
+                streamEditIntervalMs: 10,
+                typingKeepaliveIntervalMs: 10,
+            },
+        )
+
+        const session = await delivery.open(
+            {
+                channel: "telegram",
+                target: "42",
+                topic: null,
+            },
+            "auto",
+        )
+
+        await session.preview({
+            processText: "Let me fetch that for you:",
+            answerText: null,
+        })
+        await sleep(10)
+        await session.finish("final answer")
+
+        expect(calls.sends).toEqual(["<blockquote>Let me fetch that for you:</blockquote>"])
+        expect(calls.edits).toEqual(["<blockquote>Let me fetch that for you:</blockquote>\n\nfinal answer"])
     } finally {
         db.close()
     }
@@ -71,9 +264,8 @@ test("GatewayTextDelivery falls back to oneshot for non-private Telegram chats",
 
         const calls = {
             getChat: 0,
-            typing: 0,
-            drafts: 0,
             sends: 0,
+            edits: 0,
         }
         const client = {
             async getChat() {
@@ -84,13 +276,16 @@ test("GatewayTextDelivery falls back to oneshot for non-private Telegram chats",
                 }
             },
             async sendChatAction(): Promise<void> {
-                calls.typing += 1
+                throw new Error("unused")
             },
-            async sendMessage(): Promise<void> {
+            async sendMessage(): Promise<{ message_id: number }> {
                 calls.sends += 1
+                return {
+                    message_id: calls.sends,
+                }
             },
-            async sendMessageDraft(): Promise<void> {
-                calls.drafts += 1
+            async editMessageText(): Promise<void> {
+                calls.edits += 1
             },
         }
 
@@ -112,9 +307,8 @@ test("GatewayTextDelivery falls back to oneshot for non-private Telegram chats",
 
         expect(result.mode).toBe("oneshot")
         expect(calls.getChat).toBe(1)
-        expect(calls.typing).toBe(0)
-        expect(calls.drafts).toBe(0)
         expect(calls.sends).toBe(1)
+        expect(calls.edits).toBe(0)
         expect(store.getStateValue("telegram.last_stream_fallback_reason")).toBe("non_private_chat")
     } finally {
         db.close()
@@ -135,8 +329,12 @@ test("GatewayTextDelivery rejects forced stream mode for non-private chats", asy
                 }
             },
             async sendChatAction(): Promise<void> {},
-            async sendMessage(): Promise<void> {},
-            async sendMessageDraft(): Promise<void> {},
+            async sendMessage(): Promise<{ message_id: number }> {
+                throw new Error("unused")
+            },
+            async editMessageText(): Promise<void> {
+                throw new Error("unused")
+            },
         }
 
         const delivery = new GatewayTextDelivery(
@@ -155,13 +353,13 @@ test("GatewayTextDelivery rejects forced stream mode for non-private chats", asy
                 "hello world",
                 "stream",
             ),
-        ).rejects.toThrow("telegram draft stream is only supported for private chats")
+        ).rejects.toThrow("telegram streaming is only supported for private chats")
     } finally {
         db.close()
     }
 })
 
-test("GatewayTextDelivery records a draft fallback when Telegram draft preview fails", async () => {
+test("GatewayTextDelivery falls back to oneshot when opening the stream message fails", async () => {
     const db = createMemoryDatabase()
 
     try {
@@ -170,67 +368,29 @@ test("GatewayTextDelivery records a draft fallback when Telegram draft preview f
         store.putStateValue("telegram.chat_type:42", "private", Date.now())
 
         const calls = {
-            typing: 0,
-            sends: [] as string[],
+            plainSends: [] as string[],
         }
-        const client = {
-            async getChat() {
-                throw new Error("unused")
-            },
-            async sendChatAction(): Promise<void> {
-                calls.typing += 1
-            },
-            async sendMessage(_chatId: string, text: string): Promise<void> {
-                calls.sends.push(text)
-            },
-            async sendMessageDraft(): Promise<void> {
-                throw new Error("draft failed")
-            },
-        }
-
-        const delivery = new GatewayTextDelivery(
-            new GatewayTransportHost(client, store),
-            store,
-            new TelegramProgressiveSupport(client, store, createLogger()),
-        )
-
-        const result = await delivery.sendTest(
-            {
-                channel: "telegram",
-                target: "42",
-                topic: null,
-            },
-            "hello world",
-            "auto",
-        )
-
-        expect(result.mode).toBe("progressive")
-        expect(calls.typing).toBe(1)
-        expect(calls.sends).toEqual(["hello world"])
-        expect(store.getStateValue("telegram.last_stream_fallback_reason")).toBe("draft_send_failed")
-    } finally {
-        db.close()
-    }
-})
-
-test("GatewayTextDelivery records preview_not_established when a progressive session finishes without previews", async () => {
-    const db = createMemoryDatabase()
-
-    try {
-        migrateGatewayDatabase(db)
-        const store = new SqliteStore(db)
-        store.putStateValue("telegram.chat_type:42", "private", Date.now())
-
-        const sends: string[] = []
         const client = {
             async getChat() {
                 throw new Error("unused")
             },
             async sendChatAction(): Promise<void> {},
-            async sendMessage(_chatId: string, text: string): Promise<void> {
-                sends.push(text)
+            async sendMessage(
+                _chatId: string,
+                text: string,
+                _topic?: string | null,
+                options?: { parseMode?: string },
+            ): Promise<{ message_id: number }> {
+                if (options?.parseMode === "HTML") {
+                    throw new Error("stream open failed")
+                }
+
+                calls.plainSends.push(text)
+                return {
+                    message_id: 1,
+                }
             },
-            async sendMessageDraft(): Promise<void> {
+            async editMessageText(): Promise<void> {
                 throw new Error("unused")
             },
         }
@@ -239,6 +399,11 @@ test("GatewayTextDelivery records preview_not_established when a progressive ses
             new GatewayTransportHost(client, store),
             store,
             new TelegramProgressiveSupport(client, store, createLogger()),
+            {
+                streamOpenDelayMs: 0,
+                streamEditIntervalMs: 10,
+                typingKeepaliveIntervalMs: 10,
+            },
         )
 
         const session = await delivery.open(
@@ -250,16 +415,21 @@ test("GatewayTextDelivery records preview_not_established when a progressive ses
             "auto",
         )
 
+        await session.preview({
+            processText: null,
+            answerText: "hello",
+        })
+        await sleep(10)
         await session.finish("hello world")
 
-        expect(sends).toEqual(["hello world"])
-        expect(store.getStateValue("telegram.last_stream_fallback_reason")).toBe("preview_not_established")
+        expect(calls.plainSends).toEqual(["hello world"])
+        expect(store.getStateValue("telegram.last_stream_fallback_reason")).toBe("stream_send_failed")
     } finally {
         db.close()
     }
 })
 
-test("GatewayTextDelivery does not emit late drafts after finish starts", async () => {
+test("GatewayTextDelivery falls back to oneshot when the final stream edit fails", async () => {
     const db = createMemoryDatabase()
 
     try {
@@ -267,275 +437,68 @@ test("GatewayTextDelivery does not emit late drafts after finish starts", async 
         const store = new SqliteStore(db)
         store.putStateValue("telegram.chat_type:42", "private", Date.now())
 
-        let releaseDraft!: () => void
-        const draftReleased = new Promise<void>((resolve) => {
-            releaseDraft = resolve
+        const calls = {
+            plainSends: [] as string[],
+            streamSends: 0,
+        }
+        const client = {
+            async getChat() {
+                throw new Error("unused")
+            },
+            async sendChatAction(): Promise<void> {},
+            async sendMessage(
+                _chatId: string,
+                text: string,
+                _topic?: string | null,
+                options?: { parseMode?: string },
+            ): Promise<{ message_id: number }> {
+                if (options?.parseMode === "HTML") {
+                    calls.streamSends += 1
+                    return {
+                        message_id: 5,
+                    }
+                }
+
+                calls.plainSends.push(text)
+                return {
+                    message_id: 6,
+                }
+            },
+            async editMessageText(): Promise<void> {
+                throw new Error("stream edit failed")
+            },
+        }
+
+        const delivery = new GatewayTextDelivery(
+            new GatewayTransportHost(client, store),
+            store,
+            new TelegramProgressiveSupport(client, store, createLogger()),
+            {
+                streamOpenDelayMs: 0,
+                streamEditIntervalMs: 10,
+                typingKeepaliveIntervalMs: 10,
+            },
+        )
+
+        const session = await delivery.open(
+            {
+                channel: "telegram",
+                target: "42",
+                topic: null,
+            },
+            "auto",
+        )
+
+        await session.preview({
+            processText: null,
+            answerText: "hello",
         })
+        await sleep(10)
+        await session.finish("hello world")
 
-        const calls: string[] = []
-        const client = {
-            async getChat() {
-                throw new Error("unused")
-            },
-            async sendChatAction(): Promise<void> {
-                calls.push("typing")
-            },
-            async sendMessage(_chatId: string, text: string): Promise<void> {
-                calls.push(`send:${text}`)
-            },
-            async sendMessageDraft(_chatId: string, _draftId: number, text: string): Promise<void> {
-                calls.push(`draft:${text}`)
-                await draftReleased
-            },
-        }
-
-        const delivery = new GatewayTextDelivery(
-            new GatewayTransportHost(client, store),
-            store,
-            new TelegramProgressiveSupport(client, store, createLogger()),
-        )
-
-        const session = await delivery.open(
-            {
-                channel: "telegram",
-                target: "42",
-                topic: null,
-            },
-            "auto",
-        )
-
-        const preview = session.preview("hello")
-        await Promise.resolve()
-
-        const finish = session.finish("hello world")
-        await session.preview("hello world")
-        releaseDraft()
-
-        await preview
-        await finish
-
-        expect(calls).toEqual(["typing", "draft:hello", "draft:hello world", "send:hello world"])
-    } finally {
-        db.close()
-    }
-})
-
-test("GatewayTextDelivery keeps drafts alive while a progressive reply remains open", async () => {
-    const db = createMemoryDatabase()
-
-    try {
-        migrateGatewayDatabase(db)
-        const store = new SqliteStore(db)
-        store.putStateValue("telegram.chat_type:42", "private", Date.now())
-
-        const calls: string[] = []
-        const client = {
-            async getChat() {
-                throw new Error("unused")
-            },
-            async sendChatAction(): Promise<void> {
-                calls.push("typing")
-            },
-            async sendMessage(_chatId: string, text: string): Promise<void> {
-                calls.push(`send:${text}`)
-            },
-            async sendMessageDraft(_chatId: string, _draftId: number, text: string): Promise<void> {
-                calls.push(`draft:${text}`)
-            },
-        }
-
-        const delivery = new GatewayTextDelivery(
-            new GatewayTransportHost(client, store),
-            store,
-            new TelegramProgressiveSupport(client, store, createLogger()),
-            {
-                progressiveRefreshIntervalMs: 10,
-            },
-        )
-
-        const session = await delivery.open(
-            {
-                channel: "telegram",
-                target: "42",
-                topic: null,
-            },
-            "auto",
-        )
-
-        await session.preview("working")
-        await sleep(25)
-
-        const keepaliveTypingCount = calls.filter((call) => call === "typing").length
-        const keepaliveDraftCount = calls.filter((call) => call === "draft:working").length
-
-        expect(keepaliveTypingCount).toBeGreaterThan(1)
-        expect(keepaliveDraftCount).toBeGreaterThan(1)
-
-        await session.finish("final answer")
-        const callsAfterFinish = calls.length
-        await sleep(25)
-
-        expect(calls.at(-2)).toBe("draft:final answer")
-        expect(calls.at(-1)).toBe("send:final answer")
-        expect(calls.length).toBe(callsAfterFinish)
-    } finally {
-        db.close()
-    }
-})
-
-test("GatewayTextDelivery keeps typing alive before any preview text exists", async () => {
-    const db = createMemoryDatabase()
-
-    try {
-        migrateGatewayDatabase(db)
-        const store = new SqliteStore(db)
-        store.putStateValue("telegram.chat_type:42", "private", Date.now())
-
-        const calls: string[] = []
-        const client = {
-            async getChat() {
-                throw new Error("unused")
-            },
-            async sendChatAction(): Promise<void> {
-                calls.push("typing")
-            },
-            async sendMessage(_chatId: string, text: string): Promise<void> {
-                calls.push(`send:${text}`)
-            },
-            async sendMessageDraft(_chatId: string, _draftId: number, text: string): Promise<void> {
-                calls.push(`draft:${text}`)
-            },
-        }
-
-        const delivery = new GatewayTextDelivery(
-            new GatewayTransportHost(client, store),
-            store,
-            new TelegramProgressiveSupport(client, store, createLogger()),
-            {
-                progressiveRefreshIntervalMs: 10,
-            },
-        )
-
-        const session = await delivery.open(
-            {
-                channel: "telegram",
-                target: "42",
-                topic: null,
-            },
-            "auto",
-        )
-
-        await sleep(25)
-
-        expect(calls.filter((call) => call === "typing").length).toBeGreaterThan(1)
-        expect(calls.filter((call) => call.startsWith("draft:"))).toHaveLength(0)
-
-        await session.finish("final answer")
-        const callsAfterFinish = calls.length
-        await sleep(25)
-
-        expect(calls).toContain("send:final answer")
-        expect(calls.length).toBe(callsAfterFinish)
-    } finally {
-        db.close()
-    }
-})
-
-test("GatewayTextDelivery refreshes drafts with the latest preview text", async () => {
-    const db = createMemoryDatabase()
-
-    try {
-        migrateGatewayDatabase(db)
-        const store = new SqliteStore(db)
-        store.putStateValue("telegram.chat_type:42", "private", Date.now())
-
-        const drafts: string[] = []
-        const client = {
-            async getChat() {
-                throw new Error("unused")
-            },
-            async sendChatAction(): Promise<void> {},
-            async sendMessage(): Promise<void> {},
-            async sendMessageDraft(_chatId: string, _draftId: number, text: string): Promise<void> {
-                drafts.push(text)
-            },
-        }
-
-        const delivery = new GatewayTextDelivery(
-            new GatewayTransportHost(client, store),
-            store,
-            new TelegramProgressiveSupport(client, store, createLogger()),
-            {
-                progressiveRefreshIntervalMs: 10,
-            },
-        )
-
-        const session = await delivery.open(
-            {
-                channel: "telegram",
-                target: "42",
-                topic: null,
-            },
-            "auto",
-        )
-
-        await session.preview("first")
-        await sleep(12)
-        await session.preview("second")
-        await sleep(15)
-
-        expect(drafts).toContain("first")
-        expect(drafts).toContain("second")
-        expect(drafts.at(-1)).toBe("second")
-    } finally {
-        db.close()
-    }
-})
-
-test("GatewayTextDelivery skips whitespace-only draft previews", async () => {
-    const db = createMemoryDatabase()
-
-    try {
-        migrateGatewayDatabase(db)
-        const store = new SqliteStore(db)
-        store.putStateValue("telegram.chat_type:42", "private", Date.now())
-
-        const drafts: string[] = []
-        const sends: string[] = []
-        const client = {
-            async getChat() {
-                throw new Error("unused")
-            },
-            async sendChatAction(): Promise<void> {},
-            async sendMessage(_chatId: string, text: string): Promise<void> {
-                sends.push(text)
-            },
-            async sendMessageDraft(_chatId: string, _draftId: number, text: string): Promise<void> {
-                drafts.push(text)
-            },
-        }
-
-        const delivery = new GatewayTextDelivery(
-            new GatewayTransportHost(client, store),
-            store,
-            new TelegramProgressiveSupport(client, store, createLogger()),
-        )
-
-        const session = await delivery.open(
-            {
-                channel: "telegram",
-                target: "42",
-                topic: null,
-            },
-            "auto",
-        )
-
-        await session.preview("\n\n")
-        await session.preview("hello")
-        await session.finish("\n\nhello world")
-
-        expect(drafts).toEqual(["hello", "hello world"])
-        expect(sends).toEqual(["hello world"])
+        expect(calls.streamSends).toBe(1)
+        expect(calls.plainSends).toEqual(["hello world"])
+        expect(store.getStateValue("telegram.last_stream_fallback_reason")).toBe("stream_edit_failed")
     } finally {
         db.close()
     }

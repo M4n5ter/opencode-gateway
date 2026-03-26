@@ -1,5 +1,6 @@
 use opencode_gateway_core::{
     ExecutionObservation, ExecutionRole, ProgressiveDirective, ProgressiveMode,
+    ProgressivePreview,
 };
 
 use crate::{
@@ -142,7 +143,7 @@ fn observe_emits_preview_for_matching_assistant_events() {
             },
             3,
         ),
-        ProgressiveDirective::Preview("hello".to_owned())
+        ProgressiveDirective::Preview(ProgressivePreview::answer("hello"))
     );
 }
 

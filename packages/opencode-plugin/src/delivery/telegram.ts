@@ -4,9 +4,9 @@ import type { TelegramDeliveryClientLike } from "../telegram/client"
 import {
     readTelegramChatType,
     recordTelegramChatType,
-    recordTelegramDraftFailure,
-    recordTelegramDraftSuccess,
+    recordTelegramStreamFailure,
     recordTelegramStreamFallback,
+    recordTelegramStreamSuccess,
 } from "../telegram/state"
 import { formatError } from "../utils/error"
 
@@ -31,7 +31,7 @@ export class TelegramProgressiveSupport {
         const isPrivateChat = await this.isPrivateChat(target.target)
         if (preference === "stream") {
             if (!isPrivateChat) {
-                throw new Error("telegram draft stream is only supported for private chats")
+                throw new Error("telegram streaming is only supported for private chats")
             }
 
             return "progressive"
@@ -45,19 +45,41 @@ export class TelegramProgressiveSupport {
         return "progressive"
     }
 
-    async sendDraft(target: BindingDeliveryTarget, draftId: number, text: string): Promise<void> {
+    async sendStreamMessage(target: BindingDeliveryTarget, text: string): Promise<number> {
         if (this.client === null) {
             throw new Error("telegram transport is not configured")
         }
 
         try {
-            await this.client.sendMessageDraft(target.target, draftId, text, target.topic)
-            recordTelegramDraftSuccess(this.store, Date.now())
+            const sent = await this.client.sendMessage(target.target, text, target.topic, {
+                parseMode: "HTML",
+            })
+            recordTelegramStreamSuccess(this.store, Date.now())
+            return sent.message_id
         } catch (error) {
             const message = formatError(error)
-            recordTelegramDraftFailure(this.store, message, Date.now())
-            recordTelegramStreamFallback(this.store, "draft_send_failed", Date.now())
-            this.logger.log("warn", `telegram draft send failed: ${message}`)
+            recordTelegramStreamFailure(this.store, message, Date.now())
+            recordTelegramStreamFallback(this.store, "stream_send_failed", Date.now())
+            this.logger.log("warn", `telegram stream send failed: ${message}`)
+            throw error
+        }
+    }
+
+    async editStreamMessage(target: BindingDeliveryTarget, messageId: number, text: string): Promise<void> {
+        if (this.client === null) {
+            throw new Error("telegram transport is not configured")
+        }
+
+        try {
+            await this.client.editMessageText(target.target, messageId, text, {
+                parseMode: "HTML",
+            })
+            recordTelegramStreamSuccess(this.store, Date.now())
+        } catch (error) {
+            const message = formatError(error)
+            recordTelegramStreamFailure(this.store, message, Date.now())
+            recordTelegramStreamFallback(this.store, "stream_edit_failed", Date.now())
+            this.logger.log("warn", `telegram stream edit failed: ${message}`)
             throw error
         }
     }
@@ -91,9 +113,4 @@ export class TelegramProgressiveSupport {
             return false
         }
     }
-}
-
-export function createDraftId(): number {
-    const draftId = crypto.getRandomValues(new Uint32Array(1))[0]
-    return draftId === 0 ? 1 : draftId
 }

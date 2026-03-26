@@ -7,9 +7,32 @@ pub enum ProgressiveMode {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProgressivePreview {
+    pub process_text: Option<String>,
+    pub answer_text: Option<String>,
+}
+
+impl ProgressivePreview {
+    pub fn new(process_text: Option<String>, answer_text: Option<String>) -> Self {
+        Self {
+            process_text: normalize_visible_text(process_text),
+            answer_text: normalize_visible_text(answer_text),
+        }
+    }
+
+    pub fn answer(text: impl Into<String>) -> Self {
+        Self::new(None, Some(text.into()))
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.process_text.is_none() && self.answer_text.is_none()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProgressiveDirective {
     Noop,
-    Preview(String),
+    Preview(ProgressivePreview),
     Final(String),
 }
 
@@ -17,8 +40,8 @@ pub enum ProgressiveDirective {
 pub struct ProgressiveTextState {
     mode: ProgressiveMode,
     flush_interval_ms: u64,
-    pending_text: Option<String>,
-    last_preview_text: Option<String>,
+    pending_preview: Option<ProgressivePreview>,
+    last_preview: Option<ProgressivePreview>,
     last_preview_at_ms: Option<u64>,
     finished: bool,
 }
@@ -28,37 +51,32 @@ impl ProgressiveTextState {
         Self {
             mode,
             flush_interval_ms,
-            pending_text: None,
-            last_preview_text: None,
+            pending_preview: None,
+            last_preview: None,
             last_preview_at_ms: None,
             finished: false,
         }
     }
 
-    pub fn observe_snapshot(
-        &mut self,
-        text: impl Into<String>,
-        now_ms: u64,
-    ) -> ProgressiveDirective {
+    pub fn observe_snapshot(&mut self, preview: ProgressivePreview, now_ms: u64) -> ProgressiveDirective {
         if self.finished {
             return ProgressiveDirective::Noop;
         }
 
-        let text = text.into();
-        self.pending_text = Some(text.clone());
+        self.pending_preview = Some(preview.clone());
 
-        if self.mode == ProgressiveMode::Oneshot || text.is_empty() {
+        if self.mode == ProgressiveMode::Oneshot || preview.is_empty() {
             return ProgressiveDirective::Noop;
         }
 
-        if self.last_preview_text.as_deref() == Some(text.as_str()) {
+        if self.last_preview.as_ref() == Some(&preview) {
             return ProgressiveDirective::Noop;
         }
 
         if self.should_flush(now_ms) {
-            self.last_preview_text = Some(text.clone());
+            self.last_preview = Some(preview.clone());
             self.last_preview_at_ms = Some(now_ms);
-            return ProgressiveDirective::Preview(text);
+            return ProgressiveDirective::Preview(preview);
         }
 
         ProgressiveDirective::Noop
@@ -67,14 +85,9 @@ impl ProgressiveTextState {
     pub fn finish(&mut self, final_text: impl Into<String>, now_ms: u64) -> ProgressiveDirective {
         self.finished = true;
         let final_text = final_text.into();
-        self.pending_text = Some(final_text.clone());
+        let _ = now_ms;
 
-        if !final_text.is_empty() && self.mode == ProgressiveMode::Progressive {
-            self.last_preview_text = Some(final_text.clone());
-            self.last_preview_at_ms = Some(now_ms);
-        }
-
-        if final_text.is_empty() {
+        if final_text.trim().is_empty() {
             return ProgressiveDirective::Noop;
         }
 
@@ -88,16 +101,20 @@ impl ProgressiveTextState {
     }
 }
 
+fn normalize_visible_text(text: Option<String>) -> Option<String> {
+    text.filter(|value| !value.trim().is_empty())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{ProgressiveDirective, ProgressiveMode, ProgressiveTextState};
+    use super::{ProgressiveDirective, ProgressiveMode, ProgressivePreview, ProgressiveTextState};
 
     #[test]
     fn oneshot_mode_never_emits_preview() {
         let mut state = ProgressiveTextState::new(ProgressiveMode::Oneshot, 400);
 
         assert_eq!(
-            state.observe_snapshot("hello", 100),
+            state.observe_snapshot(ProgressivePreview::answer("hello"), 100),
             ProgressiveDirective::Noop
         );
         assert_eq!(
@@ -111,20 +128,20 @@ mod tests {
         let mut state = ProgressiveTextState::new(ProgressiveMode::Progressive, 400);
 
         assert_eq!(
-            state.observe_snapshot("hello", 100),
-            ProgressiveDirective::Preview("hello".to_owned())
+            state.observe_snapshot(ProgressivePreview::answer("hello"), 100),
+            ProgressiveDirective::Preview(ProgressivePreview::answer("hello"))
         );
         assert_eq!(
-            state.observe_snapshot("hello", 150),
+            state.observe_snapshot(ProgressivePreview::answer("hello"), 150),
             ProgressiveDirective::Noop
         );
         assert_eq!(
-            state.observe_snapshot("hello world", 200),
+            state.observe_snapshot(ProgressivePreview::answer("hello world"), 200),
             ProgressiveDirective::Noop
         );
         assert_eq!(
-            state.observe_snapshot("hello world", 550),
-            ProgressiveDirective::Preview("hello world".to_owned())
+            state.observe_snapshot(ProgressivePreview::answer("hello world"), 550),
+            ProgressiveDirective::Preview(ProgressivePreview::answer("hello world"))
         );
     }
 
@@ -134,8 +151,19 @@ mod tests {
 
         assert_eq!(state.finish("", 100), ProgressiveDirective::Noop);
         assert_eq!(
-            state.observe_snapshot("ignored after finish", 600),
+            state.observe_snapshot(ProgressivePreview::answer("ignored after finish"), 600),
             ProgressiveDirective::Noop
+        );
+    }
+
+    #[test]
+    fn preview_normalizes_whitespace_only_segments() {
+        assert_eq!(
+            ProgressivePreview::new(Some(" \n ".to_owned()), Some("hello".to_owned())),
+            ProgressivePreview {
+                process_text: None,
+                answer_text: Some("hello".to_owned()),
+            }
         );
     }
 }

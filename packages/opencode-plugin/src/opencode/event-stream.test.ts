@@ -21,7 +21,8 @@ test("OpencodeEventStream forwards SDK SSE events into the prompt hub", async ()
                     observation.kind === "textPartUpdated" && observation.messageId === "msg_assistant_1"
                         ? "preview"
                         : "noop",
-                text:
+                processText: null,
+                answerText:
                     observation.kind === "textPartUpdated" && observation.messageId === "msg_assistant_1"
                         ? "hello"
                         : null,
@@ -118,7 +119,15 @@ function createLogger() {
 }
 
 function createDriver(
-    observeEvent: (observation: BindingExecutionObservation) => { kind: string; text: string | null },
+    observeEvent: (observation: BindingExecutionObservation) =>
+        | {
+              kind: "noop"
+          }
+        | {
+              kind: "preview"
+              processText: string | null
+              answerText: string | null
+          },
 ): OpencodeExecutionDriver {
     return {
         start(): BindingOpencodeDriverStep {

@@ -1,7 +1,12 @@
-import type { BindingExecutionObservation, BindingProgressiveDirective, OpencodeExecutionDriver } from "../binding"
+import type {
+    BindingExecutionObservation,
+    BindingProgressiveDirective,
+    BindingProgressivePreview,
+    OpencodeExecutionDriver,
+} from "../binding"
 import { normalizeExecutionObservation, type OpencodeRuntimeEvent } from "./event-normalize"
 
-type TextSnapshotHandler = (text: string) => Promise<void> | void
+type TextSnapshotHandler = (preview: BindingProgressivePreview) => Promise<void> | void
 
 type ActiveDriver = {
     driver: OpencodeExecutionDriver
@@ -77,11 +82,16 @@ export class OpencodeEventHub {
     }
 
     private publishDirective(driver: ActiveDriver, directive: BindingProgressiveDirective): void {
-        if (directive.kind !== "preview" || directive.text === null) {
+        if (directive.kind !== "preview") {
             return
         }
 
-        void Promise.resolve(driver.onPreview(directive.text)).catch(() => {
+        void Promise.resolve(
+            driver.onPreview({
+                processText: directive.processText,
+                answerText: directive.answerText,
+            }),
+        ).catch(() => {
             // Preview delivery must not break the final response path.
         })
     }

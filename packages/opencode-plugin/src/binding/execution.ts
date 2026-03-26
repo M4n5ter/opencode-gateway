@@ -22,7 +22,21 @@ export type BindingExecutionObservation =
           delta: string
       }
 
-export type BindingProgressiveDirective = {
-    kind: string
-    text: string | null
+export type BindingProgressivePreview = {
+    processText: string | null
+    answerText: string | null
 }
+
+export type BindingProgressiveDirective =
+    | {
+          kind: "noop"
+      }
+    | {
+          kind: "preview"
+          processText: string | null
+          answerText: string | null
+      }
+    | {
+          kind: "final"
+          text: string
+      }

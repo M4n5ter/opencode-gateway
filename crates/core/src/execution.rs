@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use crate::{
     CronJobSpec, CronValidationError, DeliveryTarget, GatewayEngine, InboundMessage,
-    ProgressiveDirective, ProgressiveMode, ProgressiveTextState, PromptPart,
+    ProgressiveDirective, ProgressiveMode, ProgressivePreview, ProgressiveTextState, PromptPart,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,6 +67,7 @@ pub struct ExecutionState {
     session_id: String,
     user_message_id: Option<String>,
     assistant_message_id: Option<String>,
+    process_segments: Vec<String>,
     text_parts: HashMap<String, TrackedTextPart>,
     next_order: u64,
     progressive: ProgressiveTextState,
@@ -82,6 +83,7 @@ impl ExecutionState {
             session_id: session_id.into(),
             user_message_id: None,
             assistant_message_id: None,
+            process_segments: Vec::new(),
             text_parts: HashMap::new(),
             next_order: 0,
             progressive: ProgressiveTextState::new(mode, flush_interval_ms),
@@ -148,14 +150,10 @@ impl ExecutionState {
                     return ProgressiveDirective::Noop;
                 }
 
-                if self.assistant_message_id.as_deref() != Some(message_id.as_str())
-                    && !self.has_visible_preview_text()
-                {
+                if self.assistant_message_id.as_deref() != Some(message_id.as_str()) {
+                    self.freeze_active_preview_into_process();
                     self.text_parts.clear();
                     self.next_order = 0;
-                    self.assistant_message_id = Some(message_id.clone());
-                }
-                if self.assistant_message_id.is_none() {
                     self.assistant_message_id = Some(message_id);
                 }
             }
@@ -197,7 +195,7 @@ impl ExecutionState {
         }
 
         self.progressive
-            .observe_snapshot(self.render_snapshot(), now_ms)
+            .observe_snapshot(self.render_preview_snapshot(), now_ms)
     }
 
     fn observe_text_part_delta(
@@ -217,25 +215,37 @@ impl ExecutionState {
         tracked_part.text.push_str(&delta);
 
         self.progressive
-            .observe_snapshot(self.render_snapshot(), now_ms)
+            .observe_snapshot(self.render_preview_snapshot(), now_ms)
     }
 
-    fn render_snapshot(&self) -> String {
+    fn render_preview_snapshot(&self) -> ProgressivePreview {
+        ProgressivePreview::new(self.render_process_text(), self.render_active_text())
+    }
+
+    fn render_active_text(&self) -> Option<String> {
         let mut parts = self.text_parts.values().cloned().collect::<Vec<_>>();
         parts.sort_by_key(|part| part.order);
 
-        parts
+        let snapshot = parts
             .into_iter()
             .map(|part| part.text)
             .filter(|text| !text.is_empty())
             .collect::<Vec<_>>()
-            .join("\n")
+            .join("\n");
+
+        (!snapshot.trim().is_empty()).then_some(snapshot)
     }
 
-    fn has_visible_preview_text(&self) -> bool {
-        self.text_parts
-            .values()
-            .any(|part| !part.text.trim().is_empty())
+    fn render_process_text(&self) -> Option<String> {
+        (!self.process_segments.is_empty()).then(|| self.process_segments.join("\n\n"))
+    }
+
+    fn freeze_active_preview_into_process(&mut self) {
+        let Some(active_text) = self.render_active_text() else {
+            return;
+        };
+
+        self.process_segments.push(active_text);
     }
 }
 
@@ -258,7 +268,7 @@ impl TrackedTextPart {
 mod tests {
     use crate::{
         ChannelKind, CronJobSpec, InboundMessage, ProgressiveDirective, ProgressiveMode,
-        PromptPart, TargetKey,
+        ProgressivePreview, PromptPart, TargetKey,
     };
 
     use super::{ExecutionObservation, ExecutionRole, ExecutionState, PreparedExecution};
@@ -342,7 +352,7 @@ mod tests {
                 },
                 2,
             ),
-            ProgressiveDirective::Preview("hel".to_owned())
+            ProgressiveDirective::Preview(ProgressivePreview::answer("hel"))
         );
 
         assert_eq!(
@@ -354,7 +364,7 @@ mod tests {
                 },
                 200,
             ),
-            ProgressiveDirective::Preview("hello".to_owned())
+            ProgressiveDirective::Preview(ProgressivePreview::answer("hello"))
         );
     }
 
@@ -400,7 +410,7 @@ mod tests {
                 },
                 2,
             ),
-            ProgressiveDirective::Preview("hello".to_owned())
+            ProgressiveDirective::Preview(ProgressivePreview::answer("hello"))
         );
     }
 
@@ -459,12 +469,12 @@ mod tests {
                 },
                 3,
             ),
-            ProgressiveDirective::Preview("second".to_owned())
+            ProgressiveDirective::Preview(ProgressivePreview::answer("second"))
         );
     }
 
     #[test]
-    fn execution_state_keeps_existing_preview_stream_after_visible_text_arrives() {
+    fn execution_state_moves_visible_tool_text_into_process_preview() {
         let mut state = ExecutionState::new("ses_1", ProgressiveMode::Progressive, 0);
 
         assert_eq!(
@@ -505,7 +515,7 @@ mod tests {
                 },
                 2,
             ),
-            ProgressiveDirective::Preview("first".to_owned())
+            ProgressiveDirective::Preview(ProgressivePreview::answer("first"))
         );
 
         assert_eq!(
@@ -533,7 +543,10 @@ mod tests {
                 },
                 4,
             ),
-            ProgressiveDirective::Noop
+            ProgressiveDirective::Preview(ProgressivePreview::new(
+                Some("first".to_owned()),
+                Some("second".to_owned()),
+            ))
         );
     }
 }

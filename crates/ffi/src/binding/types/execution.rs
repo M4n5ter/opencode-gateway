@@ -1,4 +1,4 @@
-use opencode_gateway_core::{ExecutionObservation, ProgressiveDirective};
+use opencode_gateway_core::{ExecutionObservation, ProgressiveDirective, ProgressivePreview};
 use serde::{Deserialize, Serialize};
 
 use super::{normalize_optional_identifier, parse_execution_role, parse_required};
@@ -76,33 +76,30 @@ impl TryFrom<BindingExecutionObservation> for ExecutionObservation {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BindingProgressiveDirective {
-    pub kind: String,
-    pub text: Option<String>,
-}
-
-impl BindingProgressiveDirective {
-    pub fn noop() -> Self {
-        Self {
-            kind: "noop".to_owned(),
-            text: None,
-        }
-    }
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum BindingProgressiveDirective {
+    Noop,
+    Preview {
+        process_text: Option<String>,
+        answer_text: Option<String>,
+    },
+    Final {
+        text: String,
+    },
 }
 
 impl From<ProgressiveDirective> for BindingProgressiveDirective {
     fn from(value: ProgressiveDirective) -> Self {
         match value {
-            ProgressiveDirective::Noop => Self::noop(),
-            ProgressiveDirective::Preview(text) => Self {
-                kind: "preview".to_owned(),
-                text: Some(text),
+            ProgressiveDirective::Noop => Self::Noop,
+            ProgressiveDirective::Preview(ProgressivePreview {
+                process_text,
+                answer_text,
+            }) => Self::Preview {
+                process_text,
+                answer_text,
             },
-            ProgressiveDirective::Final(text) => Self {
-                kind: "final".to_owned(),
-                text: Some(text),
-            },
+            ProgressiveDirective::Final(text) => Self::Final { text },
         }
     }
 }
