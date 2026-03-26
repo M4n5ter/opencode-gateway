@@ -1,7 +1,7 @@
 import type { BindingLoggerHost } from "../binding"
 import type { TelegramConfig } from "../config/telegram"
+import type { GatewayInteractionRuntime } from "../interactions/runtime"
 import type { GatewayMailboxRouter } from "../mailbox/router"
-import type { GatewayQuestionRuntime } from "../questions/runtime"
 import type { GatewayMailboxRuntime } from "../runtime/mailbox"
 import type { SqliteStore } from "../store/sqlite"
 import { formatError } from "../utils/error"
@@ -43,7 +43,7 @@ export class TelegramPollingService {
         private readonly config: Extract<TelegramConfig, { enabled: true }>,
         private readonly mailboxRouter: MailboxRouterLike,
         private readonly mediaStore: TelegramInboundMediaStoreLike,
-        private readonly questions: GatewayQuestionRuntimeLike,
+        private readonly interactions: GatewayInteractionRuntimeLike,
         timing?: Partial<PollerTiming>,
     ) {
         this.allowlist = buildTelegramAllowlist(config)
@@ -125,7 +125,7 @@ export class TelegramPollingService {
                     }
 
                     if (normalized.kind === "callbackQuery") {
-                        await this.questions.handleTelegramCallbackQuery(normalized.callbackQuery)
+                        await this.interactions.handleTelegramCallbackQuery(normalized.callbackQuery)
                         offset = this.advanceOffset(nextOffset)
                         continue
                     }
@@ -188,7 +188,7 @@ export class TelegramPollingService {
 type GatewayMailboxRuntimeLike = Pick<GatewayMailboxRuntime, "enqueueInboundMessage">
 type MailboxRouterLike = Pick<GatewayMailboxRouter, "resolve">
 type TelegramInboundMediaStoreLike = Pick<TelegramInboundMediaStore, "materializeInboundMessage">
-type GatewayQuestionRuntimeLike = Pick<GatewayQuestionRuntime, "handleTelegramCallbackQuery">
+type GatewayInteractionRuntimeLike = Pick<GatewayInteractionRuntime, "handleTelegramCallbackQuery">
 
 function isPermanentTelegramFailure(error: unknown): boolean {
     return error instanceof TelegramApiError && !error.retryable

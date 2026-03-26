@@ -1,6 +1,6 @@
 import type { BindingInboundMessage, BindingLoggerHost } from "../binding"
 import type { GatewayMailboxConfig } from "../config/gateway"
-import type { GatewayQuestionRuntime } from "../questions/runtime"
+import type { GatewayInteractionRuntime } from "../interactions/runtime"
 import type { RuntimeJournalEntry, SqliteStore } from "../store/sqlite"
 import { formatError } from "../utils/error"
 import { deleteInboundAttachmentFiles } from "./attachments"
@@ -17,7 +17,7 @@ export class GatewayMailboxRuntime {
         private readonly store: SqliteStore,
         private readonly logger: BindingLoggerHost,
         private readonly config: GatewayMailboxConfig,
-        private readonly questions: GatewayQuestionRuntimeLike,
+        private readonly interactions: GatewayInteractionRuntimeLike,
     ) {}
 
     start(): void {
@@ -27,7 +27,7 @@ export class GatewayMailboxRuntime {
     }
 
     async enqueueInboundMessage(message: BindingInboundMessage, sourceKind: string, externalId: string): Promise<void> {
-        if (await this.questions.tryHandleInboundMessage(message)) {
+        if (await this.interactions.tryHandleInboundMessage(message)) {
             return
         }
 
@@ -124,7 +124,7 @@ export class GatewayMailboxRuntime {
 }
 
 type GatewayExecutorLike = Pick<GatewayExecutor, "executeMailboxEntries" | "prepareInboundMessage">
-type GatewayQuestionRuntimeLike = Pick<GatewayQuestionRuntime, "tryHandleInboundMessage">
+type GatewayInteractionRuntimeLike = Pick<GatewayInteractionRuntime, "tryHandleInboundMessage">
 
 function createJournalEntry(
     kind: RuntimeJournalEntry["kind"],

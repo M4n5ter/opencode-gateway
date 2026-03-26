@@ -9,14 +9,14 @@ import { GatewayTextDelivery } from "./delivery/text"
 import { ChannelFileSender } from "./host/file-sender"
 import { ConsoleLoggerHost } from "./host/logger"
 import { GatewayTransportHost } from "./host/transport"
+import { createInteractionClient } from "./interactions/client"
+import { GatewayInteractionRuntime } from "./interactions/runtime"
 import { GatewayMailboxRouter } from "./mailbox/router"
 import { GatewayMemoryPromptProvider } from "./memory/prompt"
 import { GatewayMemoryRuntime } from "./memory/runtime"
 import { OpencodeSdkAdapter } from "./opencode/adapter"
 import { OpencodeEventStream } from "./opencode/event-stream"
 import { OpencodeEventHub } from "./opencode/events"
-import { createQuestionClient } from "./questions/client"
-import { GatewayQuestionRuntime } from "./questions/runtime"
 import { GatewayExecutor } from "./runtime/executor"
 import { GatewayMailboxRuntime } from "./runtime/mailbox"
 import { getOrCreateRuntimeSingleton } from "./runtime/runtime-singleton"
@@ -103,7 +103,7 @@ export async function createGatewayRuntime(
         const mailboxRouter = new GatewayMailboxRouter(config.mailbox.routes)
         const opencodeEvents = new OpencodeEventHub()
         const opencode = new OpencodeSdkAdapter(input.client, config.workspaceDirPath)
-        const questionClient = createQuestionClient(input.client, input.serverUrl, config.workspaceDirPath)
+        const interactionClient = createInteractionClient(input.client, input.serverUrl, config.workspaceDirPath)
         const transport = new GatewayTransportHost(telegramClient, store)
         const files = new ChannelFileSender(telegramClient)
         const channelSessions = new ChannelSessionSwitcher(
@@ -114,8 +114,8 @@ export async function createGatewayRuntime(
             opencode,
             config.telegram.enabled,
         )
-        const questions = new GatewayQuestionRuntime(
-            questionClient,
+        const interactions = new GatewayInteractionRuntime(
+            interactionClient,
             config.workspaceDirPath,
             store,
             sessionContext,
@@ -126,7 +126,7 @@ export async function createGatewayRuntime(
         const progressiveSupport = new TelegramProgressiveSupport(telegramClient, store, logger)
         const delivery = new GatewayTextDelivery(transport, store, progressiveSupport)
         const executor = new GatewayExecutor(module, store, opencode, opencodeEvents, delivery, logger)
-        const mailbox = new GatewayMailboxRuntime(executor, store, logger, config.mailbox, questions)
+        const mailbox = new GatewayMailboxRuntime(executor, store, logger, config.mailbox, interactions)
         const cron = new GatewayCronRuntime(
             executor,
             module,
@@ -140,7 +140,7 @@ export async function createGatewayRuntime(
             input.client,
             config.workspaceDirPath,
             opencodeEvents,
-            [questions],
+            [interactions],
             logger,
         )
         const telegramPolling =
@@ -153,7 +153,7 @@ export async function createGatewayRuntime(
                       config.telegram,
                       mailboxRouter,
                       telegramMediaStore,
-                      questions,
+                      interactions,
                   )
                 : null
         const telegram = new GatewayTelegramRuntime(

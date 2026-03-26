@@ -22,23 +22,26 @@ test("ChannelSessionSwitcher switches the routed conversation key to a fresh ses
 
         store.putSessionBinding("shared:alpha", "ses_old", 1)
         sessions.replaceReplyTargets("ses_old", "shared:alpha", [target], 1)
-        store.replacePendingQuestion({
-            requestId: "question-1",
-            sessionId: "ses_old",
-            questions: [
-                {
-                    header: "Confirm",
-                    question: "Continue?",
-                    options: [
-                        {
-                            label: "Yes",
-                            description: "Continue",
-                        },
-                    ],
-                    multiple: false,
-                    custom: false,
-                },
-            ],
+        store.replacePendingInteraction({
+            request: {
+                kind: "question",
+                requestId: "question-1",
+                sessionId: "ses_old",
+                questions: [
+                    {
+                        header: "Confirm",
+                        question: "Continue?",
+                        options: [
+                            {
+                                label: "Yes",
+                                description: "Continue",
+                            },
+                        ],
+                        multiple: false,
+                        custom: false,
+                    },
+                ],
+            },
             targets: [
                 {
                     deliveryTarget: target,
@@ -87,7 +90,7 @@ test("ChannelSessionSwitcher switches the routed conversation key to a fresh ses
         expect(store.getSessionBinding("shared:alpha")).toBe("ses_new")
         expect(store.getDefaultSessionReplyTarget("ses_old")).toBeNull()
         expect(store.getDefaultSessionReplyTarget("ses_new")).toEqual(target)
-        expect(store.getPendingQuestionForTarget(target)).toBeNull()
+        expect(store.getPendingInteractionForTarget(target)).toBeNull()
     } finally {
         db.close()
     }

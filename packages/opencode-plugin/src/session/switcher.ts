@@ -41,7 +41,7 @@ export class ChannelSessionSwitcher {
         const newSessionId = await this.opencode.createFreshSession(defaultSessionTitle(title, target))
 
         if (previousSessionId !== null) {
-            this.store.deletePendingQuestionsForSession(previousSessionId)
+            this.store.deletePendingInteractionsForSession(previousSessionId)
             this.store.clearSessionReplyTargets(previousSessionId)
         }
 

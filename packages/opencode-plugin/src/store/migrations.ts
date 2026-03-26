@@ -1,6 +1,6 @@
 import type { SqliteDatabaseLike } from "./database"
 
-const LATEST_SCHEMA_VERSION = 7
+const LATEST_SCHEMA_VERSION = 8
 
 export function migrateGatewayDatabase(db: SqliteDatabaseLike): void {
     db.exec("PRAGMA journal_mode = WAL;")
@@ -43,6 +43,11 @@ export function migrateGatewayDatabase(db: SqliteDatabaseLike): void {
 
     if (currentVersion === 6) {
         migrateToV7(db)
+        currentVersion = 7
+    }
+
+    if (currentVersion === 7) {
+        migrateToV8(db)
     }
 }
 
@@ -211,6 +216,58 @@ function migrateToV7(db: SqliteDatabaseLike): void {
 
         ALTER TABLE cron_jobs
         ADD COLUMN run_at_ms INTEGER;
+    `)
+    db.exec("PRAGMA user_version = 7;")
+}
+
+function migrateToV8(db: SqliteDatabaseLike): void {
+    db.exec(`
+        CREATE TABLE pending_interactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            request_id TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            delivery_channel TEXT NOT NULL,
+            delivery_target TEXT NOT NULL,
+            delivery_topic TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            telegram_message_id INTEGER,
+            created_at_ms INTEGER NOT NULL
+        );
+
+        CREATE UNIQUE INDEX pending_interactions_request_target_topic_idx
+            ON pending_interactions (request_id, delivery_channel, delivery_target, delivery_topic);
+
+        CREATE INDEX pending_interactions_target_topic_created_at_ms_idx
+            ON pending_interactions (delivery_channel, delivery_target, delivery_topic, created_at_ms);
+
+        CREATE INDEX pending_interactions_session_id_created_at_ms_idx
+            ON pending_interactions (session_id, created_at_ms);
+
+        INSERT INTO pending_interactions (
+            request_id,
+            session_id,
+            kind,
+            delivery_channel,
+            delivery_target,
+            delivery_topic,
+            payload_json,
+            telegram_message_id,
+            created_at_ms
+        )
+        SELECT
+            request_id,
+            session_id,
+            'question',
+            delivery_channel,
+            delivery_target,
+            delivery_topic,
+            question_json,
+            telegram_message_id,
+            created_at_ms
+        FROM pending_questions;
+
+        DROP TABLE pending_questions;
     `)
     db.exec(`PRAGMA user_version = ${LATEST_SCHEMA_VERSION};`)
 }

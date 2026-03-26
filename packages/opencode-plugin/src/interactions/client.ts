@@ -8,7 +8,7 @@ type ClientConfigSnapshot = {
     headers?: unknown
 }
 
-export function createQuestionClient(
+export function createInteractionClient(
     client: GatewayPluginClient,
     serverUrl: URL,
     directory: string,

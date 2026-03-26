@@ -2,7 +2,13 @@ import { mkdir } from "node:fs/promises"
 import { dirname } from "node:path"
 
 import type { BindingDeliveryTarget } from "../binding"
-import type { GatewayQuestionInfo, PendingQuestionRecord } from "../questions/types"
+import type {
+    GatewayInteractionRequest,
+    GatewayPermissionRequest,
+    GatewayQuestionInfo,
+    GatewayQuestionRequest,
+    PendingInteractionRecord,
+} from "../interactions/types"
 import type { SqliteDatabaseLike } from "./database"
 import { migrateGatewayDatabase } from "./migrations"
 
@@ -106,10 +112,8 @@ export type PersistSessionReplyTargetsInput = {
     recordedAtMs: number
 }
 
-export type PersistPendingQuestionInput = {
-    requestId: string
-    sessionId: string
-    questions: GatewayQuestionInfo[]
+export type PersistPendingInteractionInput = {
+    request: GatewayInteractionRequest
     targets: Array<{
         deliveryTarget: BindingDeliveryTarget
         telegramMessageId: number | null
@@ -304,36 +308,38 @@ export class SqliteStore {
             .run(entry.kind, entry.recordedAtMs, entry.conversationKey, JSON.stringify(entry.payload))
     }
 
-    replacePendingQuestion(input: PersistPendingQuestionInput): void {
-        assertSafeInteger(input.recordedAtMs, "pending question recordedAtMs")
-        const deleteQuestion = this.db.query("DELETE FROM pending_questions WHERE request_id = ?1;")
-        const insertQuestion = this.db.query(
+    replacePendingInteraction(input: PersistPendingInteractionInput): void {
+        assertSafeInteger(input.recordedAtMs, "pending interaction recordedAtMs")
+        const deleteInteraction = this.db.query("DELETE FROM pending_interactions WHERE request_id = ?1;")
+        const insertInteraction = this.db.query(
             `
-                INSERT INTO pending_questions (
+                INSERT INTO pending_interactions (
                     request_id,
                     session_id,
+                    kind,
                     delivery_channel,
                     delivery_target,
                     delivery_topic,
-                    question_json,
+                    payload_json,
                     telegram_message_id,
                     created_at_ms
                 )
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8);
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9);
             `,
         )
 
-        this.db.transaction((payload: PersistPendingQuestionInput) => {
-            deleteQuestion.run(payload.requestId)
+        this.db.transaction((payload: PersistPendingInteractionInput) => {
+            deleteInteraction.run(payload.request.requestId)
 
             for (const target of payload.targets) {
-                insertQuestion.run(
-                    payload.requestId,
-                    payload.sessionId,
+                insertInteraction.run(
+                    payload.request.requestId,
+                    payload.request.sessionId,
+                    payload.request.kind,
                     target.deliveryTarget.channel,
                     target.deliveryTarget.target,
                     normalizeKeyField(target.deliveryTarget.topic),
-                    JSON.stringify(payload.questions),
+                    encodePendingInteractionPayload(payload.request),
                     target.telegramMessageId,
                     payload.recordedAtMs,
                 )
@@ -341,29 +347,30 @@ export class SqliteStore {
         })(input)
     }
 
-    deletePendingQuestion(requestId: string): void {
-        this.db.query("DELETE FROM pending_questions WHERE request_id = ?1;").run(requestId)
+    deletePendingInteraction(requestId: string): void {
+        this.db.query("DELETE FROM pending_interactions WHERE request_id = ?1;").run(requestId)
     }
 
-    deletePendingQuestionsForSession(sessionId: string): void {
-        this.db.query("DELETE FROM pending_questions WHERE session_id = ?1;").run(sessionId)
+    deletePendingInteractionsForSession(sessionId: string): void {
+        this.db.query("DELETE FROM pending_interactions WHERE session_id = ?1;").run(sessionId)
     }
 
-    getPendingQuestionForTarget(target: BindingDeliveryTarget): PendingQuestionRecord | null {
+    getPendingInteractionForTarget(target: BindingDeliveryTarget): PendingInteractionRecord | null {
         const row = this.db
-            .query<PendingQuestionRow, [string, string, string]>(
+            .query<PendingInteractionRow, [string, string, string]>(
                 `
                     SELECT
                         id,
                         request_id,
                         session_id,
+                        kind,
                         delivery_channel,
                         delivery_target,
                         delivery_topic,
-                        question_json,
+                        payload_json,
                         telegram_message_id,
                         created_at_ms
-                    FROM pending_questions
+                    FROM pending_interactions
                     WHERE delivery_channel = ?1
                       AND delivery_target = ?2
                       AND delivery_topic = ?3
@@ -373,28 +380,29 @@ export class SqliteStore {
             )
             .get(target.channel, target.target, normalizeKeyField(target.topic))
 
-        return row ? mapPendingQuestionRow(row) : null
+        return row ? mapPendingInteractionRow(row) : null
     }
 
-    getPendingQuestionForTelegramMessage(
+    getPendingInteractionForTelegramMessage(
         target: BindingDeliveryTarget,
         telegramMessageId: number,
-    ): PendingQuestionRecord | null {
-        assertSafeInteger(telegramMessageId, "pending question telegramMessageId")
+    ): PendingInteractionRecord | null {
+        assertSafeInteger(telegramMessageId, "pending interaction telegramMessageId")
         const row = this.db
-            .query<PendingQuestionRow, [string, string, string, number]>(
+            .query<PendingInteractionRow, [string, string, string, number]>(
                 `
                     SELECT
                         id,
                         request_id,
                         session_id,
+                        kind,
                         delivery_channel,
                         delivery_target,
                         delivery_topic,
-                        question_json,
+                        payload_json,
                         telegram_message_id,
                         created_at_ms
-                    FROM pending_questions
+                    FROM pending_interactions
                     WHERE delivery_channel = ?1
                       AND delivery_target = ?2
                       AND delivery_topic = ?3
@@ -405,7 +413,7 @@ export class SqliteStore {
             )
             .get(target.channel, target.target, normalizeKeyField(target.topic), telegramMessageId)
 
-        return row ? mapPendingQuestionRow(row) : null
+        return row ? mapPendingInteractionRow(row) : null
     }
 
     hasMailboxEntry(sourceKind: string, externalId: string): boolean {
@@ -947,17 +955,22 @@ type SessionReplyTargetRow = {
     updated_at_ms: number
 }
 
-type PendingQuestionRow = {
+type PendingInteractionRow = {
     id: number
     request_id: string
     session_id: string
+    kind: string
     delivery_channel: string
     delivery_target: string
     delivery_topic: string
-    question_json: string
+    payload_json: string
     telegram_message_id: number | null
     created_at_ms: number
 }
+
+type PendingInteractionPayload =
+    | Pick<GatewayQuestionRequest, "kind" | "questions">
+    | Pick<GatewayPermissionRequest, "kind" | "permission" | "patterns" | "metadata" | "always" | "tool">
 
 function mapCronJobRow(row: CronJobRow): CronJobRecord {
     const kind = parseScheduleJobKind(row.kind)
@@ -1077,11 +1090,12 @@ function mapSessionReplyTargetRow(row: SessionReplyTargetRow): BindingDeliveryTa
     }
 }
 
-function mapPendingQuestionRow(row: PendingQuestionRow): PendingQuestionRecord {
+function mapPendingInteractionRow(row: PendingInteractionRow): PendingInteractionRecord {
+    const payload = parsePendingInteractionPayload(row.kind, row.payload_json)
     return {
         requestId: row.request_id,
         sessionId: row.session_id,
-        questions: parsePendingQuestions(row.question_json),
+        ...payload,
         deliveryTarget: {
             channel: row.delivery_channel,
             target: row.delivery_target,
@@ -1092,13 +1106,52 @@ function mapPendingQuestionRow(row: PendingQuestionRow): PendingQuestionRecord {
     }
 }
 
+function encodePendingInteractionPayload(request: GatewayInteractionRequest): string {
+    switch (request.kind) {
+        case "question":
+            return JSON.stringify({
+                questions: request.questions,
+            })
+        case "permission":
+            return JSON.stringify({
+                permission: request.permission,
+                patterns: request.patterns,
+                metadata: request.metadata,
+                always: request.always,
+                tool: request.tool,
+            })
+    }
+}
+
+function parsePendingInteractionPayload(kind: string, value: string): PendingInteractionPayload {
+    switch (kind) {
+        case "question":
+            return {
+                kind,
+                questions: parsePendingQuestions(value),
+            }
+        case "permission":
+            return {
+                kind,
+                ...parsePendingPermission(value),
+            }
+        default:
+            throw new Error(`stored pending interaction kind is invalid: ${kind}`)
+    }
+}
+
 function parsePendingQuestions(value: string): GatewayQuestionInfo[] {
     const parsed = JSON.parse(value) as unknown
-    if (!Array.isArray(parsed)) {
+    const questions = Array.isArray(parsed)
+        ? parsed
+        : typeof parsed === "object" && parsed !== null && "questions" in parsed && Array.isArray(parsed.questions)
+          ? parsed.questions
+          : null
+    if (questions === null) {
         throw new Error("stored pending question payload is invalid")
     }
 
-    return parsed.map((question, index) => {
+    return questions.map((question, index) => {
         if (typeof question !== "object" || question === null) {
             throw new Error(`stored pending question ${index} is invalid`)
         }
@@ -1125,6 +1178,33 @@ function parsePendingQuestions(value: string): GatewayQuestionInfo[] {
             custom: readBooleanField(question, "custom", true),
         }
     })
+}
+
+function parsePendingPermission(value: string): Omit<GatewayPermissionRequest, "kind" | "requestId" | "sessionId"> {
+    const parsed = JSON.parse(value) as unknown
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+        throw new Error("stored pending permission payload is invalid")
+    }
+
+    const permission = readRequiredStringField(parsed, "permission")
+    const patterns = readStringArrayField(parsed, "patterns")
+    const always = readStringArrayField(parsed, "always")
+    const metadataValue = readObjectField(parsed, "metadata")
+    const toolValue = readOptionalObjectField(parsed, "tool")
+
+    return {
+        permission,
+        patterns,
+        metadata: metadataValue,
+        always,
+        tool:
+            toolValue === null
+                ? null
+                : {
+                      messageId: readRequiredStringField(toolValue, "messageId"),
+                      callId: readRequiredStringField(toolValue, "callId"),
+                  },
+    }
 }
 
 function assertSafeInteger(value: number, field: string): void {
@@ -1177,6 +1257,37 @@ function readArrayField(value: object, field: string): unknown[] {
     }
 
     return raw
+}
+
+function readStringArrayField(value: object, field: string): string[] {
+    const raw = readArrayField(value, field)
+    if (!raw.every((entry) => typeof entry === "string")) {
+        throw new Error(`stored field ${field} is invalid`)
+    }
+
+    return raw
+}
+
+function readObjectField(value: object, field: string): Record<string, unknown> {
+    const raw = (value as Record<string, unknown>)[field]
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+        throw new Error(`stored field ${field} is invalid`)
+    }
+
+    return raw as Record<string, unknown>
+}
+
+function readOptionalObjectField(value: object, field: string): Record<string, unknown> | null {
+    const raw = (value as Record<string, unknown>)[field]
+    if (raw === undefined || raw === null) {
+        return null
+    }
+
+    if (typeof raw !== "object" || Array.isArray(raw)) {
+        throw new Error(`stored field ${field} is invalid`)
+    }
+
+    return raw as Record<string, unknown>
 }
 
 function readBooleanField(value: object, field: string, fallback: boolean): boolean {

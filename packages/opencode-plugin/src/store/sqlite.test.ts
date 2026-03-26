@@ -203,7 +203,7 @@ test("sqlite store persists mailbox entry attachments alongside text", () => {
     }
 })
 
-test("sqlite store persists session reply targets and pending questions", () => {
+test("sqlite store persists session reply targets and pending interactions", () => {
     const db = createMemoryDatabase()
 
     try {
@@ -222,23 +222,26 @@ test("sqlite store persists session reply targets and pending questions", () => 
             ],
             recordedAtMs: 10,
         })
-        store.replacePendingQuestion({
-            requestId: "question-1",
-            sessionId: "session-1",
-            questions: [
-                {
-                    header: "Target",
-                    question: "Where should the file go?",
-                    options: [
-                        {
-                            label: "Telegram",
-                            description: "Send it to Telegram",
-                        },
-                    ],
-                    multiple: false,
-                    custom: true,
-                },
-            ],
+        store.replacePendingInteraction({
+            request: {
+                kind: "question",
+                requestId: "question-1",
+                sessionId: "session-1",
+                questions: [
+                    {
+                        header: "Target",
+                        question: "Where should the file go?",
+                        options: [
+                            {
+                                label: "Telegram",
+                                description: "Send it to Telegram",
+                            },
+                        ],
+                        multiple: false,
+                        custom: true,
+                    },
+                ],
+            },
             targets: [
                 {
                     deliveryTarget: {
@@ -251,6 +254,31 @@ test("sqlite store persists session reply targets and pending questions", () => 
             ],
             recordedAtMs: 20,
         })
+        store.replacePendingInteraction({
+            request: {
+                kind: "permission",
+                requestId: "permission-1",
+                sessionId: "session-1",
+                permission: "external_directory",
+                patterns: ["/tmp/*"],
+                metadata: {
+                    path: "/tmp/demo.txt",
+                },
+                always: [],
+                tool: null,
+            },
+            targets: [
+                {
+                    deliveryTarget: {
+                        channel: "telegram",
+                        target: "42",
+                        topic: null,
+                    },
+                    telegramMessageId: 100,
+                },
+            ],
+            recordedAtMs: 30,
+        })
 
         expect(store.getDefaultSessionReplyTarget("session-1")).toEqual({
             channel: "telegram",
@@ -258,12 +286,13 @@ test("sqlite store persists session reply targets and pending questions", () => 
             topic: null,
         })
         expect(
-            store.getPendingQuestionForTarget({
+            store.getPendingInteractionForTarget({
                 channel: "telegram",
                 target: "42",
                 topic: null,
             }),
         ).toEqual({
+            kind: "question",
             requestId: "question-1",
             sessionId: "session-1",
             questions: [
@@ -288,18 +317,136 @@ test("sqlite store persists session reply targets and pending questions", () => 
             telegramMessageId: 99,
             createdAtMs: 20,
         })
+        expect(
+            store.getPendingInteractionForTelegramMessage(
+                {
+                    channel: "telegram",
+                    target: "42",
+                    topic: null,
+                },
+                100,
+            ),
+        ).toEqual({
+            kind: "permission",
+            requestId: "permission-1",
+            sessionId: "session-1",
+            permission: "external_directory",
+            patterns: ["/tmp/*"],
+            metadata: {
+                path: "/tmp/demo.txt",
+            },
+            always: [],
+            tool: null,
+            deliveryTarget: {
+                channel: "telegram",
+                target: "42",
+                topic: null,
+            },
+            telegramMessageId: 100,
+            createdAtMs: 30,
+        })
 
-        store.deletePendingQuestionsForSession("session-1")
+        store.deletePendingInteraction("question-1")
+        expect(
+            store.getPendingInteractionForTarget({
+                channel: "telegram",
+                target: "42",
+                topic: null,
+            })?.requestId,
+        ).toBe("permission-1")
+
+        store.deletePendingInteractionsForSession("session-1")
         store.clearSessionReplyTargets("session-1")
 
         expect(store.getDefaultSessionReplyTarget("session-1")).toBeNull()
         expect(
-            store.getPendingQuestionForTarget({
+            store.getPendingInteractionForTarget({
                 channel: "telegram",
                 target: "42",
                 topic: null,
             }),
         ).toBeNull()
+    } finally {
+        db.close()
+    }
+})
+
+test("sqlite migration upgrades pending questions to pending interactions", () => {
+    const db = createMemoryDatabase()
+
+    try {
+        db.exec(`
+            CREATE TABLE pending_questions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                delivery_channel TEXT NOT NULL,
+                delivery_target TEXT NOT NULL,
+                delivery_topic TEXT NOT NULL,
+                question_json TEXT NOT NULL,
+                telegram_message_id INTEGER,
+                created_at_ms INTEGER NOT NULL
+            );
+
+            INSERT INTO pending_questions (
+                request_id,
+                session_id,
+                delivery_channel,
+                delivery_target,
+                delivery_topic,
+                question_json,
+                telegram_message_id,
+                created_at_ms
+            )
+            VALUES (
+                'question-1',
+                'session-1',
+                'telegram',
+                '42',
+                '',
+                '[{"header":"Confirm","question":"Continue?","options":[{"label":"Yes","description":"Continue"}],"multiple":false,"custom":false}]',
+                77,
+                10
+            );
+
+            PRAGMA user_version = 7;
+        `)
+
+        migrateGatewayDatabase(db)
+        const store = new SqliteStore(db)
+
+        expect(
+            store.getPendingInteractionForTarget({
+                channel: "telegram",
+                target: "42",
+                topic: null,
+            }),
+        ).toEqual({
+            kind: "question",
+            requestId: "question-1",
+            sessionId: "session-1",
+            questions: [
+                {
+                    header: "Confirm",
+                    question: "Continue?",
+                    options: [
+                        {
+                            label: "Yes",
+                            description: "Continue",
+                        },
+                    ],
+                    multiple: false,
+                    custom: false,
+                },
+            ],
+            deliveryTarget: {
+                channel: "telegram",
+                target: "42",
+                topic: null,
+            },
+            telegramMessageId: 77,
+            createdAtMs: 10,
+        })
     } finally {
         db.close()
     }

@@ -94,11 +94,13 @@ export class TelegramBotClient {
         text: string,
         messageThreadId: string | null | undefined,
         replyMarkup: TelegramInlineKeyboardMarkup,
+        options: TelegramTextOptions = {},
     ): Promise<TelegramSentMessage> {
         return await this.call("sendMessage", {
             chat_id: chatId,
             text,
             message_thread_id: parseMessageThreadId(messageThreadId),
+            parse_mode: options.parseMode,
             reply_markup: replyMarkup,
         })
     }
@@ -244,7 +246,7 @@ function inferUploadFileName(filePath: string): string {
 }
 export type TelegramProbeClientLike = Pick<TelegramBotClient, "getMe">
 export type TelegramChatClientLike = Pick<TelegramBotClient, "getChat">
-export type TelegramQuestionClientLike = Pick<TelegramBotClient, "sendInteractiveMessage" | "answerCallbackQuery">
+export type TelegramInteractionClientLike = Pick<TelegramBotClient, "sendInteractiveMessage" | "answerCallbackQuery">
 export type TelegramOpsClientLike = TelegramSendClientLike & TelegramProbeClientLike
 export type TelegramDeliveryClientLike = TelegramSendClientLike &
     TelegramMessageEditClientLike &

@@ -1,3 +1,4 @@
+import type { TelegramInlineKeyboardMarkup } from "../telegram/types"
 import type { GatewayQuestionInfo, GatewayQuestionRequest } from "./types"
 
 export type ParsedQuestionReply =
@@ -14,6 +15,19 @@ export type ParsedQuestionReply =
       }
 
 const CANCEL_WORDS = new Set(["/cancel", "cancel", "/reject", "reject"])
+
+export function formatPlainTextQuestion(request: GatewayQuestionRequest): string {
+    return [
+        "OpenCode needs additional input before it can continue.",
+        "",
+        ...request.questions.flatMap((question, index) => formatQuestionBlock(question, index)),
+        formatQuestionReplyInstructions(request.questions),
+    ].join("\n")
+}
+
+export function formatQuestionReplyError(request: GatewayQuestionRequest, message: string): string {
+    return [message, "", formatQuestionReplyInstructions(request.questions)].join("\n")
+}
 
 export function parseQuestionReply(request: GatewayQuestionRequest, text: string | null): ParsedQuestionReply {
     if (text === null) {
@@ -72,6 +86,84 @@ export function parseQuestionReply(request: GatewayQuestionRequest, text: string
         kind: "reply",
         answers,
     }
+}
+
+export function buildTelegramQuestionKeyboard(request: GatewayQuestionRequest): TelegramInlineKeyboardMarkup | null {
+    if (request.questions.length !== 1) {
+        return null
+    }
+
+    const [question] = request.questions
+    if (question.multiple || question.options.length === 0) {
+        return null
+    }
+
+    return {
+        inline_keyboard: question.options.map((option, index) => [
+            {
+                text: option.label,
+                callback_data: `q:${index}`,
+            },
+        ]),
+    }
+}
+
+export function formatTelegramQuestion(request: GatewayQuestionRequest): string {
+    const [question] = request.questions
+    return [
+        "OpenCode needs additional input before it can continue.",
+        "",
+        `${question.header}: ${question.question}`,
+        "",
+        "Tap a button below or reply with text.",
+    ].join("\n")
+}
+
+export function resolveQuestionCallbackAnswer(data: string | null, request: GatewayQuestionRequest): string | null {
+    if (data === null || !data.startsWith("q:") || request.questions.length !== 1) {
+        return null
+    }
+
+    const indexText = data.slice(2)
+    const index = Number.parseInt(indexText, 10)
+    if (!Number.isSafeInteger(index) || index < 0) {
+        return null
+    }
+
+    return request.questions[0]?.options[index]?.label ?? null
+}
+
+function formatQuestionBlock(question: GatewayQuestionInfo, index: number): string[] {
+    const label = `Question ${index + 1}: ${question.header}`
+    const options =
+        question.options.length === 0
+            ? []
+            : [
+                  "Options:",
+                  ...question.options.map(
+                      (option, optionIndex) => `${optionIndex + 1}. ${option.label} - ${option.description}`,
+                  ),
+              ]
+
+    return [label, question.question, ...options, ""]
+}
+
+function formatQuestionReplyInstructions(questions: GatewayQuestionInfo[]): string {
+    if (questions.length === 1) {
+        const question = questions[0]
+        const selectionHint = question.multiple
+            ? "Reply with one line. You may send option numbers or labels separated by commas."
+            : "Reply with one line. You may send an option number, an option label, or custom text."
+
+        return ["How to reply:", `- ${selectionHint}`, "- Reply /cancel to reject this question."].join("\n")
+    }
+
+    return [
+        "How to reply:",
+        "- Reply with one non-empty line per question, in order.",
+        "- Each line may use option numbers, option labels, or custom text when allowed.",
+        "- Reply /cancel to reject this question.",
+    ].join("\n")
 }
 
 function parseQuestionLine(
