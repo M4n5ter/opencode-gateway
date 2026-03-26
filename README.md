@@ -2,12 +2,9 @@
 
 Gateway plugin for OpenCode.
 
-This repository contains two things:
+This repository is the Rust/Bun workspace behind `opencode-gateway`.
 
-- a publishable npm package: `opencode-gateway`
-- the Rust/Bun workspace used to develop, test, and ship it
-
-The recommended user path is the npm package. The repository path is for local
+The recommended user path is the packaged CLI. The repository path is for local
 development and debugging.
 
 ## Stability Note
@@ -26,7 +23,7 @@ the gateway normally.
 
 ## Use Through bunx / npx
 
-Recommended user-facing commands use `bunx` with the published latest package:
+Recommended user-facing commands use `bunx` with the latest version:
 
 ```bash
 bunx opencode-gateway@latest <command>
@@ -288,30 +285,4 @@ bun run check:binding
 bun run check:plugin
 cargo test
 cargo clippy --all-targets --all-features
-```
-
-## Publish The npm Package
-
-From the package directory:
-
-```bash
-cd packages/opencode-plugin
-npm pack --dry-run
-```
-
-`prepack` builds both the package-local wasm output and the TypeScript `dist`
-tree, so the tarball is self-contained and does not depend on repository-root
-artifacts.
-
-For a full release flow from the repository root, use:
-
-```bash
-node scripts/publish-npm.mjs
-```
-
-That runs the binding smoke check, plugin check, Rust test/clippy, and
-`npm pack --dry-run`. Add `--publish` to actually publish:
-
-```bash
-node scripts/publish-npm.mjs --publish
 ```

@@ -18,7 +18,7 @@ the gateway normally.
 
 ## Quick Start
 
-Recommended user-facing commands use `bunx` with the published latest package:
+Recommended user-facing commands use `bunx` with the latest version:
 
 ```bash
 bunx opencode-gateway@latest <command>
