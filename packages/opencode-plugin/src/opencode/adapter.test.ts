@@ -490,3 +490,36 @@ test("OpencodeSdkAdapter extends the response deadline while the session is stil
         Date.now = originalNow
     }
 })
+
+test("OpencodeSdkAdapter returns a timeout error when waitUntilIdle exceeds the configured budget", async () => {
+    const adapter = new OpencodeSdkAdapter(
+        {
+            session: {
+                async status() {
+                    return {
+                        data: {
+                            ses_busy: {
+                                type: "busy",
+                            },
+                        },
+                    }
+                },
+            },
+        } as never,
+        "/workspace",
+    )
+
+    expect(
+        await adapter.execute({
+            kind: "waitUntilIdle",
+            sessionId: "ses_busy",
+            timeoutMs: 1,
+        }),
+    ).toEqual({
+        kind: "error",
+        commandKind: "waitUntilIdle",
+        sessionId: "ses_busy",
+        code: "timeout",
+        message: "session ses_busy did not become idle within 1ms",
+    })
+})

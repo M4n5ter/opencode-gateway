@@ -33,17 +33,28 @@ test("GatewayInteractionRuntime sends plain-text questions and replies from inbo
         const runtime = new GatewayInteractionRuntime(
             {
                 permission: {
+                    async list() {
+                        return []
+                    },
                     async reply() {
                         throw new Error("unexpected permission reply")
                     },
                 },
                 question: {
+                    async list() {
+                        return []
+                    },
                     async reply(input: { answers?: string[][] }) {
                         replied.push(input.answers ?? [])
                         return true as never
                     },
                     async reject() {
                         throw new Error("unexpected reject")
+                    },
+                },
+                session: {
+                    async get() {
+                        return { id: "session-1" }
                     },
                 },
             } as never,
@@ -53,7 +64,7 @@ test("GatewayInteractionRuntime sends plain-text questions and replies from inbo
             {
                 async sendMessage(input) {
                     sentBodies.push(input.body)
-                    return { errorMessage: null }
+                    return { kind: "delivered" }
                 },
             },
             null,
@@ -120,17 +131,28 @@ test("GatewayInteractionRuntime answers Telegram callback queries for single-cho
         const runtime = new GatewayInteractionRuntime(
             {
                 permission: {
+                    async list() {
+                        return []
+                    },
                     async reply() {
                         throw new Error("unexpected permission reply")
                     },
                 },
                 question: {
+                    async list() {
+                        return []
+                    },
                     async reply(input: { answers?: string[][] }) {
                         replied.push(input.answers ?? [])
                         return true as never
                     },
                     async reject() {
                         throw new Error("unexpected reject")
+                    },
+                },
+                session: {
+                    async get() {
+                        return { id: "session-1" }
                     },
                 },
             } as never,
@@ -230,17 +252,28 @@ test("GatewayInteractionRuntime sends permission requests with HTML Telegram con
         const runtime = new GatewayInteractionRuntime(
             {
                 permission: {
+                    async list() {
+                        return []
+                    },
                     async reply(input: { reply?: GatewayPermissionReply }) {
                         permissionReplies.push(input.reply ?? "reject")
                         return true as never
                     },
                 },
                 question: {
+                    async list() {
+                        return []
+                    },
                     async reply() {
                         throw new Error("unexpected question reply")
                     },
                     async reject() {
                         throw new Error("unexpected question reject")
+                    },
+                },
+                session: {
+                    async get(input: { sessionID: string }) {
+                        return { id: input.sessionID }
                     },
                 },
             } as never,
@@ -338,17 +371,28 @@ test("GatewayInteractionRuntime handles plain-text permission replies and reject
         const runtime = new GatewayInteractionRuntime(
             {
                 permission: {
+                    async list() {
+                        return []
+                    },
                     async reply(input: { reply?: GatewayPermissionReply }) {
                         permissionReplies.push(input.reply ?? "reject")
                         return true as never
                     },
                 },
                 question: {
+                    async list() {
+                        return []
+                    },
                     async reply() {
                         throw new Error("unexpected question reply")
                     },
                     async reject() {
                         throw new Error("unexpected question reject")
+                    },
+                },
+                session: {
+                    async get(input: { sessionID: string }) {
+                        return { id: input.sessionID }
                     },
                 },
             } as never,
@@ -358,7 +402,7 @@ test("GatewayInteractionRuntime handles plain-text permission replies and reject
             {
                 async sendMessage(input) {
                     sentBodies.push(input.body)
-                    return { errorMessage: null }
+                    return { kind: "delivered" }
                 },
             },
             null,
@@ -391,6 +435,209 @@ test("GatewayInteractionRuntime handles plain-text permission replies and reject
         expect(acceptedHandled).toBe(true)
         expect(permissionReplies).toEqual(["once"])
         expect(store.getPendingInteractionForTarget(createTarget("42"))).toBeNull()
+    } finally {
+        db.close()
+    }
+})
+
+test("GatewayInteractionRuntime resolves ancestor reply targets for child-session permissions", async () => {
+    const db = createMemoryDatabase()
+
+    try {
+        migrateGatewayDatabase(db)
+        const store = new SqliteStore(db)
+        const sessions = new GatewaySessionContext(store)
+        const interactiveMessages: string[] = []
+
+        sessions.replaceReplyTargets(
+            "session-root",
+            "telegram:42",
+            [
+                {
+                    channel: "telegram",
+                    target: "42",
+                    topic: null,
+                },
+            ],
+            1,
+        )
+
+        const runtime = new GatewayInteractionRuntime(
+            {
+                permission: {
+                    async list() {
+                        return []
+                    },
+                    async reply() {
+                        return true as never
+                    },
+                },
+                question: {
+                    async list() {
+                        return []
+                    },
+                    async reply() {
+                        throw new Error("unexpected question reply")
+                    },
+                    async reject() {
+                        throw new Error("unexpected question reject")
+                    },
+                },
+                session: {
+                    async get(input: { sessionID: string }) {
+                        if (input.sessionID === "session-child") {
+                            return {
+                                id: "session-child",
+                                parentID: "session-root",
+                            }
+                        }
+
+                        return {
+                            id: input.sessionID,
+                        }
+                    },
+                },
+            } as never,
+            "/workspace",
+            store,
+            sessions,
+            {
+                async sendMessage() {
+                    throw new Error("unexpected plain text send")
+                },
+            },
+            {
+                async sendInteractiveMessage(_chatId, text) {
+                    interactiveMessages.push(text)
+                    return {
+                        message_id: 77,
+                    }
+                },
+                async answerCallbackQuery() {},
+            },
+            new MemoryLogger(),
+        )
+
+        runtime.handleEvent({
+            type: "permission.asked",
+            properties: {
+                id: "permission-child",
+                sessionID: "session-child",
+                permission: "external_directory",
+                patterns: ["/tmp/*"],
+                metadata: {
+                    path: "/tmp/demo.txt",
+                },
+                always: [],
+            },
+        })
+        await Bun.sleep(0)
+
+        expect(interactiveMessages).toHaveLength(1)
+        expect(store.getPendingInteractionForTelegramMessage(createTarget("42"), 77)?.requestId).toBe(
+            "permission-child",
+        )
+    } finally {
+        db.close()
+    }
+})
+
+test("GatewayInteractionRuntime reconciles undelivered pending permissions from OpenCode", async () => {
+    const db = createMemoryDatabase()
+
+    try {
+        migrateGatewayDatabase(db)
+        const store = new SqliteStore(db)
+        const sessions = new GatewaySessionContext(store)
+        const interactiveMessages: string[] = []
+
+        sessions.replaceReplyTargets(
+            "session-root",
+            "telegram:42",
+            [
+                {
+                    channel: "telegram",
+                    target: "42",
+                    topic: null,
+                },
+            ],
+            1,
+        )
+
+        const runtime = new GatewayInteractionRuntime(
+            {
+                permission: {
+                    async list() {
+                        return [
+                            {
+                                id: "permission-reconcile",
+                                sessionID: "session-child",
+                                permission: "external_directory",
+                                patterns: ["/tmp/*"],
+                                metadata: {
+                                    path: "/tmp/demo.txt",
+                                },
+                                always: [],
+                            },
+                        ]
+                    },
+                    async reply() {
+                        return true as never
+                    },
+                },
+                question: {
+                    async list() {
+                        return []
+                    },
+                    async reply() {
+                        throw new Error("unexpected question reply")
+                    },
+                    async reject() {
+                        throw new Error("unexpected question reject")
+                    },
+                },
+                session: {
+                    async get(input: { sessionID: string }) {
+                        if (input.sessionID === "session-child") {
+                            return {
+                                id: "session-child",
+                                parentID: "session-root",
+                            }
+                        }
+
+                        return {
+                            id: input.sessionID,
+                        }
+                    },
+                },
+            } as never,
+            "/workspace",
+            store,
+            sessions,
+            {
+                async sendMessage() {
+                    throw new Error("unexpected plain text send")
+                },
+            },
+            {
+                async sendInteractiveMessage(_chatId, text) {
+                    interactiveMessages.push(text)
+                    return {
+                        message_id: 88,
+                    }
+                },
+                async answerCallbackQuery() {},
+            },
+            new MemoryLogger(),
+        )
+
+        await runtime.reconcilePendingRequests()
+        await runtime.reconcilePendingRequests()
+
+        expect(interactiveMessages).toHaveLength(1)
+        expect(store.getPendingInteractionForTelegramMessage(createTarget("42"), 88)?.requestId).toBe(
+            "permission-reconcile",
+        )
     } finally {
         db.close()
     }

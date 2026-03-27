@@ -1,19 +1,35 @@
 import type { BindingInboundMessage, BindingLoggerHost } from "../binding"
 import type { GatewayMailboxConfig } from "../config/gateway"
+import type { GatewayTransportHost } from "../host/transport"
 import type { GatewayInteractionRuntime } from "../interactions/runtime"
-import type { RuntimeJournalEntry, SqliteStore } from "../store/sqlite"
+import type { MailboxDeliveryRecord, MailboxJobRecord, RuntimeJournalEntry, SqliteStore } from "../store/sqlite"
 import { formatError } from "../utils/error"
 import { deleteInboundAttachmentFiles } from "./attachments"
 import type { GatewayExecutor } from "./executor"
 
-const RETRY_DELAY_MS = 1_000
+const EXECUTION_LEASE_MS = 60_000
+const EXECUTION_LEASE_HEARTBEAT_MS = 15_000
+const DELIVERY_LEASE_MS = 60_000
+const EXECUTION_RETRY_DELAY_MS = 5_000
+const DELIVERY_RETRY_DELAY_MS = 10_000
+const EXECUTION_MAX_ATTEMPTS = 3
+const DELIVERY_MAX_ATTEMPTS = 5
+const SWEEP_INTERVAL_MS = 1_000
+const MAX_ACTIVE_EXECUTIONS = 4
+const MAX_ACTIVE_DELIVERIES = 8
 
 export class GatewayMailboxRuntime {
-    private readonly activeMailboxes = new Set<string>()
-    private readonly scheduledMailboxes = new Map<string, ReturnType<typeof setTimeout>>()
+    private drainScheduled = false
+    private drainActive = false
+    private drainRequested = false
+    private sweepTimer: ReturnType<typeof setInterval> | null = null
+    private activeExecutions = 0
+    private activeDeliveries = 0
+    private stopped = false
 
     constructor(
         private readonly executor: GatewayExecutorLike,
+        private readonly transport: GatewayTransportLike,
         private readonly store: SqliteStore,
         private readonly logger: BindingLoggerHost,
         private readonly config: GatewayMailboxConfig,
@@ -21,8 +37,17 @@ export class GatewayMailboxRuntime {
     ) {}
 
     start(): void {
-        for (const mailboxKey of this.store.listPendingMailboxKeys()) {
-            this.scheduleImmediate(mailboxKey)
+        this.stopped = false
+        this.store.requeueExpiredMailboxLeases(Date.now())
+        this.ensureSweep()
+        this.scheduleDrain(0)
+    }
+
+    stop(): void {
+        this.stopped = true
+        if (this.sweepTimer !== null) {
+            clearInterval(this.sweepTimer)
+            this.sweepTimer = null
         }
     }
 
@@ -57,73 +82,261 @@ export class GatewayMailboxRuntime {
             }),
         )
 
-        this.scheduleAfterEnqueue(prepared.conversationKey)
+        this.scheduleDrain(0)
     }
 
-    private scheduleAfterEnqueue(mailboxKey: string): void {
-        if (this.activeMailboxes.has(mailboxKey) || this.scheduledMailboxes.has(mailboxKey)) {
+    private ensureSweep(): void {
+        if (this.sweepTimer !== null) {
             return
         }
 
-        this.schedule(mailboxKey, this.config.batchReplies ? this.config.batchWindowMs : 0)
+        this.sweepTimer = setInterval(() => {
+            this.scheduleDrain(0)
+        }, SWEEP_INTERVAL_MS)
     }
 
-    private scheduleImmediate(mailboxKey: string): void {
-        if (this.activeMailboxes.has(mailboxKey) || this.scheduledMailboxes.has(mailboxKey)) {
+    private scheduleDrain(delayMs: number): void {
+        if (this.stopped) {
             return
         }
 
-        this.schedule(mailboxKey, 0)
-    }
-
-    private scheduleRetry(mailboxKey: string): void {
-        if (this.activeMailboxes.has(mailboxKey) || this.scheduledMailboxes.has(mailboxKey)) {
+        if (this.drainActive || this.drainScheduled) {
+            this.drainRequested = true
             return
         }
 
-        this.schedule(mailboxKey, RETRY_DELAY_MS)
-    }
-
-    private schedule(mailboxKey: string, delayMs: number): void {
-        const handle = setTimeout(() => {
-            this.scheduledMailboxes.delete(mailboxKey)
-            void this.processMailbox(mailboxKey)
+        this.drainScheduled = true
+        setTimeout(() => {
+            this.drainScheduled = false
+            if (this.stopped) {
+                return
+            }
+            void this.drain()
         }, delayMs)
-        this.scheduledMailboxes.set(mailboxKey, handle)
     }
 
-    private async processMailbox(mailboxKey: string): Promise<void> {
-        if (this.activeMailboxes.has(mailboxKey)) {
+    private async drain(): Promise<void> {
+        if (this.stopped) {
             return
         }
 
-        this.activeMailboxes.add(mailboxKey)
+        if (this.drainActive) {
+            this.drainRequested = true
+            return
+        }
+
+        this.drainActive = true
 
         try {
-            const entries = this.store.listMailboxEntries(mailboxKey)
-            if (entries.length === 0) {
+            for (;;) {
+                this.drainRequested = false
+                const nowMs = Date.now()
+                this.store.requeueExpiredMailboxLeases(nowMs)
+                this.store.materializeMailboxJobs(nowMs, this.config.batchReplies, this.config.batchWindowMs)
+
+                let startedWork = false
+                startedWork = this.startExecutionWorkers(nowMs) || startedWork
+                startedWork = this.startDeliveryWorkers(nowMs) || startedWork
+
+                if (!this.drainRequested && !startedWork) {
+                    return
+                }
+            }
+        } finally {
+            this.drainActive = false
+            if (this.drainRequested) {
+                this.scheduleDrain(0)
+            }
+        }
+    }
+
+    private startExecutionWorkers(nowMs: number): boolean {
+        if (this.stopped) {
+            return false
+        }
+
+        let started = false
+
+        while (this.activeExecutions < MAX_ACTIVE_EXECUTIONS) {
+            const job = this.store.claimNextMailboxJob(nowMs, nowMs + EXECUTION_LEASE_MS)
+            if (job === null) {
+                break
+            }
+
+            started = true
+            this.activeExecutions += 1
+            void this.processJob(job).finally(() => {
+                this.activeExecutions -= 1
+                this.scheduleDrain(0)
+            })
+        }
+
+        return started
+    }
+
+    private startDeliveryWorkers(nowMs: number): boolean {
+        if (this.stopped) {
+            return false
+        }
+
+        let started = false
+
+        while (this.activeDeliveries < MAX_ACTIVE_DELIVERIES) {
+            const delivery = this.store.claimNextMailboxDelivery(nowMs, nowMs + DELIVERY_LEASE_MS)
+            if (delivery === null) {
+                break
+            }
+
+            started = true
+            this.activeDeliveries += 1
+            void this.processDelivery(delivery).finally(() => {
+                this.activeDeliveries -= 1
+                this.scheduleDrain(0)
+            })
+        }
+
+        return started
+    }
+
+    private async processJob(job: MailboxJobRecord): Promise<void> {
+        const stopHeartbeat = this.startExecutionLeaseHeartbeat(job.id)
+
+        try {
+            const outcome = await this.executor.executeMailboxJob(job)
+            const finalized = this.store.completeMailboxJobExecution({
+                jobId: job.id,
+                sessionId: outcome.sessionId,
+                responseText: outcome.responseText,
+                finalText: outcome.finalText,
+                deliveries: outcome.deliveries,
+                recordedAtMs: outcome.recordedAtMs,
+                deliveryRetryAtMs: outcome.recordedAtMs,
+            })
+            if (finalized.status === "ready_to_deliver") {
+                this.store.appendJournal(
+                    createJournalEntry("mailbox_delivery_queued", outcome.recordedAtMs, job.mailboxKey, {
+                        jobId: job.id,
+                    }),
+                )
+            }
+            await deleteInboundAttachmentFiles(finalized.cleanupEntries, this.logger)
+        } catch (error) {
+            const recordedAtMs = Date.now()
+            const quarantined = this.store.recordMailboxJobFailure(
+                job.id,
+                formatError(error),
+                recordedAtMs,
+                recordedAtMs + EXECUTION_RETRY_DELAY_MS,
+                EXECUTION_MAX_ATTEMPTS,
+            )
+            if (quarantined) {
+                this.store.appendJournal(
+                    createJournalEntry("mailbox_job_quarantined", recordedAtMs, job.mailboxKey, {
+                        jobId: job.id,
+                        error: formatError(error),
+                    }),
+                )
+            }
+            this.logger.log(
+                quarantined ? "error" : "warn",
+                `${quarantined ? "quarantined" : "retrying"} mailbox job ${job.id}: ${formatError(error)}`,
+            )
+        } finally {
+            stopHeartbeat()
+        }
+    }
+
+    private async processDelivery(delivery: MailboxDeliveryRecord): Promise<void> {
+        const job = this.store.getMailboxJob(delivery.jobId)
+        if (job === null) {
+            this.logger.log("warn", `mailbox delivery ${delivery.id} references missing job ${delivery.jobId}`)
+            return
+        }
+
+        const finalText = job.finalText?.trim() ?? ""
+        if (finalText.length === 0) {
+            const finalized = this.store.recordMailboxDeliveryFailure(
+                delivery.id,
+                `mailbox job ${job.id} has no final text to deliver`,
+                Date.now(),
+                Date.now(),
+                1,
+            )
+            await deleteInboundAttachmentFiles(finalized.cleanupEntries, this.logger)
+            return
+        }
+
+        try {
+            const ack = await this.transport.deliverMessage(
+                {
+                    deliveryTarget: delivery.deliveryTarget,
+                    body: finalText,
+                    previewContext: delivery.previewContext,
+                },
+                delivery.strategy,
+            )
+            if (ack.kind === "permanent_edit_failure") {
+                this.store.downgradeMailboxDeliveryToSend(delivery.id, ack.errorMessage, Date.now())
+                this.logger.log(
+                    "warn",
+                    `mailbox delivery ${delivery.id} fell back from edit to send: ${ack.errorMessage}`,
+                )
                 return
             }
 
-            const batch = this.config.batchReplies ? entries : [entries[0]]
-            await this.executor.executeMailboxEntries(batch)
-            this.store.deleteMailboxEntries(batch.map((entry) => entry.id))
-            await deleteInboundAttachmentFiles(batch, this.logger)
-        } catch (error) {
-            this.logger.log("warn", `mailbox flush failed for ${mailboxKey}: ${formatError(error)}`)
-            this.scheduleRetry(mailboxKey)
-            return
-        } finally {
-            this.activeMailboxes.delete(mailboxKey)
-        }
+            if (ack.kind === "retryable_failure") {
+                throw new Error(ack.errorMessage)
+            }
 
-        if (this.store.listMailboxEntries(mailboxKey).length > 0) {
-            this.scheduleImmediate(mailboxKey)
+            const finalized = this.store.markMailboxDeliveryDelivered(delivery.id, Date.now())
+            this.store.appendJournal(
+                createJournalEntry("delivery", Date.now(), job.mailboxKey, {
+                    jobId: job.id,
+                    deliveryTarget: delivery.deliveryTarget,
+                    body: finalText,
+                }),
+            )
+            await deleteInboundAttachmentFiles(finalized.cleanupEntries, this.logger)
+        } catch (error) {
+            const recordedAtMs = Date.now()
+            const finalized = this.store.recordMailboxDeliveryFailure(
+                delivery.id,
+                formatError(error),
+                recordedAtMs,
+                recordedAtMs + DELIVERY_RETRY_DELAY_MS,
+                DELIVERY_MAX_ATTEMPTS,
+            )
+            if (finalized.status === "quarantined") {
+                this.store.appendJournal(
+                    createJournalEntry("mailbox_delivery_quarantined", recordedAtMs, job.mailboxKey, {
+                        deliveryId: delivery.id,
+                        error: formatError(error),
+                    }),
+                )
+            }
+            await deleteInboundAttachmentFiles(finalized.cleanupEntries, this.logger)
+            if (finalized.status === "quarantined") {
+                this.logger.log("error", `quarantined mailbox delivery ${delivery.id}: ${formatError(error)}`)
+            } else {
+                this.logger.log("warn", `retrying mailbox delivery ${delivery.id}: ${formatError(error)}`)
+            }
+        }
+    }
+
+    private startExecutionLeaseHeartbeat(jobId: number): () => void {
+        const timer = setInterval(() => {
+            const nowMs = Date.now()
+            this.store.renewMailboxJobLease(jobId, nowMs + EXECUTION_LEASE_MS, nowMs)
+        }, EXECUTION_LEASE_HEARTBEAT_MS)
+
+        return () => {
+            clearInterval(timer)
         }
     }
 }
 
-type GatewayExecutorLike = Pick<GatewayExecutor, "executeMailboxEntries" | "prepareInboundMessage">
+type GatewayExecutorLike = Pick<GatewayExecutor, "executeMailboxJob" | "prepareInboundMessage">
+type GatewayTransportLike = Pick<GatewayTransportHost, "sendMessage" | "deliverMessage">
 type GatewayInteractionRuntimeLike = Pick<GatewayInteractionRuntime, "tryHandleInboundMessage">
 
 function createJournalEntry(

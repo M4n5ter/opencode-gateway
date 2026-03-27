@@ -42,7 +42,7 @@ export function parseTelegramConfig(value: unknown, env: EnvSource): TelegramCon
     const pollTimeoutSeconds = readPollTimeoutSeconds(table.poll_timeout_seconds)
     const allowedChats = readIdentifierList(table.allowed_chats, "channels.telegram.allowed_chats")
     const allowedUsers = readIdentifierList(table.allowed_users, "channels.telegram.allowed_users")
-    const botToken = configuredBotToken ?? (botTokenEnv === null ? null : env[botTokenEnv]?.trim() ?? null)
+    const botToken = configuredBotToken ?? (botTokenEnv === null ? null : (env[botTokenEnv]?.trim() ?? null))
 
     if (!botToken) {
         throw new Error(`Telegram is enabled but ${botTokenEnv} is not set`)

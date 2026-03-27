@@ -255,10 +255,20 @@ function createExecutorStub(appendedContexts: AppendContextToConversationInput[]
         },
         async dispatchScheduledJob(input: DispatchScheduledJobInput) {
             return {
-                conversationKey: input.conversationKey,
-                responseText: "assistant reply",
-                delivered: input.replyTarget !== null,
-                recordedAtMs: 4_242n,
+                execution: {
+                    conversationKey: input.conversationKey,
+                    responseText: "assistant reply",
+                    finalText: "assistant reply",
+                    recordedAtMs: 4_242n,
+                },
+                delivery:
+                    input.replyTarget === null
+                        ? null
+                        : {
+                              attemptedTargets: [input.replyTarget],
+                              deliveredTargets: [input.replyTarget],
+                              failedTargets: [],
+                          },
             }
         },
         async appendContextToConversation(input: AppendContextToConversationInput) {

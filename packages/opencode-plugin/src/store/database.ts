@@ -20,6 +20,8 @@ type BetterSqlite3Module = {
     default: new (path: string) => BetterSqlite3DatabaseLike
 }
 
+type BetterSqlite3StatementParam = SqliteValue | Record<string, SqliteValue>
+
 type BetterSqlite3DatabaseLike = {
     exec(source: string): void
     prepare(source: string): BetterSqlite3StatementLike
@@ -28,9 +30,9 @@ type BetterSqlite3DatabaseLike = {
 }
 
 type BetterSqlite3StatementLike = {
-    get(...params: SqliteValue[]): unknown
-    all(...params: SqliteValue[]): unknown[]
-    run(...params: SqliteValue[]): {
+    get(...params: BetterSqlite3StatementParam[]): unknown
+    all(...params: BetterSqlite3StatementParam[]): unknown[]
+    run(...params: BetterSqlite3StatementParam[]): {
         changes: number
         lastInsertRowid: bigint | number
     }
@@ -76,12 +78,21 @@ async function openNodeSqliteDatabase(path: string): Promise<SqliteDatabaseLike>
         },
         query<Row, Params extends unknown[]>(source: string): SqliteQueryStatementLike<Row, Params> {
             const statement = db.prepare(source)
+            const usesNumberedParameters = hasNumberedParameters(source)
 
             return {
-                get: (...params) => statement.get(...toSqliteParams(params)) as Row | undefined,
-                all: (...params) => statement.all(...toSqliteParams(params)) as Row[],
+                get: (...params) =>
+                    (usesNumberedParameters
+                        ? statement.get(toNumberedSqliteParams(params))
+                        : statement.get(...toSqliteParams(params))) as Row | undefined,
+                all: (...params) =>
+                    (usesNumberedParameters
+                        ? statement.all(toNumberedSqliteParams(params))
+                        : statement.all(...toSqliteParams(params))) as Row[],
                 run: (...params) => {
-                    const result = statement.run(...toSqliteParams(params))
+                    const result = usesNumberedParameters
+                        ? statement.run(toNumberedSqliteParams(params))
+                        : statement.run(...toSqliteParams(params))
 
                     return {
                         changes: result.changes,
@@ -149,4 +160,13 @@ function toSqliteParams(params: unknown[]): SqliteValue[] {
 
         throw new Error(`unsupported SQLite parameter type: ${typeof param}`)
     })
+}
+
+function hasNumberedParameters(source: string): boolean {
+    return /\?[1-9][0-9]*/.test(source)
+}
+
+function toNumberedSqliteParams(params: unknown[]): Record<string, SqliteValue> {
+    const values = toSqliteParams(params)
+    return Object.fromEntries(values.map((value, index) => [String(index + 1), value]))
 }

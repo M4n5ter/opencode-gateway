@@ -502,6 +502,123 @@ test("GatewayTextDelivery falls back to oneshot when the final stream edit fails
     }
 })
 
+test("TelegramProgressiveSupport treats Telegram no-op stream edits as successful", async () => {
+    const db = createMemoryDatabase()
+
+    try {
+        migrateGatewayDatabase(db)
+        const store = new SqliteStore(db)
+        const logs: Array<{ level: string; message: string }> = []
+        const client = {
+            async editMessageText(
+                _chatId: string,
+                _messageId: number,
+                _text: string,
+                _options?: { parseMode?: string },
+            ): Promise<void> {
+                throw new Error(
+                    "Telegram editMessageText failed (400): Bad Request: message is not modified: specified new message content and reply markup are exactly the same as a current content and reply markup of the message",
+                )
+            },
+        }
+        const support = new TelegramProgressiveSupport(client, store, {
+            log(level, message) {
+                logs.push({ level, message })
+            },
+        })
+
+        await expect(
+            support.editStreamMessage(
+                {
+                    channel: "telegram",
+                    target: "42",
+                    topic: null,
+                },
+                5,
+                "hello",
+            ),
+        ).resolves.toBeUndefined()
+
+        expect(store.getStateValue("telegram.last_stream_error_message")).toBe("")
+        expect(store.getStateValue("telegram.last_stream_fallback_reason")).toBeNull()
+        expect(logs).toEqual([])
+    } finally {
+        db.close()
+    }
+})
+
+test("GatewayTextDelivery treats Telegram no-op final edits as successful delivery", async () => {
+    const db = createMemoryDatabase()
+
+    try {
+        migrateGatewayDatabase(db)
+        const store = new SqliteStore(db)
+        store.putStateValue("telegram.chat_type:42", "private", Date.now())
+
+        const calls = {
+            sends: [] as string[],
+            edits: 0,
+        }
+        const client = {
+            async getChat() {
+                throw new Error("unused")
+            },
+            async sendChatAction(): Promise<void> {},
+            async sendMessage(
+                _chatId: string,
+                text: string,
+                _topic?: string | null,
+                _options?: { parseMode?: string },
+            ): Promise<{ message_id: number }> {
+                calls.sends.push(text)
+                return {
+                    message_id: 5,
+                }
+            },
+            async editMessageText(): Promise<void> {
+                calls.edits += 1
+                throw new Error(
+                    "Telegram editMessageText failed (400): Bad Request: message is not modified: specified new message content and reply markup are exactly the same as a current content and reply markup of the message",
+                )
+            },
+        }
+
+        const delivery = new GatewayTextDelivery(
+            new GatewayTransportHost(client, store),
+            store,
+            new TelegramProgressiveSupport(client, store, createLogger()),
+            {
+                streamOpenDelayMs: 0,
+                streamEditIntervalMs: 10,
+                typingKeepaliveIntervalMs: 10,
+            },
+        )
+
+        const session = await delivery.open(
+            {
+                channel: "telegram",
+                target: "42",
+                topic: null,
+            },
+            "auto",
+        )
+
+        await session.preview({
+            processText: null,
+            reasoningText: null,
+            answerText: "hello",
+        })
+        await sleep(10)
+        await expect(session.finish("hello")).resolves.toBe(true)
+
+        expect(calls.sends).toEqual(["hello"])
+        expect(calls.edits).toBe(0)
+        expect(store.getStateValue("telegram.last_stream_fallback_reason")).toBeNull()
+    } finally {
+        db.close()
+    }
+})
+
 function createLogger() {
     return {
         log() {},

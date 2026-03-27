@@ -14,16 +14,55 @@ export type BindingCronJobSpec = {
     deliveryTopic: string | null
 }
 
-export type BindingRuntimeReport = {
+export type BindingExecutionReport = {
     conversationKey: string
     responseText: string
-    delivered: boolean
+    finalText: string | null
     recordedAtMs: bigint
 }
 
-export type BindingHostAck = {
-    errorMessage: string | null
+export type BindingDeliveryFailure = {
+    deliveryTarget: BindingDeliveryTarget
+    errorMessage: string
 }
+
+export type BindingDeliveryReport = {
+    attemptedTargets: BindingDeliveryTarget[]
+    deliveredTargets: BindingDeliveryTarget[]
+    failedTargets: BindingDeliveryFailure[]
+}
+
+export type BindingDispatchReport = {
+    execution: BindingExecutionReport
+    delivery: BindingDeliveryReport | null
+}
+
+export type BindingDeferredDeliveryStrategy =
+    | {
+          mode: "send"
+      }
+    | {
+          mode: "edit"
+          messageId: number
+      }
+
+export type BindingDeferredPreviewContext = {
+    processText: string | null
+    reasoningText: string | null
+}
+
+export type BindingHostAck =
+    | {
+          kind: "delivered"
+      }
+    | {
+          kind: "retryable_failure"
+          errorMessage: string
+      }
+    | {
+          kind: "permanent_edit_failure"
+          errorMessage: string
+      }
 
 export type BindingDeliveryTarget = {
     channel: string
@@ -67,6 +106,7 @@ export type BindingPreparedExecution = {
 export type BindingOutboundMessage = {
     deliveryTarget: BindingDeliveryTarget
     body: string
+    previewContext?: BindingDeferredPreviewContext | null
 }
 
 export type BindingTransportHost = {

@@ -88,7 +88,7 @@ test("ChannelSessionSwitcher switches the routed conversation key to a fresh ses
         })
         expect(createdTitles).toEqual(["Gateway telegram:42"])
         expect(store.getSessionBinding("shared:alpha")).toBe("ses_new")
-        expect(store.getDefaultSessionReplyTarget("ses_old")).toBeNull()
+        expect(store.getDefaultSessionReplyTarget("ses_old")).toEqual(target)
         expect(store.getDefaultSessionReplyTarget("ses_new")).toEqual(target)
         expect(store.getPendingInteractionForTarget(target)).toBeNull()
     } finally {

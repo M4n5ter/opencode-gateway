@@ -1,4 +1,4 @@
-import type { BindingDeliveryTarget, BindingInboundMessage, BindingLoggerHost } from "../binding"
+import type { BindingDeliveryTarget, BindingHostAck, BindingInboundMessage, BindingLoggerHost } from "../binding"
 import type { OpencodeRuntimeEvent } from "../opencode/events"
 import type { GatewaySessionContext } from "../session/context"
 import type { SqliteStore } from "../store/sqlite"
@@ -27,8 +27,22 @@ import {
 } from "./question"
 import type { GatewayInteractionRequest, GatewayPermissionReply, PendingInteractionRecord } from "./types"
 
+type SessionHierarchyRecord = {
+    id: string
+    parentID?: string
+}
+
 type InteractionClientLike = {
     permission: {
+        list(
+            input: {
+                directory?: string
+            },
+            options?: {
+                responseStyle?: "data"
+                throwOnError?: boolean
+            },
+        ): Promise<unknown>
         reply(
             input: {
                 requestID: string
@@ -42,6 +56,15 @@ type InteractionClientLike = {
         ): Promise<unknown>
     }
     question: {
+        list(
+            input: {
+                directory?: string
+            },
+            options?: {
+                responseStyle?: "data"
+                throwOnError?: boolean
+            },
+        ): Promise<unknown>
         reply(
             input: {
                 requestID: string
@@ -64,12 +87,22 @@ type InteractionClientLike = {
             },
         ): Promise<unknown>
     }
+    session: {
+        get(
+            input: {
+                sessionID: string
+                directory?: string
+            },
+            options?: {
+                responseStyle?: "data"
+                throwOnError?: boolean
+            },
+        ): Promise<unknown>
+    }
 }
 
 type QuestionTransportLike = {
-    sendMessage(input: { deliveryTarget: BindingDeliveryTarget; body: string }): Promise<{
-        errorMessage: string | null
-    }>
+    sendMessage(input: { deliveryTarget: BindingDeliveryTarget; body: string }): Promise<BindingHostAck>
 }
 
 type TelegramInteractiveRequest = {
@@ -98,6 +131,18 @@ export class GatewayInteractionRuntime {
         void this.processEvent(normalized).catch((error) => {
             this.logger.log("warn", `interaction bridge failed: ${formatError(error)}`)
         })
+    }
+
+    async reconcilePendingRequests(): Promise<void> {
+        const [questions, permissions] = await Promise.all([this.listPendingQuestions(), this.listPendingPermissions()])
+
+        for (const request of [...questions, ...permissions]) {
+            if (this.store.hasPendingInteraction(request.requestId)) {
+                continue
+            }
+
+            await this.handleInteractionAsked(request)
+        }
     }
 
     async tryHandleInboundMessage(message: BindingInboundMessage): Promise<boolean> {
@@ -145,7 +190,11 @@ export class GatewayInteractionRuntime {
     }
 
     private async handleInteractionAsked(request: GatewayInteractionRequest): Promise<void> {
-        const targets = this.sessions.listReplyTargets(request.sessionId)
+        if (this.store.hasPendingInteraction(request.requestId)) {
+            return
+        }
+
+        const targets = await this.resolveReplyTargets(request.sessionId)
         if (targets.length === 0) {
             this.logger.log(
                 "warn",
@@ -243,7 +292,7 @@ export class GatewayInteractionRuntime {
             deliveryTarget: target,
             body,
         })
-        if (ack.errorMessage !== null) {
+        if (ack.kind !== "delivered") {
             throw new Error(ack.errorMessage)
         }
     }
@@ -363,6 +412,116 @@ export class GatewayInteractionRuntime {
             },
         )
     }
+
+    private async resolveReplyTargets(sessionId: string): Promise<BindingDeliveryTarget[]> {
+        const directTargets = this.sessions.listReplyTargets(sessionId)
+        if (directTargets.length > 0) {
+            return directTargets
+        }
+
+        const visited = new Set<string>([sessionId])
+        let currentSessionId: string | null = sessionId
+
+        while (currentSessionId !== null) {
+            const parentSessionId = await this.readParentSessionId(currentSessionId)
+            if (parentSessionId === null || visited.has(parentSessionId)) {
+                return []
+            }
+
+            const inheritedTargets = this.sessions.listReplyTargets(parentSessionId)
+            if (inheritedTargets.length > 0) {
+                this.logger.log(
+                    "debug",
+                    `resolved interaction reply target via ancestor session ${parentSessionId} for ${sessionId}`,
+                )
+                return inheritedTargets
+            }
+
+            visited.add(parentSessionId)
+            currentSessionId = parentSessionId
+        }
+
+        return []
+    }
+
+    private async readParentSessionId(sessionId: string): Promise<string | null> {
+        try {
+            const session = unwrapData<SessionHierarchyRecord>(
+                await this.client.session.get(
+                    {
+                        sessionID: sessionId,
+                        directory: this.directory,
+                    },
+                    {
+                        responseStyle: "data",
+                        throwOnError: true,
+                    },
+                ),
+            )
+
+            return session.parentID ?? null
+        } catch (error) {
+            this.logger.log("warn", `failed to inspect OpenCode session ${sessionId}: ${formatError(error)}`)
+            return null
+        }
+    }
+
+    private async listPendingQuestions(): Promise<GatewayInteractionRequest[]> {
+        return unwrapData<QuestionListRecord[]>(
+            await this.client.question.list(
+                {
+                    directory: this.directory,
+                },
+                {
+                    responseStyle: "data",
+                    throwOnError: true,
+                },
+            ),
+        ).map((request) => ({
+            kind: "question",
+            requestId: request.id,
+            sessionId: request.sessionID,
+            questions: request.questions.map((question) => ({
+                header: question.header,
+                question: question.question,
+                options: question.options.map((option) => ({
+                    label: option.label,
+                    description: option.description,
+                })),
+                multiple: question.multiple === true,
+                custom: question.custom !== false,
+            })),
+        }))
+    }
+
+    private async listPendingPermissions(): Promise<GatewayInteractionRequest[]> {
+        return unwrapData<PermissionListRecord[]>(
+            await this.client.permission.list(
+                {
+                    directory: this.directory,
+                },
+                {
+                    responseStyle: "data",
+                    throwOnError: true,
+                },
+            ),
+        ).map((request) => ({
+            kind: "permission",
+            requestId: request.id,
+            sessionId: request.sessionID,
+            permission: request.permission,
+            patterns: [...request.patterns],
+            metadata: request.metadata,
+            always: [...request.always],
+            tool:
+                request.tool === undefined
+                    ? null
+                    : {
+                          messageId: request.tool.messageID,
+                          callId: request.tool.callID,
+                      },
+        }))
+    }
 }
 
 function formatPlainTextInteraction(request: GatewayInteractionRequest): string {
@@ -372,4 +531,40 @@ function formatPlainTextInteraction(request: GatewayInteractionRequest): string 
         case "permission":
             return formatPlainTextPermission(request)
     }
+}
+
+type QuestionListRecord = {
+    id: string
+    sessionID: string
+    questions: Array<{
+        header: string
+        question: string
+        options: Array<{
+            label: string
+            description: string
+        }>
+        multiple?: boolean
+        custom?: boolean
+    }>
+}
+
+type PermissionListRecord = {
+    id: string
+    sessionID: string
+    permission: string
+    patterns: string[]
+    metadata: Record<string, unknown>
+    always: string[]
+    tool?: {
+        messageID: string
+        callID: string
+    }
+}
+
+function unwrapData<T>(value: unknown): T {
+    if (typeof value === "object" && value !== null && "data" in value) {
+        return value.data as T
+    }
+
+    return value as T
 }

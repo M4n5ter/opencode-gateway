@@ -203,6 +203,122 @@ test("sqlite store persists mailbox entry attachments alongside text", () => {
     }
 })
 
+test("sqlite store keeps an executing mailbox job leased after renewal", () => {
+    const db = createMemoryDatabase()
+
+    try {
+        migrateGatewayDatabase(db)
+        const store = new SqliteStore(db)
+
+        store.enqueueMailboxEntry({
+            mailboxKey: "telegram:42",
+            sourceKind: "telegram_update",
+            externalId: "300",
+            sender: "telegram:7",
+            text: "hello",
+            attachments: [],
+            replyChannel: "telegram",
+            replyTarget: "42",
+            replyTopic: null,
+            recordedAtMs: 100,
+        })
+        store.materializeMailboxJobs(100, false, 0)
+
+        const claimed = store.claimNextMailboxJob(100, 200)
+        expect(claimed?.id).toBe(1)
+        expect(store.renewMailboxJobLease(1, 500, 150)).toBe(true)
+        expect(store.requeueExpiredMailboxLeases(250)).toEqual({
+            jobs: 0,
+            deliveries: 0,
+        })
+        expect(store.getMailboxJob(1)?.status).toBe("executing")
+        expect(store.getMailboxJob(1)?.leasedUntilMs).toBe(500)
+    } finally {
+        db.close()
+    }
+})
+
+test("sqlite store downgrades edit-mode mailbox deliveries back to send without consuming an attempt", () => {
+    const db = createMemoryDatabase()
+
+    try {
+        migrateGatewayDatabase(db)
+        const store = new SqliteStore(db)
+
+        store.enqueueMailboxEntry({
+            mailboxKey: "telegram:42",
+            sourceKind: "telegram_update",
+            externalId: "301",
+            sender: "telegram:7",
+            text: "hello",
+            attachments: [],
+            replyChannel: "telegram",
+            replyTarget: "42",
+            replyTopic: null,
+            recordedAtMs: 100,
+        })
+        store.materializeMailboxJobs(100, false, 0)
+        const job = store.claimNextMailboxJob(100, 200)
+        expect(job?.id).toBe(1)
+
+        store.completeMailboxJobExecution({
+            jobId: 1,
+            sessionId: "ses_1",
+            responseText: "ok",
+            finalText: "hello back",
+            deliveries: [
+                {
+                    deliveryTarget: {
+                        channel: "telegram",
+                        target: "42",
+                        topic: null,
+                    },
+                    strategy: {
+                        mode: "edit",
+                        messageId: 77,
+                    },
+                    previewContext: null,
+                },
+            ],
+            recordedAtMs: 150,
+            deliveryRetryAtMs: 150,
+        })
+
+        const delivery = store.claimNextMailboxDelivery(150, 250)
+        expect(delivery?.strategy).toEqual({
+            mode: "edit",
+            messageId: 77,
+        })
+        expect(delivery?.attemptCount).toBe(1)
+
+        store.downgradeMailboxDeliveryToSend(1, "Telegram editMessageText failed (400): message to edit not found", 160)
+
+        expect(store.getMailboxDelivery(1)).toEqual({
+            id: 1,
+            jobId: 1,
+            deliveryTarget: {
+                channel: "telegram",
+                target: "42",
+                topic: null,
+            },
+            strategy: {
+                mode: "send",
+            },
+            previewContext: null,
+            status: "pending",
+            attemptCount: 0,
+            leasedUntilMs: null,
+            nextAttemptAtMs: 160,
+            lastError: "Telegram editMessageText failed (400): message to edit not found",
+            createdAtMs: 150,
+            updatedAtMs: 160,
+            deliveredAtMs: null,
+        })
+    } finally {
+        db.close()
+    }
+})
+
 test("sqlite store persists session reply targets and pending interactions", () => {
     const db = createMemoryDatabase()
 

@@ -1,4 +1,4 @@
-import type { BindingDeliveryTarget, BindingLoggerHost, BindingRuntimeReport, GatewayContract } from "../binding"
+import type { BindingDeliveryTarget, BindingDispatchReport, BindingLoggerHost, GatewayContract } from "../binding"
 import type { CronConfig } from "../config/cron"
 import type { GatewayExecutorLike } from "../runtime/executor"
 import type { CronJobRecord, CronRunRecord, PersistCronJobInput, SqliteStore } from "../store/sqlite"
@@ -134,7 +134,7 @@ export class GatewayCronRuntime {
         return true
     }
 
-    async runNow(id: string): Promise<BindingRuntimeReport> {
+    async runNow(id: string): Promise<BindingDispatchReport> {
         const job = this.requireJob(normalizeId(id))
         if (!job.enabled) {
             throw new Error(`schedule job is not active: ${job.id}`)
@@ -219,7 +219,7 @@ export class GatewayCronRuntime {
         job: CronJobRecord,
         scheduledForMs: number,
         nextRunBaseMs: number | null,
-    ): Promise<BindingRuntimeReport> {
+    ): Promise<BindingDispatchReport> {
         const startedAtMs = Date.now()
         if (job.kind === "cron" && nextRunBaseMs !== null) {
             const nextRunAtMs = computeNextRunAt(
@@ -243,10 +243,16 @@ export class GatewayCronRuntime {
                 prompt: job.prompt,
                 replyTarget: toReplyTarget(job),
             })
-            this.store.finishCronRun(runId, "succeeded", Date.now(), report.responseText, null)
+            this.store.finishCronRun(runId, "succeeded", Date.now(), report.execution.responseText, null)
+            if (report.delivery !== null && report.delivery.failedTargets.length > 0) {
+                this.logger.log(
+                    "warn",
+                    `schedule job ${job.id} delivery finished with ${report.delivery.failedTargets.length} failed target(s)`,
+                )
+            }
             await this.appendScheduleResultToTarget(job, scheduledForMs, {
                 kind: "success",
-                responseText: report.responseText,
+                responseText: report.execution.responseText,
             })
             return report
         } catch (error) {

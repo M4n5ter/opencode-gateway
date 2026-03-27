@@ -243,6 +243,7 @@ impl OpencodeCommand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OpencodeCommandErrorCode {
     MissingSession,
+    Timeout,
     Unknown,
 }
 

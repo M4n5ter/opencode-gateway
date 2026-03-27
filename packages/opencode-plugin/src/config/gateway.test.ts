@@ -119,6 +119,12 @@ test("loadGatewayConfig defaults mailbox batching to off", async () => {
             batchWindowMs: 1_500,
             routes: [],
         })
+        expect(config.execution).toEqual({
+            sessionWaitTimeoutMs: 30 * 60_000,
+            promptProgressTimeoutMs: 30 * 60_000,
+            hardTimeoutMs: null,
+            abortSettleTimeoutMs: 5_000,
+        })
     } finally {
         await rm(root, { recursive: true, force: true })
     }
@@ -157,6 +163,54 @@ test("loadGatewayConfig parses mailbox batching settings", async () => {
             batchWindowMs: 2_500,
             routes: [],
         })
+    } finally {
+        await rm(root, { recursive: true, force: true })
+    }
+})
+
+test("loadGatewayConfig parses execution timeout settings", async () => {
+    const root = await mkdtemp(join(tmpdir(), "opencode-gateway-config-"))
+    const configPath = join(root, "config.toml")
+
+    try {
+        await writeFile(
+            configPath,
+            [
+                "[gateway.execution]",
+                "session_wait_timeout_ms = 120000",
+                "prompt_progress_timeout_ms = 300000",
+                "hard_timeout_ms = 7200000",
+                "abort_settle_timeout_ms = 15000",
+            ].join("\n"),
+        )
+
+        const config = await loadGatewayConfig({
+            OPENCODE_GATEWAY_CONFIG: configPath,
+        })
+
+        expect(config.execution).toEqual({
+            sessionWaitTimeoutMs: 120_000,
+            promptProgressTimeoutMs: 300_000,
+            hardTimeoutMs: 7_200_000,
+            abortSettleTimeoutMs: 15_000,
+        })
+    } finally {
+        await rm(root, { recursive: true, force: true })
+    }
+})
+
+test("loadGatewayConfig rejects a too-small hard timeout", async () => {
+    const root = await mkdtemp(join(tmpdir(), "opencode-gateway-config-"))
+    const configPath = join(root, "config.toml")
+
+    try {
+        await writeFile(configPath, ["[gateway.execution]", "hard_timeout_ms = 5000"].join("\n"))
+
+        await expect(
+            loadGatewayConfig({
+                OPENCODE_GATEWAY_CONFIG: configPath,
+            }),
+        ).rejects.toThrow("gateway.execution.hard_timeout_ms must be at least 60000")
     } finally {
         await rm(root, { recursive: true, force: true })
     }

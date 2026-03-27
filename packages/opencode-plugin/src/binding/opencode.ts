@@ -41,6 +41,7 @@ export type BindingOpencodeCommand =
     | {
           kind: "waitUntilIdle"
           sessionId: string
+          timeoutMs?: number
       }
     | {
           kind: "appendPrompt"
@@ -58,6 +59,9 @@ export type BindingOpencodeCommand =
           kind: "awaitPromptResponse"
           sessionId: string
           messageId: string
+          progressTimeoutMs?: number
+          hardTimeoutMs?: number | null
+          settleMs?: number
       }
     | {
           kind: "readMessage"
@@ -112,7 +116,7 @@ export type BindingOpencodeCommandResult =
           kind: "error"
           commandKind: string
           sessionId: string | null
-          code: "missingSession" | "unknown"
+          code: "missingSession" | "timeout" | "unknown"
           message: string
       }
 

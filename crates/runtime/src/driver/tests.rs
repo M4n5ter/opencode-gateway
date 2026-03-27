@@ -5,7 +5,7 @@ use opencode_gateway_core::{
 
 use crate::{
     OpencodeCommand, OpencodeCommandErrorCode, OpencodeCommandPart, OpencodeCommandResult,
-    OpencodeExecutionDriver, OpencodeExecutionInput, OpencodeMessagePart, OpencodePrompt,
+    OpencodeDriverStep, OpencodeExecutionDriver, OpencodeExecutionInput, OpencodeMessagePart, OpencodePrompt,
     OpencodePromptPart,
 };
 
@@ -95,6 +95,29 @@ fn missing_session_error_retries_once_from_persisted_binding() {
         command(OpencodeCommand::CreateSession {
             title: "Gateway telegram:42".to_owned(),
         })
+    );
+}
+
+#[test]
+fn timeout_error_fails_driver_without_retrying() {
+    let mut driver = create_driver(Some("ses_stale"), vec![create_text_prompt("mailbox:1", "hello")]);
+
+    let _ = driver.start();
+    let _ = driver.resume(OpencodeCommandResult::LookupSession {
+        session_id: "ses_stale".to_owned(),
+        found: true,
+    });
+
+    assert_eq!(
+        driver.resume(OpencodeCommandResult::Error(crate::OpencodeCommandError {
+            command_kind: "waitUntilIdle".to_owned(),
+            session_id: Some("ses_stale".to_owned()),
+            code: OpencodeCommandErrorCode::Timeout,
+            message: "session ses_stale did not become idle within 1000ms".to_owned(),
+        })),
+        OpencodeDriverStep::Failed {
+            message: "session ses_stale did not become idle within 1000ms".to_owned(),
+        }
     );
 }
 

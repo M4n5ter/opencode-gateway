@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises"
 import { dirname } from "node:path"
 
-import type { BindingDeliveryTarget } from "../binding"
+import type { BindingDeferredDeliveryStrategy, BindingDeferredPreviewContext, BindingDeliveryTarget } from "../binding"
 import type {
     GatewayInteractionRequest,
     GatewayPermissionRequest,
@@ -12,7 +12,17 @@ import type {
 import type { SqliteDatabaseLike } from "./database"
 import { migrateGatewayDatabase } from "./migrations"
 
-export type RuntimeJournalKind = "inbound_message" | "cron_dispatch" | "delivery" | "mailbox_enqueue" | "mailbox_flush"
+export type RuntimeJournalKind =
+    | "inbound_message"
+    | "cron_dispatch"
+    | "delivery"
+    | "mailbox_enqueue"
+    | "mailbox_flush"
+    | "mailbox_job_created"
+    | "mailbox_job_quarantined"
+    | "mailbox_delivery_queued"
+    | "mailbox_delivery_quarantined"
+    | "execution_timeout"
 export type CronRunStatus = "running" | "succeeded" | "failed" | "abandoned"
 export type ScheduleJobKind = "cron" | "once"
 
@@ -69,6 +79,64 @@ export type MailboxEntryAttachmentRecord = {
     mimeType: string
     fileName: string | null
     localPath: string
+}
+
+export type MailboxJobStatus = "pending" | "executing" | "ready_to_deliver" | "completed" | "quarantined"
+export type MailboxDeliveryStatus = "pending" | "delivering" | "delivered" | "quarantined"
+
+export type MailboxJobRecord = {
+    id: number
+    mailboxKey: string
+    status: MailboxJobStatus
+    attemptCount: number
+    leasedUntilMs: number | null
+    nextAttemptAtMs: number
+    lastError: string | null
+    responseText: string | null
+    finalText: string | null
+    sessionId: string | null
+    createdAtMs: number
+    updatedAtMs: number
+    startedAtMs: number | null
+    finishedAtMs: number | null
+    entries: MailboxEntryRecord[]
+}
+
+export type MailboxDeliveryRecord = {
+    id: number
+    jobId: number
+    deliveryTarget: BindingDeliveryTarget
+    strategy: BindingDeferredDeliveryStrategy
+    previewContext: BindingDeferredPreviewContext | null
+    status: MailboxDeliveryStatus
+    attemptCount: number
+    leasedUntilMs: number | null
+    nextAttemptAtMs: number
+    lastError: string | null
+    createdAtMs: number
+    updatedAtMs: number
+    deliveredAtMs: number | null
+}
+
+export type MailboxPreparedDelivery = {
+    deliveryTarget: BindingDeliveryTarget
+    strategy: BindingDeferredDeliveryStrategy
+    previewContext: BindingDeferredPreviewContext | null
+}
+
+export type CompleteMailboxJobExecutionInput = {
+    jobId: number
+    sessionId: string
+    responseText: string
+    finalText: string | null
+    deliveries: MailboxPreparedDelivery[]
+    recordedAtMs: number
+    deliveryRetryAtMs: number
+}
+
+export type MailboxJobFinalizeResult = {
+    status: Extract<MailboxJobStatus, "ready_to_deliver" | "completed" | "quarantined">
+    cleanupEntries: MailboxEntryRecord[]
 }
 
 export type PersistCronJobInput = {
@@ -351,6 +419,21 @@ export class SqliteStore {
         this.db.query("DELETE FROM pending_interactions WHERE request_id = ?1;").run(requestId)
     }
 
+    hasPendingInteraction(requestId: string): boolean {
+        const row = this.db
+            .query<{ present: number }, [string]>(
+                `
+                    SELECT 1 AS present
+                    FROM pending_interactions
+                    WHERE request_id = ?1
+                    LIMIT 1;
+                `,
+            )
+            .get(requestId)
+
+        return row?.present === 1
+    }
+
     deletePendingInteractionsForSession(sessionId: string): void {
         this.db.query("DELETE FROM pending_interactions WHERE session_id = ?1;").run(sessionId)
     }
@@ -499,14 +582,130 @@ export class SqliteStore {
         const rows = this.db
             .query<{ mailbox_key: string }, []>(
                 `
-                    SELECT DISTINCT mailbox_key
-                    FROM mailbox_entries
+                    SELECT DISTINCT entry.mailbox_key
+                    FROM mailbox_entries AS entry
+                    LEFT JOIN mailbox_job_entries AS job_entry
+                      ON job_entry.mailbox_entry_id = entry.id
+                    WHERE job_entry.mailbox_entry_id IS NULL
                     ORDER BY mailbox_key ASC;
                 `,
             )
             .all()
 
         return rows.map((row) => row.mailbox_key)
+    }
+
+    materializeMailboxJobs(nowMs: number, batchReplies: boolean, batchWindowMs: number): number {
+        assertSafeInteger(nowMs, "mailbox job materialize nowMs")
+        assertSafeInteger(batchWindowMs, "mailbox job batchWindowMs")
+
+        const listMailboxKeys = this.db.query<{ mailbox_key: string }, []>(
+            `
+                SELECT DISTINCT entry.mailbox_key
+                FROM mailbox_entries AS entry
+                LEFT JOIN mailbox_job_entries AS job_entry
+                  ON job_entry.mailbox_entry_id = entry.id
+                WHERE job_entry.mailbox_entry_id IS NULL
+                ORDER BY entry.mailbox_key ASC;
+            `,
+        )
+        const listUnassignedEntries = this.db.query<MailboxEntryRow, [string]>(
+            `
+                SELECT
+                    entry.id,
+                    entry.mailbox_key,
+                    entry.source_kind,
+                    entry.external_id,
+                    entry.sender,
+                    entry.body,
+                    entry.reply_channel,
+                    entry.reply_target,
+                    entry.reply_topic,
+                    entry.created_at_ms
+                FROM mailbox_entries AS entry
+                LEFT JOIN mailbox_job_entries AS job_entry
+                  ON job_entry.mailbox_entry_id = entry.id
+                WHERE entry.mailbox_key = ?1
+                  AND job_entry.mailbox_entry_id IS NULL
+                ORDER BY entry.id ASC;
+            `,
+        )
+        const insertJob = this.db.query(
+            `
+                INSERT INTO mailbox_jobs (
+                    mailbox_key,
+                    status,
+                    attempt_count,
+                    leased_until_ms,
+                    next_attempt_at_ms,
+                    last_error,
+                    response_text,
+                    final_text,
+                    session_id,
+                    created_at_ms,
+                    updated_at_ms,
+                    started_at_ms,
+                    finished_at_ms
+                )
+                VALUES (?1, 'pending', 0, NULL, ?2, NULL, NULL, NULL, NULL, ?3, ?4, NULL, NULL);
+            `,
+        )
+        const insertJobEntry = this.db.query(
+            `
+                INSERT INTO mailbox_job_entries (job_id, mailbox_entry_id, ordinal)
+                VALUES (?1, ?2, ?3);
+            `,
+        )
+        const insertJournal = this.db.query(
+            `
+                INSERT INTO runtime_journal (kind, recorded_at_ms, conversation_key, payload_json)
+                VALUES (?1, ?2, ?3, ?4);
+            `,
+        )
+
+        return this.db.transaction((clockMs: number) => {
+            let createdJobs = 0
+
+            for (const row of listMailboxKeys.all()) {
+                const entries = listUnassignedEntries.all(row.mailbox_key)
+                if (entries.length === 0) {
+                    continue
+                }
+
+                if (batchReplies && entries[0].created_at_ms + batchWindowMs > clockMs) {
+                    continue
+                }
+
+                const result = insertJob.run(
+                    row.mailbox_key,
+                    clockMs,
+                    batchReplies ? entries[0].created_at_ms : clockMs,
+                    clockMs,
+                )
+                const jobId = Number(result.lastInsertRowid)
+                const selectedEntryIds: number[] = []
+                for (const [ordinal, entry] of entries.entries()) {
+                    insertJobEntry.run(jobId, entry.id, ordinal)
+                    selectedEntryIds.push(entry.id)
+                    if (!batchReplies) {
+                        break
+                    }
+                }
+                insertJournal.run(
+                    "mailbox_job_created",
+                    clockMs,
+                    row.mailbox_key,
+                    JSON.stringify({
+                        jobId,
+                        entryIds: selectedEntryIds,
+                    }),
+                )
+
+                createdJobs += 1
+            }
+
+            return createdJobs
+        })(nowMs)
     }
 
     listMailboxEntries(mailboxKey: string): MailboxEntryRecord[] {
@@ -537,6 +736,565 @@ export class SqliteStore {
         )
 
         return rows.map((row) => mapMailboxEntryRow(row, attachments.get(row.id) ?? []))
+    }
+
+    listMailboxJobs(): MailboxJobRecord[] {
+        const rows = this.db
+            .query<MailboxJobRow, []>(
+                `
+                    SELECT
+                        id,
+                        mailbox_key,
+                        status,
+                        attempt_count,
+                        leased_until_ms,
+                        next_attempt_at_ms,
+                        last_error,
+                        response_text,
+                        final_text,
+                        session_id,
+                        created_at_ms,
+                        updated_at_ms,
+                        started_at_ms,
+                        finished_at_ms
+                    FROM mailbox_jobs
+                    ORDER BY created_at_ms ASC, id ASC;
+                `,
+            )
+            .all()
+
+        return mapMailboxJobs(this.db, rows)
+    }
+
+    listMailboxDeliveries(jobId: number): MailboxDeliveryRecord[] {
+        assertSafeInteger(jobId, "mailbox delivery jobId")
+        const rows = this.db
+            .query<MailboxDeliveryRow, [number]>(
+                `
+                    SELECT
+                        id,
+                        job_id,
+                        delivery_channel,
+                        delivery_target,
+                        delivery_topic,
+                        delivery_mode,
+                        stream_message_id,
+                        preview_process_text,
+                        preview_reasoning_text,
+                        status,
+                        attempt_count,
+                        leased_until_ms,
+                        next_attempt_at_ms,
+                        last_error,
+                        created_at_ms,
+                        updated_at_ms,
+                        delivered_at_ms
+                    FROM mailbox_deliveries
+                    WHERE job_id = ?1
+                    ORDER BY id ASC;
+                `,
+            )
+            .all(jobId)
+
+        return rows.map(mapMailboxDeliveryRow)
+    }
+
+    claimNextMailboxJob(nowMs: number, leaseUntilMs: number): MailboxJobRecord | null {
+        assertSafeInteger(nowMs, "mailbox job claim nowMs")
+        assertSafeInteger(leaseUntilMs, "mailbox job leaseUntilMs")
+
+        const selectCandidate = this.db.query<{ id: number }, [number]>(
+            `
+                SELECT id
+                FROM mailbox_jobs
+                WHERE status = 'pending'
+                  AND next_attempt_at_ms <= ?1
+                ORDER BY created_at_ms ASC, id ASC
+                LIMIT 1;
+            `,
+        )
+        const claimJob = this.db.query(
+            `
+                UPDATE mailbox_jobs
+                SET
+                    status = 'executing',
+                    attempt_count = attempt_count + 1,
+                    leased_until_ms = ?2,
+                    updated_at_ms = ?3,
+                    started_at_ms = COALESCE(started_at_ms, ?3)
+                WHERE id = ?1
+                  AND status = 'pending'
+                  AND next_attempt_at_ms <= ?3;
+            `,
+        )
+
+        return this.db.transaction((clockMs: number, deadlineMs: number) => {
+            const candidate = selectCandidate.get(clockMs)
+            if (candidate === null || candidate === undefined) {
+                return null
+            }
+
+            const result = claimJob.run(candidate.id, deadlineMs, clockMs)
+            if (result.changes === 0) {
+                return null
+            }
+
+            return this.getMailboxJob(candidate.id)
+        })(nowMs, leaseUntilMs)
+    }
+
+    renewMailboxJobLease(jobId: number, leaseUntilMs: number, recordedAtMs: number): boolean {
+        assertSafeInteger(jobId, "mailbox job id")
+        assertSafeInteger(leaseUntilMs, "mailbox job leaseUntilMs")
+        assertSafeInteger(recordedAtMs, "mailbox job recordedAtMs")
+
+        const result = this.db
+            .query(
+                `
+                    UPDATE mailbox_jobs
+                    SET leased_until_ms = ?2,
+                        updated_at_ms = ?3
+                    WHERE id = ?1
+                      AND status = 'executing';
+                `,
+            )
+            .run(jobId, leaseUntilMs, recordedAtMs)
+
+        return result.changes > 0
+    }
+
+    getMailboxJob(jobId: number): MailboxJobRecord | null {
+        assertSafeInteger(jobId, "mailbox job id")
+        const row = this.db
+            .query<MailboxJobRow, [number]>(
+                `
+                    SELECT
+                        id,
+                        mailbox_key,
+                        status,
+                        attempt_count,
+                        leased_until_ms,
+                        next_attempt_at_ms,
+                        last_error,
+                        response_text,
+                        final_text,
+                        session_id,
+                        created_at_ms,
+                        updated_at_ms,
+                        started_at_ms,
+                        finished_at_ms
+                    FROM mailbox_jobs
+                    WHERE id = ?1;
+                `,
+            )
+            .get(jobId)
+
+        if (row === null || row === undefined) {
+            return null
+        }
+
+        return mapMailboxJobs(this.db, [row])[0] ?? null
+    }
+
+    completeMailboxJobExecution(input: CompleteMailboxJobExecutionInput): MailboxJobFinalizeResult {
+        assertSafeInteger(input.jobId, "mailbox job id")
+        assertSafeInteger(input.recordedAtMs, "mailbox job recordedAtMs")
+        assertSafeInteger(input.deliveryRetryAtMs, "mailbox deliveryRetryAtMs")
+
+        const updateJob = this.db.query(
+            `
+                UPDATE mailbox_jobs
+                SET
+                    status = ?2,
+                    leased_until_ms = NULL,
+                    last_error = NULL,
+                    response_text = ?3,
+                    final_text = ?4,
+                    session_id = ?5,
+                    updated_at_ms = ?6,
+                    finished_at_ms = ?7
+                WHERE id = ?1;
+            `,
+        )
+        const insertDelivery = this.db.query(
+            `
+                INSERT INTO mailbox_deliveries (
+                    job_id,
+                    delivery_channel,
+                    delivery_target,
+                    delivery_topic,
+                    delivery_mode,
+                    stream_message_id,
+                    preview_process_text,
+                    preview_reasoning_text,
+                    status,
+                    attempt_count,
+                    leased_until_ms,
+                    next_attempt_at_ms,
+                    last_error,
+                    created_at_ms,
+                    updated_at_ms,
+                    delivered_at_ms
+                )
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL, ?11, ?12, ?13, ?14, ?15);
+            `,
+        )
+
+        return this.db.transaction((payload: CompleteMailboxJobExecutionInput) => {
+            const finalText = normalizeStoredMailboxText(payload.finalText ?? "")
+            const deliveries = dedupePreparedDeliveries(payload.deliveries)
+
+            if (finalText === null || deliveries.length === 0) {
+                updateJob.run(
+                    payload.jobId,
+                    "completed",
+                    payload.responseText,
+                    finalText,
+                    payload.sessionId,
+                    payload.recordedAtMs,
+                    payload.recordedAtMs,
+                )
+                return {
+                    status: "completed",
+                    cleanupEntries: deleteMailboxJobEntries(this.db, payload.jobId),
+                } satisfies MailboxJobFinalizeResult
+            }
+
+            for (const delivery of deliveries) {
+                insertDelivery.run(
+                    payload.jobId,
+                    delivery.deliveryTarget.channel,
+                    delivery.deliveryTarget.target,
+                    normalizeKeyField(delivery.deliveryTarget.topic),
+                    delivery.strategy.mode,
+                    delivery.strategy.mode === "edit" ? delivery.strategy.messageId : null,
+                    normalizeStoredMailboxText(delivery.previewContext?.processText ?? ""),
+                    normalizeStoredMailboxText(delivery.previewContext?.reasoningText ?? ""),
+                    "pending",
+                    0,
+                    payload.deliveryRetryAtMs,
+                    null,
+                    payload.recordedAtMs,
+                    payload.recordedAtMs,
+                    null,
+                )
+            }
+
+            updateJob.run(
+                payload.jobId,
+                "ready_to_deliver",
+                payload.responseText,
+                finalText,
+                payload.sessionId,
+                payload.recordedAtMs,
+                null,
+            )
+            return {
+                status: "ready_to_deliver",
+                cleanupEntries: [],
+            } satisfies MailboxJobFinalizeResult
+        })(input)
+    }
+
+    recordMailboxJobFailure(
+        jobId: number,
+        errorMessage: string,
+        recordedAtMs: number,
+        nextAttemptAtMs: number,
+        maxAttempts: number,
+    ): boolean {
+        assertSafeInteger(jobId, "mailbox job id")
+        assertSafeInteger(recordedAtMs, "mailbox job recordedAtMs")
+        assertSafeInteger(nextAttemptAtMs, "mailbox job nextAttemptAtMs")
+        assertSafeInteger(maxAttempts, "mailbox job maxAttempts")
+
+        return this.db.transaction(
+            (targetJobId: number, message: string, nowMs: number, retryAtMs: number, retryLimit: number) => {
+                const row = this.db
+                    .query<{ attempt_count: number }, [number]>(
+                        "SELECT attempt_count FROM mailbox_jobs WHERE id = ?1 LIMIT 1;",
+                    )
+                    .get(targetJobId)
+                if (row === null || row === undefined) {
+                    throw new Error(`unknown mailbox job: ${targetJobId}`)
+                }
+
+                const quarantined = row.attempt_count >= retryLimit
+                this.db
+                    .query(
+                        `
+                            UPDATE mailbox_jobs
+                            SET
+                                status = ?2,
+                                leased_until_ms = NULL,
+                                next_attempt_at_ms = ?3,
+                                last_error = ?4,
+                                updated_at_ms = ?5,
+                                finished_at_ms = ?6
+                            WHERE id = ?1;
+                        `,
+                    )
+                    .run(
+                        targetJobId,
+                        quarantined ? "quarantined" : "pending",
+                        quarantined ? nowMs : retryAtMs,
+                        message,
+                        nowMs,
+                        quarantined ? nowMs : null,
+                    )
+
+                return quarantined
+            },
+        )(jobId, errorMessage, recordedAtMs, nextAttemptAtMs, maxAttempts)
+    }
+
+    claimNextMailboxDelivery(nowMs: number, leaseUntilMs: number): MailboxDeliveryRecord | null {
+        assertSafeInteger(nowMs, "mailbox delivery claim nowMs")
+        assertSafeInteger(leaseUntilMs, "mailbox delivery leaseUntilMs")
+
+        const selectCandidate = this.db.query<{ id: number }, [number]>(
+            `
+                SELECT id
+                FROM mailbox_deliveries
+                WHERE status = 'pending'
+                  AND next_attempt_at_ms <= ?1
+                ORDER BY created_at_ms ASC, id ASC
+                LIMIT 1;
+            `,
+        )
+        const claimDelivery = this.db.query(
+            `
+                UPDATE mailbox_deliveries
+                SET
+                    status = 'delivering',
+                    attempt_count = attempt_count + 1,
+                    leased_until_ms = ?2,
+                    updated_at_ms = ?3
+                WHERE id = ?1
+                  AND status = 'pending'
+                  AND next_attempt_at_ms <= ?3;
+            `,
+        )
+
+        return this.db.transaction((clockMs: number, deadlineMs: number) => {
+            const candidate = selectCandidate.get(clockMs)
+            if (candidate === null || candidate === undefined) {
+                return null
+            }
+
+            const result = claimDelivery.run(candidate.id, deadlineMs, clockMs)
+            if (result.changes === 0) {
+                return null
+            }
+
+            return this.getMailboxDelivery(candidate.id)
+        })(nowMs, leaseUntilMs)
+    }
+
+    getMailboxDelivery(deliveryId: number): MailboxDeliveryRecord | null {
+        assertSafeInteger(deliveryId, "mailbox delivery id")
+        const row = this.db
+            .query<MailboxDeliveryRow, [number]>(
+                `
+                    SELECT
+                        id,
+                        job_id,
+                        delivery_channel,
+                        delivery_target,
+                        delivery_topic,
+                        delivery_mode,
+                        stream_message_id,
+                        preview_process_text,
+                        preview_reasoning_text,
+                        status,
+                        attempt_count,
+                        leased_until_ms,
+                        next_attempt_at_ms,
+                        last_error,
+                        created_at_ms,
+                        updated_at_ms,
+                        delivered_at_ms
+                    FROM mailbox_deliveries
+                    WHERE id = ?1;
+                `,
+            )
+            .get(deliveryId)
+
+        return row ? mapMailboxDeliveryRow(row) : null
+    }
+
+    private requireMailboxDelivery(deliveryId: number): MailboxDeliveryRecord {
+        const delivery = this.getMailboxDelivery(deliveryId)
+        if (delivery === null) {
+            throw new Error(`unknown mailbox delivery: ${deliveryId}`)
+        }
+
+        return delivery
+    }
+
+    markMailboxDeliveryDelivered(deliveryId: number, recordedAtMs: number): MailboxJobFinalizeResult {
+        assertSafeInteger(deliveryId, "mailbox delivery id")
+        assertSafeInteger(recordedAtMs, "mailbox delivery recordedAtMs")
+
+        return this.db.transaction((targetDeliveryId: number, nowMs: number) => {
+            const delivery = this.requireMailboxDelivery(targetDeliveryId)
+            this.db
+                .query(
+                    `
+                        UPDATE mailbox_deliveries
+                        SET
+                            status = 'delivered',
+                            leased_until_ms = NULL,
+                            last_error = NULL,
+                            updated_at_ms = ?2,
+                            delivered_at_ms = ?2
+                        WHERE id = ?1;
+                    `,
+                )
+                .run(targetDeliveryId, nowMs)
+
+            return finalizeMailboxJobAfterDelivery(this.db, delivery.jobId, nowMs)
+        })(deliveryId, recordedAtMs)
+    }
+
+    recordMailboxDeliveryFailure(
+        deliveryId: number,
+        errorMessage: string,
+        recordedAtMs: number,
+        nextAttemptAtMs: number,
+        maxAttempts: number,
+    ): MailboxJobFinalizeResult {
+        assertSafeInteger(deliveryId, "mailbox delivery id")
+        assertSafeInteger(recordedAtMs, "mailbox delivery recordedAtMs")
+        assertSafeInteger(nextAttemptAtMs, "mailbox delivery nextAttemptAtMs")
+        assertSafeInteger(maxAttempts, "mailbox delivery maxAttempts")
+
+        return this.db.transaction(
+            (targetDeliveryId: number, message: string, nowMs: number, retryAtMs: number, retryLimit: number) => {
+                const delivery = this.requireMailboxDelivery(targetDeliveryId)
+                const quarantined = delivery.attemptCount >= retryLimit
+                this.db
+                    .query(
+                        `
+                            UPDATE mailbox_deliveries
+                            SET
+                                status = ?2,
+                                leased_until_ms = NULL,
+                                next_attempt_at_ms = ?3,
+                                last_error = ?4,
+                                updated_at_ms = ?5
+                            WHERE id = ?1;
+                        `,
+                    )
+                    .run(
+                        targetDeliveryId,
+                        quarantined ? "quarantined" : "pending",
+                        quarantined ? nowMs : retryAtMs,
+                        message,
+                        nowMs,
+                    )
+
+                if (!quarantined) {
+                    return {
+                        status: "ready_to_deliver",
+                        cleanupEntries: [],
+                    } satisfies MailboxJobFinalizeResult
+                }
+
+                return finalizeMailboxJobAfterDelivery(this.db, delivery.jobId, nowMs)
+            },
+        )(deliveryId, errorMessage, recordedAtMs, nextAttemptAtMs, maxAttempts)
+    }
+
+    downgradeMailboxDeliveryToSend(deliveryId: number, errorMessage: string, recordedAtMs: number): void {
+        assertSafeInteger(deliveryId, "mailbox delivery id")
+        assertSafeInteger(recordedAtMs, "mailbox delivery recordedAtMs")
+
+        this.db.transaction((targetDeliveryId: number, message: string, nowMs: number) => {
+            const delivery = this.requireMailboxDelivery(targetDeliveryId)
+            if (delivery.strategy.mode !== "edit") {
+                return
+            }
+
+            this.db
+                .query(
+                    `
+                        UPDATE mailbox_deliveries
+                        SET
+                            delivery_mode = 'send',
+                            stream_message_id = NULL,
+                            status = 'pending',
+                            attempt_count = CASE
+                                WHEN attempt_count > 0 THEN attempt_count - 1
+                                ELSE 0
+                            END,
+                            leased_until_ms = NULL,
+                            next_attempt_at_ms = ?2,
+                            last_error = ?3,
+                            updated_at_ms = ?2
+                        WHERE id = ?1;
+                    `,
+                )
+                .run(targetDeliveryId, nowMs, message)
+        })(deliveryId, errorMessage, recordedAtMs)
+    }
+
+    requeueExpiredMailboxLeases(nowMs: number): {
+        jobs: number
+        deliveries: number
+    } {
+        assertSafeInteger(nowMs, "mailbox lease recovery nowMs")
+
+        const resetJobs = this.db.query(
+            `
+                UPDATE mailbox_jobs
+                SET
+                    status = 'pending',
+                    leased_until_ms = NULL,
+                    next_attempt_at_ms = ?1,
+                    updated_at_ms = ?2
+                WHERE status = 'executing'
+                  AND leased_until_ms IS NOT NULL
+                  AND leased_until_ms <= ?3;
+            `,
+        )
+        const resetDeliveries = this.db.query(
+            `
+                UPDATE mailbox_deliveries
+                SET
+                    status = 'pending',
+                    leased_until_ms = NULL,
+                    next_attempt_at_ms = ?1,
+                    updated_at_ms = ?2
+                WHERE status = 'delivering'
+                  AND leased_until_ms IS NOT NULL
+                  AND leased_until_ms <= ?3;
+            `,
+        )
+
+        return this.db.transaction((clockMs: number) => {
+            const jobs = resetJobs.run(clockMs, clockMs, clockMs).changes
+            const deliveries = resetDeliveries.run(clockMs, clockMs, clockMs).changes
+            return { jobs, deliveries }
+        })(nowMs)
+    }
+
+    getMailboxJobFinalText(jobId: number): string | null {
+        assertSafeInteger(jobId, "mailbox job id")
+        const row = this.db
+            .query<{ final_text: string | null }, [number]>("SELECT final_text FROM mailbox_jobs WHERE id = ?1;")
+            .get(jobId)
+
+        return row?.final_text ?? null
+    }
+
+    getMailboxJobResponseText(jobId: number): string | null {
+        assertSafeInteger(jobId, "mailbox job id")
+        const row = this.db
+            .query<{ response_text: string | null }, [number]>("SELECT response_text FROM mailbox_jobs WHERE id = ?1;")
+            .get(jobId)
+
+        return row?.response_text ?? null
     }
 
     deleteMailboxEntries(ids: number[]): void {
@@ -945,6 +1703,49 @@ type MailboxEntryAttachmentRow = {
     local_path: string
 }
 
+type MailboxJobRow = {
+    id: number
+    mailbox_key: string
+    status: string
+    attempt_count: number
+    leased_until_ms: number | null
+    next_attempt_at_ms: number
+    last_error: string | null
+    response_text: string | null
+    final_text: string | null
+    session_id: string | null
+    created_at_ms: number
+    updated_at_ms: number
+    started_at_ms: number | null
+    finished_at_ms: number | null
+}
+
+type MailboxJobEntryRow = {
+    job_id: number
+    mailbox_entry_id: number
+    ordinal: number
+}
+
+type MailboxDeliveryRow = {
+    id: number
+    job_id: number
+    delivery_channel: string
+    delivery_target: string
+    delivery_topic: string
+    delivery_mode: string
+    stream_message_id: number | null
+    preview_process_text: string | null
+    preview_reasoning_text: string | null
+    status: string
+    attempt_count: number
+    leased_until_ms: number | null
+    next_attempt_at_ms: number
+    last_error: string | null
+    created_at_ms: number
+    updated_at_ms: number
+    delivered_at_ms: number | null
+}
+
 type SessionReplyTargetRow = {
     session_id: string
     ordinal: number
@@ -1080,6 +1881,327 @@ function mapMailboxEntryAttachmentRow(row: MailboxEntryAttachmentRow): MailboxEn
         default:
             throw new Error(`unsupported mailbox attachment kind: ${row.kind}`)
     }
+}
+
+function mapMailboxJobs(db: SqliteDatabaseLike, rows: MailboxJobRow[]): MailboxJobRecord[] {
+    if (rows.length === 0) {
+        return []
+    }
+
+    const jobIds = rows.map((row) => row.id)
+    const attachmentsByEntryId = listMailboxAttachments(db, listMailboxJobEntryIds(db, jobIds))
+    const entriesByJobId = listMailboxJobEntries(db, jobIds, attachmentsByEntryId)
+
+    return rows.map((row) => ({
+        id: row.id,
+        mailboxKey: row.mailbox_key,
+        status: parseMailboxJobStatus(row.status),
+        attemptCount: row.attempt_count,
+        leasedUntilMs: row.leased_until_ms,
+        nextAttemptAtMs: row.next_attempt_at_ms,
+        lastError: row.last_error,
+        responseText: row.response_text,
+        finalText: row.final_text,
+        sessionId: row.session_id,
+        createdAtMs: row.created_at_ms,
+        updatedAtMs: row.updated_at_ms,
+        startedAtMs: row.started_at_ms,
+        finishedAtMs: row.finished_at_ms,
+        entries: entriesByJobId.get(row.id) ?? [],
+    }))
+}
+
+function listMailboxJobEntryIds(db: SqliteDatabaseLike, jobIds: number[]): number[] {
+    if (jobIds.length === 0) {
+        return []
+    }
+
+    for (const jobId of jobIds) {
+        assertSafeInteger(jobId, "mailbox job id")
+    }
+    const placeholders = jobIds.map((_, index) => `?${index + 1}`).join(", ")
+    const rows = db
+        .query<MailboxJobEntryRow, number[]>(
+            `
+                SELECT job_id, mailbox_entry_id, ordinal
+                FROM mailbox_job_entries
+                WHERE job_id IN (${placeholders})
+                ORDER BY job_id ASC, ordinal ASC;
+            `,
+        )
+        .all(...jobIds)
+
+    return rows.map((row) => row.mailbox_entry_id)
+}
+
+function listMailboxJobEntries(
+    db: SqliteDatabaseLike,
+    jobIds: number[],
+    attachmentsByEntryId: Map<number, MailboxEntryAttachmentRecord[]>,
+): Map<number, MailboxEntryRecord[]> {
+    if (jobIds.length === 0) {
+        return new Map()
+    }
+
+    for (const jobId of jobIds) {
+        assertSafeInteger(jobId, "mailbox job id")
+    }
+    const placeholders = jobIds.map((_, index) => `?${index + 1}`).join(", ")
+    const rows = db
+        .query<MailboxJobEntryRow & MailboxEntryRow, number[]>(
+            `
+                SELECT
+                    job_entry.job_id,
+                    job_entry.mailbox_entry_id,
+                    job_entry.ordinal,
+                    entry.id,
+                    entry.mailbox_key,
+                    entry.source_kind,
+                    entry.external_id,
+                    entry.sender,
+                    entry.body,
+                    entry.reply_channel,
+                    entry.reply_target,
+                    entry.reply_topic,
+                    entry.created_at_ms
+                FROM mailbox_job_entries AS job_entry
+                JOIN mailbox_entries AS entry
+                  ON entry.id = job_entry.mailbox_entry_id
+                WHERE job_entry.job_id IN (${placeholders})
+                ORDER BY job_entry.job_id ASC, job_entry.ordinal ASC;
+            `,
+        )
+        .all(...jobIds)
+
+    const entries = new Map<number, MailboxEntryRecord[]>()
+    for (const row of rows) {
+        const records = entries.get(row.job_id) ?? []
+        records.push(
+            mapMailboxEntryRow(
+                {
+                    id: row.id,
+                    mailbox_key: row.mailbox_key,
+                    source_kind: row.source_kind,
+                    external_id: row.external_id,
+                    sender: row.sender,
+                    body: row.body,
+                    reply_channel: row.reply_channel,
+                    reply_target: row.reply_target,
+                    reply_topic: row.reply_topic,
+                    created_at_ms: row.created_at_ms,
+                },
+                attachmentsByEntryId.get(row.id) ?? [],
+            ),
+        )
+        entries.set(row.job_id, records)
+    }
+
+    return entries
+}
+
+function parseMailboxJobStatus(value: string): MailboxJobStatus {
+    switch (value) {
+        case "pending":
+        case "executing":
+        case "ready_to_deliver":
+        case "completed":
+        case "quarantined":
+            return value
+        default:
+            throw new Error(`stored mailbox job status is invalid: ${value}`)
+    }
+}
+
+function parseMailboxDeliveryStatus(value: string): MailboxDeliveryStatus {
+    switch (value) {
+        case "pending":
+        case "delivering":
+        case "delivered":
+        case "quarantined":
+            return value
+        default:
+            throw new Error(`stored mailbox delivery status is invalid: ${value}`)
+    }
+}
+
+function parseMailboxDeliveryStrategy(
+    row: Pick<MailboxDeliveryRow, "delivery_mode" | "stream_message_id">,
+): BindingDeferredDeliveryStrategy {
+    switch (row.delivery_mode) {
+        case "send":
+            return {
+                mode: "send",
+            }
+        case "edit": {
+            const messageId = row.stream_message_id
+            if (messageId === null || !Number.isSafeInteger(messageId) || messageId <= 0) {
+                throw new Error("stored edit-mode mailbox delivery is missing a valid message id")
+            }
+
+            return {
+                mode: "edit",
+                messageId,
+            }
+        }
+        default:
+            throw new Error(`stored mailbox delivery mode is invalid: ${row.delivery_mode}`)
+    }
+}
+
+function mapMailboxDeliveryRow(row: MailboxDeliveryRow): MailboxDeliveryRecord {
+    return {
+        id: row.id,
+        jobId: row.job_id,
+        deliveryTarget: {
+            channel: row.delivery_channel,
+            target: row.delivery_target,
+            topic: normalizeStoredKeyField(row.delivery_topic),
+        },
+        strategy: parseMailboxDeliveryStrategy(row),
+        previewContext: parseMailboxPreviewContext(row),
+        status: parseMailboxDeliveryStatus(row.status),
+        attemptCount: row.attempt_count,
+        leasedUntilMs: row.leased_until_ms,
+        nextAttemptAtMs: row.next_attempt_at_ms,
+        lastError: row.last_error,
+        createdAtMs: row.created_at_ms,
+        updatedAtMs: row.updated_at_ms,
+        deliveredAtMs: row.delivered_at_ms,
+    }
+}
+
+function parseMailboxPreviewContext(
+    row: Pick<MailboxDeliveryRow, "preview_process_text" | "preview_reasoning_text">,
+): BindingDeferredPreviewContext | null {
+    const processText = normalizeStoredMailboxText(row.preview_process_text ?? "")
+    const reasoningText = normalizeStoredMailboxText(row.preview_reasoning_text ?? "")
+    if (processText === null && reasoningText === null) {
+        return null
+    }
+
+    return {
+        processText,
+        reasoningText,
+    }
+}
+
+function deleteMailboxJobEntries(db: SqliteDatabaseLike, jobId: number): MailboxEntryRecord[] {
+    assertSafeInteger(jobId, "mailbox job id")
+    const rows = db
+        .query<MailboxEntryRow, [number]>(
+            `
+                SELECT
+                    entry.id,
+                    entry.mailbox_key,
+                    entry.source_kind,
+                    entry.external_id,
+                    entry.sender,
+                    entry.body,
+                    entry.reply_channel,
+                    entry.reply_target,
+                    entry.reply_topic,
+                    entry.created_at_ms
+                FROM mailbox_job_entries AS job_entry
+                JOIN mailbox_entries AS entry
+                  ON entry.id = job_entry.mailbox_entry_id
+                WHERE job_entry.job_id = ?1
+                ORDER BY job_entry.ordinal ASC;
+            `,
+        )
+        .all(jobId)
+    const attachments = listMailboxAttachments(
+        db,
+        rows.map((row) => row.id),
+    )
+    const entries = rows.map((row) => mapMailboxEntryRow(row, attachments.get(row.id) ?? []))
+
+    if (rows.length > 0) {
+        const ids = rows.map((row) => row.id)
+        const placeholders = ids.map((_, index) => `?${index + 1}`).join(", ")
+        db.query(`DELETE FROM mailbox_entries WHERE id IN (${placeholders});`).run(...ids)
+    }
+
+    return entries
+}
+
+function finalizeMailboxJobAfterDelivery(
+    db: SqliteDatabaseLike,
+    jobId: number,
+    recordedAtMs: number,
+): MailboxJobFinalizeResult {
+    const active = db
+        .query<{ total: number }, [number]>(
+            `
+                SELECT COUNT(*) AS total
+                FROM mailbox_deliveries
+                WHERE job_id = ?1
+                  AND status IN ('pending', 'delivering');
+            `,
+        )
+        .get(jobId)
+
+    if ((active?.total ?? 0) > 0) {
+        return {
+            status: "ready_to_deliver",
+            cleanupEntries: [],
+        }
+    }
+
+    const quarantined = db
+        .query<{ total: number }, [number]>(
+            `
+                SELECT COUNT(*) AS total
+                FROM mailbox_deliveries
+                WHERE job_id = ?1
+                  AND status = 'quarantined';
+            `,
+        )
+        .get(jobId)
+
+    if ((quarantined?.total ?? 0) > 0) {
+        db.query(
+            `
+                UPDATE mailbox_jobs
+                SET
+                    status = 'quarantined',
+                    leased_until_ms = NULL,
+                    updated_at_ms = ?2,
+                    finished_at_ms = ?2
+                WHERE id = ?1;
+            `,
+        ).run(jobId, recordedAtMs)
+        return {
+            status: "quarantined",
+            cleanupEntries: [],
+        }
+    }
+
+    db.query(
+        `
+            UPDATE mailbox_jobs
+            SET
+                status = 'completed',
+                leased_until_ms = NULL,
+                updated_at_ms = ?2,
+                finished_at_ms = ?2
+            WHERE id = ?1;
+        `,
+    ).run(jobId, recordedAtMs)
+
+    return {
+        status: "completed",
+        cleanupEntries: deleteMailboxJobEntries(db, jobId),
+    }
+}
+
+function dedupePreparedDeliveries(deliveries: MailboxPreparedDelivery[]): MailboxPreparedDelivery[] {
+    const deduped = new Map<string, MailboxPreparedDelivery>()
+    for (const delivery of deliveries) {
+        const key = `${delivery.deliveryTarget.channel}:${delivery.deliveryTarget.target}:${delivery.deliveryTarget.topic ?? ""}`
+        deduped.set(key, delivery)
+    }
+
+    return [...deduped.values()]
 }
 
 function mapSessionReplyTargetRow(row: SessionReplyTargetRow): BindingDeliveryTarget {

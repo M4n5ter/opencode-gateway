@@ -1,26 +1,51 @@
 import type {
     BindingCronJobSpec,
+    BindingDeliveryReport,
     BindingDeliveryTarget,
+    BindingDispatchReport,
+    BindingExecutionReport,
     BindingInboundMessage,
     BindingLoggerHost,
     BindingOpencodeCommand,
     BindingOpencodeCommandResult,
     BindingPreparedExecution,
     BindingPromptPart,
-    BindingRuntimeReport,
     GatewayBindingModule,
 } from "../binding"
-import type { GatewayTextDelivery, TextDeliverySession } from "../delivery/text"
+import type { GatewayExecutionConfig } from "../config/gateway"
+import type { GatewayTextDelivery, TargetTextDeliverySession, TextDeliverySession } from "../delivery/text"
 import type { OpencodeSdkAdapter } from "../opencode/adapter"
 import type { OpencodeEventHub } from "../opencode/events"
-import type { MailboxEntryRecord, RuntimeJournalEntry, SqliteStore } from "../store/sqlite"
+import type {
+    MailboxEntryRecord,
+    MailboxJobRecord,
+    MailboxPreparedDelivery,
+    RuntimeJournalEntry,
+    SqliteStore,
+} from "../store/sqlite"
 import { ConversationCoordinator } from "./conversation-coordinator"
 import { delay } from "./delay"
+import { ExecutionBudget, ExecutionHardTimeoutError } from "./execution-budget"
 import { type PromptExecutionResult, runOpencodeDriver } from "./opencode-runner"
+import { OpencodeCommandTimeoutError } from "./opencode-timeout"
 
-const SESSION_ABORT_SETTLE_TIMEOUT_MS = 5_000
 const SESSION_ABORT_POLL_MS = 250
 const SESSION_RESIDUAL_BUSY_GRACE_POLLS = 3
+const DEFAULT_EXECUTION_CONFIG: GatewayExecutionConfig = {
+    sessionWaitTimeoutMs: 30 * 60_000,
+    promptProgressTimeoutMs: 30 * 60_000,
+    hardTimeoutMs: null,
+    abortSettleTimeoutMs: 5_000,
+}
+
+export type MailboxExecutionOutcome = {
+    conversationKey: string
+    responseText: string
+    finalText: string | null
+    deliveries: MailboxPreparedDelivery[]
+    sessionId: string
+    recordedAtMs: number
+}
 
 export class GatewayExecutor {
     private internalPromptSequence = 0
@@ -32,6 +57,7 @@ export class GatewayExecutor {
         private readonly events: OpencodeEventHub,
         private readonly delivery: GatewayTextDeliveryLike,
         private readonly logger: BindingLoggerHost,
+        private readonly executionConfig: GatewayExecutionConfig = DEFAULT_EXECUTION_CONFIG,
         private readonly coordinator: ConversationCoordinator = new ConversationCoordinator(),
     ) {}
 
@@ -39,7 +65,7 @@ export class GatewayExecutor {
         return this.module.prepareInboundExecution(message)
     }
 
-    async handleInboundMessage(message: BindingInboundMessage): Promise<BindingRuntimeReport> {
+    async handleInboundMessage(message: BindingInboundMessage): Promise<BindingDispatchReport> {
         const prepared = this.prepareInboundMessage(message)
         const syntheticEntry = {
             id: Date.now(),
@@ -58,7 +84,7 @@ export class GatewayExecutor {
         return await this.executeMailboxEntries([syntheticEntry])
     }
 
-    async executeMailboxEntries(entries: MailboxEntryRecord[]): Promise<BindingRuntimeReport> {
+    async executeMailboxEntries(entries: MailboxEntryRecord[]): Promise<BindingDispatchReport> {
         if (entries.length === 0) {
             throw new Error("mailbox execution requires at least one entry")
         }
@@ -102,7 +128,52 @@ export class GatewayExecutor {
         })
     }
 
-    async dispatchCronJob(job: BindingCronJobSpec): Promise<BindingRuntimeReport> {
+    async executeMailboxJob(job: MailboxJobRecord): Promise<MailboxExecutionOutcome> {
+        if (job.entries.length === 0) {
+            throw new Error(`mailbox job ${job.id} contains no entries`)
+        }
+
+        const preparedEntries = job.entries.map((entry) => {
+            const message = mailboxEntryToInboundMessage(entry)
+            return {
+                entry,
+                message,
+                prepared: this.prepareInboundMessage(message),
+            }
+        })
+        const conversationKey = preparedEntries[0].prepared.conversationKey
+        if (preparedEntries.some((entry) => entry.prepared.conversationKey !== conversationKey)) {
+            throw new Error(`mailbox job ${job.id} contains mixed conversation keys`)
+        }
+
+        const recordedAtMs = Date.now()
+        this.logger.log("info", `handling mailbox job ${job.id}`)
+
+        return await this.coordinator.runExclusive(conversationKey, async () => {
+            this.store.appendJournal(
+                createJournalEntry("mailbox_flush", recordedAtMs, conversationKey, {
+                    jobId: job.id,
+                    entryIds: preparedEntries.map((entry) => entry.entry.id),
+                    count: preparedEntries.length,
+                }),
+            )
+
+            for (const entry of preparedEntries) {
+                this.store.appendJournal(
+                    createJournalEntry("inbound_message", entry.entry.createdAtMs, conversationKey, {
+                        deliveryTarget: entry.prepared.replyTarget,
+                        sender: entry.message.sender,
+                        text: entry.message.text,
+                        attachments: entry.message.attachments,
+                    }),
+                )
+            }
+
+            return await this.executePreparedBatchForMailbox(preparedEntries, recordedAtMs)
+        })
+    }
+
+    async dispatchCronJob(job: BindingCronJobSpec): Promise<BindingDispatchReport> {
         const prepared = this.module.prepareCronExecution(job)
         const id = normalizeRequiredField(job.id, "cron job id")
         const schedule = normalizeRequiredField(job.schedule, "cron schedule")
@@ -134,7 +205,7 @@ export class GatewayExecutor {
         })
     }
 
-    async dispatchScheduledJob(input: DispatchScheduledJobInput): Promise<BindingRuntimeReport> {
+    async dispatchScheduledJob(input: DispatchScheduledJobInput): Promise<BindingDispatchReport> {
         const prepared = prepareTextExecution(input.conversationKey, input.prompt, input.replyTarget)
         const recordedAtMs = Date.now()
 
@@ -167,71 +238,139 @@ export class GatewayExecutor {
     async appendContextToConversation(input: AppendContextToConversationInput): Promise<void> {
         const conversationKey = normalizeRequiredField(input.conversationKey, "conversation key")
         const body = normalizeRequiredField(input.body, "context body")
+        const budget = new ExecutionBudget(this.executionConfig, input.recordedAtMs)
 
         await this.coordinator.runExclusive(conversationKey, async () => {
             const sessionId = await this.ensureConversationSession(
                 conversationKey,
                 input.recordedAtMs,
                 input.replyTarget === null ? [] : [input.replyTarget],
+                budget,
             )
             const promptIdentity = this.createInternalPromptIdentity("context", input.recordedAtMs)
-
-            await this.appendPrompt(sessionId, promptIdentity.messageId, [
-                {
-                    kind: "text",
-                    partId: promptIdentity.partId,
-                    text: body,
-                },
-            ])
+            try {
+                await this.appendPrompt(sessionId, promptIdentity.messageId, [
+                    {
+                        kind: "text",
+                        partId: promptIdentity.partId,
+                        text: body,
+                    },
+                ])
+            } catch (error) {
+                this.evictSessionBinding(conversationKey, sessionId, error)
+                throw error
+            }
         })
     }
 
     private async executePreparedBatch(
         entries: PreparedMailboxEntry[],
         recordedAtMs: number,
-    ): Promise<BindingRuntimeReport> {
-        const conversationKey = entries[0].prepared.conversationKey
-        const persistedSessionId = this.store.getSessionBinding(conversationKey)
-        const preparedSessionId = await this.preparePersistedSessionForPrompt(persistedSessionId)
-        const replyTargets = dedupeReplyTargets(
-            entries.flatMap((entry) => (entry.prepared.replyTarget === null ? [] : [entry.prepared.replyTarget])),
-        )
-        const [deliverySession] =
-            replyTargets.length === 0 ? [null] : await this.delivery.openMany(replyTargets, "auto")
-        const promptResult = await this.executeDriver(
-            entries,
-            recordedAtMs,
-            preparedSessionId,
-            deliverySession,
-            replyTargets,
-        )
-        await this.cleanupResidualBusySession(promptResult.sessionId)
+    ): Promise<BindingDispatchReport> {
+        const budget = new ExecutionBudget(this.executionConfig, recordedAtMs)
+        const execution = await this.executePreparedBatchWithPreview(entries, recordedAtMs, budget)
+        const delivery = await this.deliverImmediately(execution.targetSessions, execution.finalText)
 
-        this.store.putSessionBindingIfUnchanged(
-            conversationKey,
-            persistedSessionId,
-            promptResult.sessionId,
-            recordedAtMs,
-        )
-
-        let delivered = false
-        if (deliverySession !== null) {
-            delivered = await deliverySession.finish(promptResult.finalText)
-            if (promptResult.finalText !== null) {
-                this.store.appendJournal(
-                    createJournalEntry("delivery", recordedAtMs, conversationKey, {
-                        deliveryTargets: replyTargets,
-                        body: promptResult.finalText,
-                    }),
-                )
-            }
+        if (execution.finalText !== null && delivery !== null && delivery.deliveredTargets.length > 0) {
+            this.store.appendJournal(
+                createJournalEntry("delivery", recordedAtMs, execution.conversationKey, {
+                    deliveryTargets: delivery.deliveredTargets,
+                    body: execution.finalText,
+                }),
+            )
         }
 
         return {
-            conversationKey,
-            responseText: promptResult.responseText,
-            delivered,
-            recordedAtMs: BigInt(recordedAtMs),
+            execution: toExecutionReport(execution, recordedAtMs),
+            delivery,
+        }
+    }
+
+    private async executePreparedBatchForMailbox(
+        entries: PreparedMailboxEntry[],
+        recordedAtMs: number,
+    ): Promise<MailboxExecutionOutcome> {
+        const budget = new ExecutionBudget(this.executionConfig, recordedAtMs)
+        const execution = await this.executePreparedBatchWithPreview(entries, recordedAtMs, budget)
+        return {
+            conversationKey: execution.conversationKey,
+            responseText: execution.responseText,
+            finalText: execution.finalText,
+            deliveries: await handoffMailboxDeliveries(execution.targetSessions),
+            sessionId: execution.sessionId,
+            recordedAtMs,
+        }
+    }
+
+    private async executePreparedBatchWithPreview(
+        entries: PreparedMailboxEntry[],
+        recordedAtMs: number,
+        budget: ExecutionBudget,
+    ): Promise<PreparedExecutionWithPreview> {
+        const conversationKey = entries[0].prepared.conversationKey
+        const persistedSessionId = this.store.getSessionBinding(conversationKey)
+        const replyTargets = dedupeReplyTargets(
+            entries.flatMap((entry) => (entry.prepared.replyTarget === null ? [] : [entry.prepared.replyTarget])),
+        )
+        const targetSessions =
+            replyTargets.length === 0 ? [] : await openTargetDeliverySessions(this.delivery, replyTargets)
+
+        try {
+            const preparedSessionId = await this.preparePersistedSessionForPrompt(
+                conversationKey,
+                persistedSessionId,
+                budget,
+            )
+            const expectedSessionBinding = this.store.getSessionBinding(conversationKey)
+            const previewSession = createPreviewFanoutSession(targetSessions)
+            const promptResult = await this.executeDriver(
+                entries,
+                recordedAtMs,
+                preparedSessionId,
+                previewSession,
+                replyTargets,
+                budget,
+            )
+            await this.cleanupResidualBusySession(promptResult.sessionId, budget)
+
+            this.store.putSessionBindingIfUnchanged(
+                conversationKey,
+                expectedSessionBinding,
+                promptResult.sessionId,
+                recordedAtMs,
+            )
+
+            return {
+                conversationKey,
+                responseText: promptResult.responseText,
+                finalText: promptResult.finalText,
+                sessionId: promptResult.sessionId,
+                targetSessions,
+            }
+        } catch (error) {
+            await finishTargetSessions(targetSessions, null)
+            if (error instanceof ExecutionHardTimeoutError) {
+                this.store.appendJournal(
+                    createJournalEntry("execution_timeout", Date.now(), conversationKey, {
+                        stage: "hard_timeout",
+                        sessionId: persistedSessionId,
+                        error: error.message,
+                    }),
+                )
+            } else if (error instanceof OpencodeCommandTimeoutError) {
+                this.store.appendJournal(
+                    createJournalEntry("execution_timeout", Date.now(), conversationKey, {
+                        stage: error.stage,
+                        sessionId: error.sessionId,
+                        error: error.message,
+                    }),
+                )
+            }
+            if (persistedSessionId !== null) {
+                this.evictSessionBinding(conversationKey, persistedSessionId, error)
+            }
+
+            throw error
         }
     }
 
@@ -239,31 +378,41 @@ export class GatewayExecutor {
         conversationKey: string,
         recordedAtMs: number,
         replyTargets: BindingDeliveryTarget[],
+        budget: ExecutionBudget,
     ): Promise<string> {
         const persistedSessionId = this.store.getSessionBinding(conversationKey)
-        let sessionId = await this.preparePersistedSessionForPrompt(persistedSessionId)
+        let sessionId = await this.preparePersistedSessionForPrompt(conversationKey, persistedSessionId, budget)
+        const expectedSessionBinding = this.store.getSessionBinding(conversationKey)
         let retryMissingSession = true
 
         for (;;) {
             if (sessionId === null) {
+                budget.throwIfHardTimedOut("creating a conversation session")
                 sessionId = await this.createSession(conversationKey)
             }
 
             try {
-                await this.waitUntilIdle(sessionId)
+                await this.waitUntilIdle(sessionId, budget)
                 break
             } catch (error) {
                 if (retryMissingSession && error instanceof MissingSessionCommandError) {
                     retryMissingSession = false
+                    if (persistedSessionId === sessionId) {
+                        this.evictSessionBinding(conversationKey, sessionId, error)
+                    }
                     sessionId = null
                     continue
+                }
+
+                if (persistedSessionId === sessionId) {
+                    this.evictSessionBinding(conversationKey, sessionId, error)
                 }
 
                 throw error
             }
         }
 
-        this.store.putSessionBindingIfUnchanged(conversationKey, persistedSessionId, sessionId, recordedAtMs)
+        this.store.putSessionBindingIfUnchanged(conversationKey, expectedSessionBinding, sessionId, recordedAtMs)
         this.initializeReplyTargetsIfMissing(sessionId, conversationKey, replyTargets, recordedAtMs)
 
         return sessionId
@@ -287,13 +436,19 @@ export class GatewayExecutor {
         })
     }
 
-    private async preparePersistedSessionForPrompt(sessionId: string | null): Promise<string | null> {
+    private async preparePersistedSessionForPrompt(
+        conversationKey: string,
+        sessionId: string | null,
+        budget: ExecutionBudget,
+    ): Promise<string | null> {
         if (sessionId === null) {
             return null
         }
 
+        budget.throwIfHardTimedOut("looking up the persisted session")
         const found = await this.lookupSession(sessionId)
         if (!found) {
+            this.evictSessionBinding(conversationKey, sessionId, "persisted session no longer exists")
             return null
         }
 
@@ -304,13 +459,14 @@ export class GatewayExecutor {
         this.logger.log("warn", `aborting busy gateway session before prompt dispatch: ${sessionId}`)
 
         try {
-            await this.abortSessionAndWaitForSettle(sessionId)
+            await this.abortSessionAndWaitForSettle(sessionId, budget)
             return sessionId
         } catch (error) {
             this.logger.log(
                 "warn",
                 `busy gateway session did not settle and will be replaced: ${sessionId}: ${extractErrorMessage(error)}`,
             )
+            this.evictSessionBinding(conversationKey, sessionId, error)
             return null
         }
     }
@@ -332,12 +488,13 @@ export class GatewayExecutor {
         return expectCommandResult(result, "createSession").sessionId
     }
 
-    private async waitUntilIdle(sessionId: string): Promise<void> {
+    private async waitUntilIdle(sessionId: string, budget: ExecutionBudget): Promise<void> {
         const result = await this.opencode.execute({
             kind: "waitUntilIdle",
             sessionId,
+            timeoutMs: budget.sessionWaitTimeoutMs(),
         })
-        expectCommandResult(result, "waitUntilIdle")
+        expectCommandResult(result, "waitUntilIdle", "session_wait")
     }
 
     private async appendPrompt(
@@ -354,7 +511,19 @@ export class GatewayExecutor {
         expectCommandResult(result, "appendPrompt")
     }
 
-    private async cleanupResidualBusySession(sessionId: string): Promise<void> {
+    private evictSessionBinding(conversationKey: string, sessionId: string, error: unknown): void {
+        if (this.store.getSessionBinding(conversationKey) !== sessionId) {
+            return
+        }
+
+        this.logger.log(
+            "warn",
+            `evicting persisted gateway session binding ${conversationKey} -> ${sessionId}: ${extractErrorMessage(error)}`,
+        )
+        this.store.deleteSessionBinding(conversationKey)
+    }
+
+    private async cleanupResidualBusySession(sessionId: string, budget: ExecutionBudget): Promise<void> {
         if (await this.waitForSessionToSettle(sessionId, SESSION_RESIDUAL_BUSY_GRACE_POLLS)) {
             return
         }
@@ -362,7 +531,7 @@ export class GatewayExecutor {
         this.logger.log("debug", `aborting residual busy gateway session after prompt completion: ${sessionId}`)
 
         try {
-            await this.abortSessionAndWaitForSettle(sessionId)
+            await this.abortSessionAndWaitForSettle(sessionId, budget)
         } catch (error) {
             this.logger.log(
                 "warn",
@@ -385,17 +554,17 @@ export class GatewayExecutor {
         return false
     }
 
-    private async abortSessionAndWaitForSettle(sessionId: string): Promise<void> {
+    private async abortSessionAndWaitForSettle(sessionId: string, budget: ExecutionBudget): Promise<void> {
         await this.opencode.abortSession(sessionId)
 
-        const deadline = Date.now() + SESSION_ABORT_SETTLE_TIMEOUT_MS
+        const deadline = Date.now() + budget.abortSettleTimeoutMs()
         for (;;) {
             if (!(await this.opencode.isSessionBusy(sessionId))) {
                 return
             }
 
             if (Date.now() >= deadline) {
-                throw new Error(`session remained busy after abort for ${SESSION_ABORT_SETTLE_TIMEOUT_MS}ms`)
+                throw new Error(`session remained busy after abort for ${budget.abortSettleTimeoutMs()}ms`)
             }
 
             await delay(SESSION_ABORT_POLL_MS)
@@ -419,12 +588,35 @@ export class GatewayExecutor {
         }
     }
 
+    private async deliverImmediately(
+        targetSessions: TargetTextDeliverySession[],
+        finalText: string | null,
+    ): Promise<BindingDeliveryReport | null> {
+        if (targetSessions.length === 0) {
+            await finishTargetSessions(targetSessions, finalText)
+            return null
+        }
+
+        const attempts = await finishTargetSessions(targetSessions, finalText)
+        return {
+            attemptedTargets: attempts.map((attempt) => attempt.deliveryTarget),
+            deliveredTargets: attempts.filter((attempt) => attempt.delivered).map((attempt) => attempt.deliveryTarget),
+            failedTargets: attempts
+                .filter((attempt) => !attempt.delivered)
+                .map((attempt) => ({
+                    deliveryTarget: attempt.deliveryTarget,
+                    errorMessage: attempt.errorMessage ?? "delivery failed",
+                })),
+        }
+    }
+
     private async executeDriver(
         entries: PreparedMailboxEntry[],
         recordedAtMs: number,
         persistedSessionId: string | null,
         deliverySession: TextDeliverySessionLike | null,
         replyTargets: NonNullable<BindingPreparedExecution["replyTarget"]>[],
+        budget: ExecutionBudget,
     ): Promise<PromptExecutionResult> {
         return await runOpencodeDriver({
             module: this.module,
@@ -445,6 +637,7 @@ export class GatewayExecutor {
                     recordedAtMs,
                 })
             },
+            budget,
         })
     }
 }
@@ -455,6 +648,7 @@ export type GatewayExecutorLike = Pick<
     | "dispatchCronJob"
     | "dispatchScheduledJob"
     | "appendContextToConversation"
+    | "executeMailboxJob"
     | "executeMailboxEntries"
     | "prepareInboundMessage"
 >
@@ -480,9 +674,23 @@ type PreparedMailboxEntry = {
     prepared: BindingPreparedExecution
 }
 
-type GatewayTextDeliveryLike = Pick<GatewayTextDelivery, "openMany">
+type PreparedExecutionWithPreview = {
+    conversationKey: string
+    responseText: string
+    finalText: string | null
+    sessionId: string
+    targetSessions: TargetTextDeliverySession[]
+}
+
+type ImmediateDeliveryAttempt = {
+    deliveryTarget: BindingDeliveryTarget
+    delivered: boolean
+    errorMessage: string | null
+}
+
+type GatewayTextDeliveryLike = Pick<GatewayTextDelivery, "openMany" | "openTargetSessions">
 type GatewayOpencodeRuntimeLike = Pick<OpencodeSdkAdapter, "execute" | "isSessionBusy" | "abortSession">
-type TextDeliverySessionLike = Pick<TextDeliverySession, "mode" | "preview" | "finish">
+type TextDeliverySessionLike = Pick<TextDeliverySession, "mode" | "preview">
 type BindingOpencodeCommandPartLike = Extract<BindingOpencodeCommand, { kind: "appendPrompt" }>["parts"][number]
 
 function createJournalEntry(
@@ -496,6 +704,18 @@ function createJournalEntry(
         recordedAtMs,
         conversationKey,
         payload,
+    }
+}
+
+function toExecutionReport(
+    execution: Pick<PreparedExecutionWithPreview, "conversationKey" | "responseText" | "finalText">,
+    recordedAtMs: number,
+): BindingExecutionReport {
+    return {
+        conversationKey: execution.conversationKey,
+        responseText: execution.responseText,
+        finalText: execution.finalText,
+        recordedAtMs: BigInt(recordedAtMs),
     }
 }
 
@@ -545,6 +765,84 @@ function dedupeReplyTargets(
     })
 }
 
+function createPreviewFanoutSession(
+    targetSessions: TargetTextDeliverySession[],
+): Pick<TextDeliverySession, "mode" | "preview"> | null {
+    if (targetSessions.length === 0) {
+        return null
+    }
+
+    return {
+        mode: targetSessions.some((entry) => entry.session.mode === "progressive") ? "progressive" : "oneshot",
+        async preview(preview): Promise<void> {
+            await Promise.all(targetSessions.map((entry) => entry.session.preview(preview)))
+        },
+    }
+}
+
+async function openTargetDeliverySessions(
+    delivery: GatewayTextDeliveryLike,
+    replyTargets: NonNullable<BindingPreparedExecution["replyTarget"]>[],
+): Promise<TargetTextDeliverySession[]> {
+    if (typeof delivery.openTargetSessions === "function") {
+        return await delivery.openTargetSessions(replyTargets, "auto")
+    }
+
+    const sessions = await delivery.openMany(replyTargets, "auto")
+    if (sessions.length !== 1 || replyTargets.length !== 1) {
+        throw new Error("per-target delivery sessions are unavailable")
+    }
+
+    return [
+        {
+            target: replyTargets[0],
+            session: sessions[0],
+        },
+    ]
+}
+
+async function finishTargetSessions(
+    targetSessions: TargetTextDeliverySession[],
+    finalText: string | null,
+): Promise<ImmediateDeliveryAttempt[]> {
+    if (targetSessions.length === 0) {
+        return []
+    }
+
+    return await Promise.all(
+        targetSessions.map(async ({ target, session }) => {
+            try {
+                return {
+                    deliveryTarget: target,
+                    delivered: await session.finish(finalText),
+                    errorMessage: null,
+                } satisfies ImmediateDeliveryAttempt
+            } catch (error) {
+                return {
+                    deliveryTarget: target,
+                    delivered: false,
+                    errorMessage: extractErrorMessage(error),
+                } satisfies ImmediateDeliveryAttempt
+            }
+        }),
+    )
+}
+
+async function handoffMailboxDeliveries(
+    targetSessions: TargetTextDeliverySession[],
+): Promise<MailboxPreparedDelivery[]> {
+    return await Promise.all(
+        targetSessions.map(async ({ target, session }) => {
+            const handle = await session.handoffFinalDelivery()
+            return {
+                deliveryTarget: target,
+                strategy: handle.strategy,
+                previewContext: handle.previewContext,
+            } satisfies MailboxPreparedDelivery
+        }),
+    )
+}
+
 function normalizeRequiredField(value: string, field: string): string {
     const trimmed = value.trim()
     if (trimmed.length === 0) {
@@ -565,10 +863,15 @@ function extractErrorMessage(error: unknown): string {
 function expectCommandResult<TKind extends BindingOpencodeCommandResult["kind"]>(
     result: BindingOpencodeCommandResult,
     expectedKind: TKind,
+    timeoutStage: "session_wait" | "prompt_progress" | "command" = "command",
 ): Extract<BindingOpencodeCommandResult, { kind: TKind }> {
     if (result.kind === "error") {
         if (result.code === "missingSession") {
             throw new MissingSessionCommandError(result.message)
+        }
+
+        if (result.code === "timeout") {
+            throw new OpencodeCommandTimeoutError(timeoutStage, result.message, result.sessionId)
         }
 
         throw new Error(result.message)

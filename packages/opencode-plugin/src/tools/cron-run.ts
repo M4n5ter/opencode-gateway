@@ -1,6 +1,6 @@
 import type { ToolDefinition } from "@opencode-ai/plugin"
 import { tool } from "@opencode-ai/plugin"
-import type { BindingRuntimeReport } from "../binding"
+import type { BindingDispatchReport } from "../binding"
 import type { GatewayCronRuntime } from "../cron/runtime"
 
 export function createCronRunTool(runtime: GatewayCronRuntime): ToolDefinition {
@@ -15,11 +15,27 @@ export function createCronRunTool(runtime: GatewayCronRuntime): ToolDefinition {
     })
 }
 
-function formatRuntimeReport(report: BindingRuntimeReport): string {
+function formatRuntimeReport(report: BindingDispatchReport): string {
     return [
-        `conversation_key=${report.conversationKey}`,
-        `response_text=${report.responseText}`,
-        `delivered=${report.delivered}`,
-        `recorded_at_ms=${report.recordedAtMs}`,
+        `conversation_key=${report.execution.conversationKey}`,
+        `response_text=${report.execution.responseText}`,
+        `delivery=${formatDeliveryStatus(report)}`,
+        `recorded_at_ms=${report.execution.recordedAtMs}`,
     ].join("\n")
+}
+
+function formatDeliveryStatus(report: BindingDispatchReport): string {
+    if (report.delivery === null) {
+        return "skipped"
+    }
+
+    if (report.delivery.failedTargets.length === 0) {
+        return "ok"
+    }
+
+    if (report.delivery.deliveredTargets.length === 0) {
+        return "failed"
+    }
+
+    return "partial"
 }

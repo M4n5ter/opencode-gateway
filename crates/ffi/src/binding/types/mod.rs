@@ -52,6 +52,7 @@ pub(crate) fn parse_execution_part_kind(value: String) -> Result<ExecutionPartKi
 pub(crate) fn parse_command_error_code(value: &str) -> Result<OpencodeCommandErrorCode, String> {
     match value.trim() {
         "missingSession" => Ok(OpencodeCommandErrorCode::MissingSession),
+        "timeout" => Ok(OpencodeCommandErrorCode::Timeout),
         "unknown" => Ok(OpencodeCommandErrorCode::Unknown),
         other => Err(format!("unsupported command error code: {other}")),
     }
@@ -71,4 +72,18 @@ pub(crate) fn normalize_optional_identifier(value: Option<String>) -> Option<Str
         let trimmed = value.trim();
         (!trimmed.is_empty()).then(|| trimmed.to_owned())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_command_error_code;
+    use opencode_gateway_runtime::OpencodeCommandErrorCode;
+
+    #[test]
+    fn parse_timeout_command_error_code() {
+        assert_eq!(
+            parse_command_error_code("timeout").expect("timeout should parse"),
+            OpencodeCommandErrorCode::Timeout
+        );
+    }
 }

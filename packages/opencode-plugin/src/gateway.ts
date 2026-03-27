@@ -125,8 +125,16 @@ export async function createGatewayRuntime(
         )
         const progressiveSupport = new TelegramProgressiveSupport(telegramClient, store, logger)
         const delivery = new GatewayTextDelivery(transport, store, progressiveSupport)
-        const executor = new GatewayExecutor(module, store, opencode, opencodeEvents, delivery, logger)
-        const mailbox = new GatewayMailboxRuntime(executor, store, logger, config.mailbox, interactions)
+        const executor = new GatewayExecutor(
+            module,
+            store,
+            opencode,
+            opencodeEvents,
+            delivery,
+            logger,
+            config.execution,
+        )
+        const mailbox = new GatewayMailboxRuntime(executor, transport, store, logger, config.mailbox, interactions)
         const cron = new GatewayCronRuntime(
             executor,
             module,
@@ -169,6 +177,11 @@ export async function createGatewayRuntime(
         cron.start()
         mailbox.start()
         telegram.start()
+        setTimeout(() => {
+            void interactions.reconcilePendingRequests().catch((error) => {
+                logger.log("warn", `interaction reconcile failed during startup: ${String(error)}`)
+            })
+        }, 0)
 
         return new GatewayPluginRuntime(
             module,

@@ -8,6 +8,8 @@ import type {
 import type { TextDeliverySession } from "../delivery/text"
 import type { OpencodeSdkAdapter } from "../opencode/adapter"
 import type { OpencodeEventHub } from "../opencode/events"
+import type { ExecutionBudget } from "./execution-budget"
+import { isTimeoutCommandResult, OpencodeCommandTimeoutError, timeoutStageForCommand } from "./opencode-timeout"
 
 const DEFAULT_FLUSH_INTERVAL_MS = 400
 
@@ -35,6 +37,7 @@ export async function runOpencodeDriver(options: {
     deliverySession: TextDeliverySessionLike | null
     prompts: OpencodeDriverPrompt[]
     onSessionAvailable?: (sessionId: string) => Promise<void> | void
+    budget: ExecutionBudget
 }): Promise<PromptExecutionResult> {
     const driver = new options.module.OpencodeExecutionDriver({
         conversationKey: options.conversationKey,
@@ -50,11 +53,20 @@ export async function runOpencodeDriver(options: {
         let step = driver.start()
         for (;;) {
             if (step.kind === "command") {
-                activeSessionId = await syncSessionContext(activeSessionId, step.command, options.onSessionAvailable)
-                registration = syncDriverRegistration(registration, step.command, driver, options)
-                const result = await options.opencode.execute(step.command)
+                const command = step.command
+                options.budget.throwIfHardTimedOut(`executing ${step.command.kind}`)
+                activeSessionId = await syncSessionContext(activeSessionId, command, options.onSessionAvailable)
+                registration = syncDriverRegistration(registration, command, driver, options)
+                const result = await options.opencode.execute(options.budget.applyToCommand(command))
                 activeSessionId = await syncSessionContext(activeSessionId, result, options.onSessionAvailable)
                 registration = syncDriverRegistration(registration, result, driver, options)
+                if (isTimeoutCommandResult(result)) {
+                    throw new OpencodeCommandTimeoutError(
+                        timeoutStageForCommand(command),
+                        result.message,
+                        result.sessionId,
+                    )
+                }
                 step = driver.resume(result)
                 continue
             }

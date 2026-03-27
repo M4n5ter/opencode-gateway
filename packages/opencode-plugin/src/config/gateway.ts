@@ -15,6 +15,7 @@ type RawGatewayConfig = {
         state_db?: unknown
         log_level?: unknown
         mailbox?: unknown
+        execution?: unknown
         timezone?: unknown
     }
     memory?: unknown
@@ -36,6 +37,13 @@ type RawMailboxRouteConfig = {
     mailbox_key?: unknown
 }
 
+type RawExecutionConfig = {
+    session_wait_timeout_ms?: unknown
+    prompt_progress_timeout_ms?: unknown
+    hard_timeout_ms?: unknown
+    abort_settle_timeout_ms?: unknown
+}
+
 export type GatewayMailboxRouteConfig = {
     channel: string
     target: string
@@ -49,6 +57,13 @@ export type GatewayMailboxConfig = {
     routes: GatewayMailboxRouteConfig[]
 }
 
+export type GatewayExecutionConfig = {
+    sessionWaitTimeoutMs: number
+    promptProgressTimeoutMs: number
+    hardTimeoutMs: number | null
+    abortSettleTimeoutMs: number
+}
+
 export type GatewayConfig = {
     configPath: string
     stateDbPath: string
@@ -58,6 +73,7 @@ export type GatewayConfig = {
     hasLegacyGatewayTimezone: boolean
     legacyGatewayTimezone: string | null
     mailbox: GatewayMailboxConfig
+    execution: GatewayExecutionConfig
     memory: GatewayMemoryConfig
     cron: CronConfig
     telegram: TelegramConfig
@@ -86,6 +102,7 @@ export async function loadGatewayConfig(env: EnvSource = process.env): Promise<G
         hasLegacyGatewayTimezone: rawConfig?.gateway?.timezone !== undefined,
         legacyGatewayTimezone: readLegacyGatewayTimezone(rawConfig?.gateway?.timezone),
         mailbox: parseMailboxConfig(rawConfig?.gateway?.mailbox),
+        execution: parseExecutionConfig(rawConfig?.gateway?.execution),
         memory: await parseMemoryConfig(rawConfig?.memory, workspaceDirPath),
         cron: parseCronConfig(rawConfig?.cron),
         telegram: parseTelegramConfig(rawConfig?.channels?.telegram, env),
@@ -99,6 +116,29 @@ function parseMailboxConfig(value: unknown): GatewayMailboxConfig {
         batchReplies: readBoolean(table.batch_replies, "gateway.mailbox.batch_replies", false),
         batchWindowMs: readBatchWindowMs(table.batch_window_ms),
         routes: readMailboxRoutes(table.routes),
+    }
+}
+
+function parseExecutionConfig(value: unknown): GatewayExecutionConfig {
+    const table = readExecutionTable(value)
+
+    return {
+        sessionWaitTimeoutMs: readPositiveInteger(
+            table.session_wait_timeout_ms,
+            "gateway.execution.session_wait_timeout_ms",
+            30 * 60_000,
+        ),
+        promptProgressTimeoutMs: readPositiveInteger(
+            table.prompt_progress_timeout_ms,
+            "gateway.execution.prompt_progress_timeout_ms",
+            30 * 60_000,
+        ),
+        hardTimeoutMs: readOptionalHardTimeoutMs(table.hard_timeout_ms),
+        abortSettleTimeoutMs: readPositiveInteger(
+            table.abort_settle_timeout_ms,
+            "gateway.execution.abort_settle_timeout_ms",
+            5_000,
+        ),
     }
 }
 
@@ -141,6 +181,18 @@ function readMailboxTable(value: unknown): RawMailboxConfig {
     return value as RawMailboxConfig
 }
 
+function readExecutionTable(value: unknown): RawExecutionConfig {
+    if (value === undefined) {
+        return {}
+    }
+
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+        throw new Error("gateway.execution must be a table when present")
+    }
+
+    return value as RawExecutionConfig
+}
+
 function readBoolean(value: unknown, field: string, fallback: boolean): boolean {
     if (value === undefined) {
         return fallback
@@ -164,6 +216,42 @@ function readBatchWindowMs(value: unknown): number {
 
     if (value < 0 || value > 60_000) {
         throw new Error("gateway.mailbox.batch_window_ms must be between 0 and 60000")
+    }
+
+    return value
+}
+
+function readPositiveInteger(value: unknown, field: string, fallback: number): number {
+    if (value === undefined) {
+        return fallback
+    }
+
+    if (typeof value !== "number" || !Number.isInteger(value)) {
+        throw new Error(`${field} must be an integer when present`)
+    }
+
+    if (value <= 0) {
+        throw new Error(`${field} must be greater than 0`)
+    }
+
+    return value
+}
+
+function readOptionalHardTimeoutMs(value: unknown): number | null {
+    if (value === undefined) {
+        return null
+    }
+
+    if (value === null) {
+        return null
+    }
+
+    if (typeof value !== "number" || !Number.isInteger(value)) {
+        throw new Error("gateway.execution.hard_timeout_ms must be an integer when present")
+    }
+
+    if (value < 60_000) {
+        throw new Error("gateway.execution.hard_timeout_ms must be at least 60000")
     }
 
     return value

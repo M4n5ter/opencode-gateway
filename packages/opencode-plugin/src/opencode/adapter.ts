@@ -12,9 +12,10 @@ import type {
 import { delay } from "../runtime/delay"
 
 const SESSION_IDLE_POLL_MS = 250
-const PROMPT_RESPONSE_PROGRESS_TIMEOUT_MS = 90_000
-const PROMPT_RESPONSE_MAX_TIMEOUT_MS = 10 * 60_000
-const PROMPT_RESPONSE_SETTLE_MS = 1_000
+const DEFAULT_SDK_REQUEST_TIMEOUT_MS = 30_000
+const DEFAULT_WAIT_UNTIL_IDLE_TIMEOUT_MS = 30 * 60_000
+const DEFAULT_PROMPT_RESPONSE_PROGRESS_TIMEOUT_MS = 30 * 60_000
+const DEFAULT_PROMPT_RESPONSE_SETTLE_MS = 1_000
 
 type OpencodeClient = PluginInput["client"]
 
@@ -79,6 +80,7 @@ export class OpencodeSdkAdapter {
             query: { directory: this.directory },
             responseStyle: "data",
             throwOnError: true,
+            signal: AbortSignal.timeout(DEFAULT_SDK_REQUEST_TIMEOUT_MS),
         })
 
         return unwrapData<SessionRecord>(session).id
@@ -89,6 +91,7 @@ export class OpencodeSdkAdapter {
             query: { directory: this.directory },
             responseStyle: "data",
             throwOnError: true,
+            signal: AbortSignal.timeout(DEFAULT_SDK_REQUEST_TIMEOUT_MS),
         })
         const current = unwrapData<Record<string, { type?: string }>>(statuses)[sessionId]
         return current?.type === "busy"
@@ -101,6 +104,7 @@ export class OpencodeSdkAdapter {
                 query: { directory: this.directory },
                 responseStyle: "data",
                 throwOnError: true,
+                signal: AbortSignal.timeout(DEFAULT_SDK_REQUEST_TIMEOUT_MS),
             })
         } catch (error) {
             if (isMissingSessionError(error)) {
@@ -119,7 +123,7 @@ export class OpencodeSdkAdapter {
                 case "createSession":
                     return await this.createSession(command.title)
                 case "waitUntilIdle":
-                    return await this.waitUntilIdle(command.sessionId)
+                    return await this.waitUntilIdle(command)
                 case "appendPrompt":
                     return await this.appendPrompt(command)
                 case "sendPromptAsync":
@@ -143,6 +147,7 @@ export class OpencodeSdkAdapter {
                 query: { directory: this.directory },
                 responseStyle: "data",
                 throwOnError: true,
+                signal: AbortSignal.timeout(DEFAULT_SDK_REQUEST_TIMEOUT_MS),
             })
 
             return {
@@ -170,22 +175,32 @@ export class OpencodeSdkAdapter {
         }
     }
 
-    private async waitUntilIdle(sessionId: string): Promise<BindingOpencodeCommandResult> {
+    private async waitUntilIdle(
+        command: Extract<BindingOpencodeCommand, { kind: "waitUntilIdle" }>,
+    ): Promise<BindingOpencodeCommandResult> {
+        const timeoutMs = normalizeTimeoutMs(command.timeoutMs, DEFAULT_WAIT_UNTIL_IDLE_TIMEOUT_MS, "timeoutMs")
+        const deadlineMs = Date.now() + timeoutMs
+
         for (;;) {
             const statuses = await this.client.session.status({
                 query: { directory: this.directory },
                 responseStyle: "data",
                 throwOnError: true,
+                signal: createRequestSignal(deadlineMs),
             })
-            const current = unwrapData<Record<string, { type?: string }>>(statuses)[sessionId]
+            const current = unwrapData<Record<string, { type?: string }>>(statuses)[command.sessionId]
             if (!current || current.type === "idle") {
                 return {
                     kind: "waitUntilIdle",
-                    sessionId,
+                    sessionId: command.sessionId,
                 }
             }
 
-            await delay(SESSION_IDLE_POLL_MS)
+            if (Date.now() >= deadlineMs) {
+                throw new OpencodeTimeoutError(`session ${command.sessionId} did not become idle within ${timeoutMs}ms`)
+            }
+
+            await delay(Math.min(SESSION_IDLE_POLL_MS, remainingBefore(deadlineMs)))
         }
     }
 
@@ -202,6 +217,7 @@ export class OpencodeSdkAdapter {
             },
             responseStyle: "data",
             throwOnError: true,
+            signal: AbortSignal.timeout(DEFAULT_SDK_REQUEST_TIMEOUT_MS),
         })
 
         return {
@@ -221,6 +237,7 @@ export class OpencodeSdkAdapter {
                 parts: command.parts.map(toSessionPromptPart),
             },
             throwOnError: true,
+            signal: AbortSignal.timeout(DEFAULT_SDK_REQUEST_TIMEOUT_MS),
         })
 
         return {
@@ -233,8 +250,17 @@ export class OpencodeSdkAdapter {
         command: Extract<BindingOpencodeCommand, { kind: "awaitPromptResponse" }>,
     ): Promise<BindingOpencodeCommandResult> {
         const startedAtMs = Date.now()
-        const maxDeadline = startedAtMs + PROMPT_RESPONSE_MAX_TIMEOUT_MS
-        let progressDeadline = startedAtMs + PROMPT_RESPONSE_PROGRESS_TIMEOUT_MS
+        const progressTimeoutMs = normalizeTimeoutMs(
+            command.progressTimeoutMs,
+            DEFAULT_PROMPT_RESPONSE_PROGRESS_TIMEOUT_MS,
+            "progressTimeoutMs",
+        )
+        const hardDeadline =
+            command.hardTimeoutMs === undefined || command.hardTimeoutMs === null
+                ? null
+                : startedAtMs + normalizeTimeoutMs(command.hardTimeoutMs, 1, "hardTimeoutMs")
+        const settleMs = normalizeTimeoutMs(command.settleMs, DEFAULT_PROMPT_RESPONSE_SETTLE_MS, "settleMs")
+        let progressDeadline = startedAtMs + progressTimeoutMs
         let stableCandidateKey: string | null = null
         let stableCandidateSinceMs: number | null = null
         let progressKey: string | null = null
@@ -248,6 +274,7 @@ export class OpencodeSdkAdapter {
                 },
                 responseStyle: "data",
                 throwOnError: true,
+                signal: createRequestSignal(resolvePollDeadline(progressDeadline, hardDeadline)),
             })
             const assistantChildren = listAssistantResponses(unwrapData<MessageResponse[]>(messages), command.messageId)
             const nextProgressKey = createAssistantProgressKey(assistantChildren)
@@ -255,7 +282,7 @@ export class OpencodeSdkAdapter {
 
             if (progressKey !== nextProgressKey) {
                 progressKey = nextProgressKey
-                progressDeadline = now + PROMPT_RESPONSE_PROGRESS_TIMEOUT_MS
+                progressDeadline = now + progressTimeoutMs
             }
 
             const response = selectAssistantResponse(assistantChildren)
@@ -263,7 +290,7 @@ export class OpencodeSdkAdapter {
             if (response !== null) {
                 const candidateKey = createAssistantCandidateKey(response)
                 if (stableCandidateKey === candidateKey) {
-                    if (stableCandidateSinceMs !== null && now - stableCandidateSinceMs >= PROMPT_RESPONSE_SETTLE_MS) {
+                    if (stableCandidateSinceMs !== null && now - stableCandidateSinceMs >= settleMs) {
                         return toAwaitPromptResponseResult(command.sessionId, response)
                     }
                 } else {
@@ -275,17 +302,19 @@ export class OpencodeSdkAdapter {
                 stableCandidateSinceMs = null
             }
 
-            if (now >= progressDeadline || now >= maxDeadline) {
+            if (now >= progressDeadline || (hardDeadline !== null && now >= hardDeadline)) {
                 if (response !== null) {
                     return toAwaitPromptResponseResult(command.sessionId, response)
                 }
 
-                throw new Error(
-                    `assistant message for prompt ${command.messageId} is unavailable after prompt completion`,
+                throw new OpencodeTimeoutError(
+                    `assistant message for prompt ${command.messageId} is unavailable before timeout`,
                 )
             }
 
-            await delay(SESSION_IDLE_POLL_MS)
+            await delay(
+                Math.min(SESSION_IDLE_POLL_MS, remainingBefore(resolvePollDeadline(progressDeadline, hardDeadline))),
+            )
         }
     }
 
@@ -300,6 +329,7 @@ export class OpencodeSdkAdapter {
             query: { directory: this.directory },
             responseStyle: "data",
             throwOnError: true,
+            signal: AbortSignal.timeout(DEFAULT_SDK_REQUEST_TIMEOUT_MS),
         })
 
         return {
@@ -321,6 +351,7 @@ export class OpencodeSdkAdapter {
             },
             responseStyle: "data",
             throwOnError: true,
+            signal: AbortSignal.timeout(DEFAULT_SDK_REQUEST_TIMEOUT_MS),
         })
 
         return {
@@ -471,9 +502,44 @@ function toErrorResult(command: BindingOpencodeCommand, error: unknown): Binding
         kind: "error",
         commandKind: command.kind,
         sessionId: "sessionId" in command ? command.sessionId : null,
-        code: isMissingSessionError(error) ? "missingSession" : "unknown",
+        code: isMissingSessionError(error) ? "missingSession" : isTimeoutError(error) ? "timeout" : "unknown",
         message: extractErrorMessage(error),
     }
+}
+
+class OpencodeTimeoutError extends Error {
+    constructor(message: string) {
+        super(message)
+        this.name = "OpencodeTimeoutError"
+    }
+}
+
+function normalizeTimeoutMs(value: number | null | undefined, fallback: number, field: string): number {
+    if (value === undefined || value === null) {
+        return fallback
+    }
+
+    if (!Number.isInteger(value) || value <= 0) {
+        throw new Error(`${field} must be a positive integer`)
+    }
+
+    return value
+}
+
+function createRequestSignal(deadlineMs: number): AbortSignal {
+    return AbortSignal.timeout(remainingBefore(deadlineMs))
+}
+
+function resolvePollDeadline(progressDeadlineMs: number, hardDeadlineMs: number | null): number {
+    if (hardDeadlineMs === null) {
+        return progressDeadlineMs
+    }
+
+    return Math.min(progressDeadlineMs, hardDeadlineMs)
+}
+
+function remainingBefore(deadlineMs: number): number {
+    return Math.max(1, deadlineMs - Date.now())
 }
 
 function isMissingSessionError(error: unknown): boolean {
@@ -484,6 +550,19 @@ function isMissingSessionError(error: unknown): boolean {
     const name = "name" in error ? error.name : undefined
     const message = "data" in error ? extractDataMessage(error.data) : null
     return name === "NotFoundError" && message?.includes("Session not found:") === true
+}
+
+function isTimeoutError(error: unknown): boolean {
+    if (error instanceof OpencodeTimeoutError) {
+        return true
+    }
+
+    if (typeof error !== "object" || error === null) {
+        return false
+    }
+
+    const name = "name" in error ? error.name : undefined
+    return name === "TimeoutError" || name === "AbortError"
 }
 
 function extractDataMessage(value: unknown): string | null {

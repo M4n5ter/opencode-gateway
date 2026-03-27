@@ -11,7 +11,13 @@ export type {
 } from "./execution"
 export type {
     BindingCronJobSpec,
+    BindingDeferredDeliveryStrategy,
+    BindingDeferredPreviewContext,
+    BindingDeliveryFailure,
+    BindingDeliveryReport,
     BindingDeliveryTarget,
+    BindingDispatchReport,
+    BindingExecutionReport,
     BindingHostAck,
     BindingInboundAttachment,
     BindingInboundMessage,
@@ -20,7 +26,6 @@ export type {
     BindingOutboundMessage,
     BindingPreparedExecution,
     BindingPromptPart,
-    BindingRuntimeReport,
     BindingTransportHost,
     GatewayContract,
     GatewayStatusSnapshot,

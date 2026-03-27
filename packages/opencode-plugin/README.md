@@ -97,6 +97,13 @@ state_db = "/home/you/.local/share/opencode-gateway/state.db"
 # target = "6212645712"
 # topic = "12345"
 # mailbox_key = "shared:telegram:dev"
+#
+# Optional execution timeouts. Defaults are long-task friendly:
+# [gateway.execution]
+# session_wait_timeout_ms = 1800000
+# prompt_progress_timeout_ms = 1800000
+# hard_timeout_ms = 7200000
+# abort_settle_timeout_ms = 5000
 
 [cron]
 enabled = true
@@ -145,6 +152,11 @@ path = "memory/snippets"
 description = "Selected files are auto-injected; the rest stay searchable on demand"
 globs = ["**/*.md", "notes/**/*.txt"]
 ```
+
+`[gateway.execution]` is optional. By default the gateway allows long-running
+OpenCode tasks and only times out stalled waits: `session_wait_timeout_ms` and
+`prompt_progress_timeout_ms` default to 30 minutes, `hard_timeout_ms` is
+disabled, and `abort_settle_timeout_ms` defaults to 5 seconds.
 
 When Telegram is enabled, either set `channels.telegram.bot_token` directly or
 export the token through the configured environment variable, for example:

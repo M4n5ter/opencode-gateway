@@ -82,6 +82,9 @@ test("GatewayExecutor recreates a stale persisted session before completing a on
                                 deliveredBodies.push(finalText)
                                 return true
                             },
+                            async handoffFinalDelivery() {
+                                return { strategy: { mode: "send" }, previewContext: null }
+                            },
                         },
                     ]
                 },
@@ -100,8 +103,14 @@ test("GatewayExecutor recreates a stale persisted session before completing a on
         ])
         expect(store.getSessionBinding("telegram:42")).toBe("ses_fresh")
         expect(deliveredBodies).toEqual(["hello back"])
-        expect(report.responseText).toBe("hello back")
-        expect(report.delivered).toBe(true)
+        expect(report.execution.responseText).toBe("hello back")
+        expect(report.delivery?.deliveredTargets).toEqual([
+            {
+                channel: "telegram",
+                target: "42",
+                topic: null,
+            },
+        ])
     } finally {
         restoreNow()
         db.close()
@@ -179,6 +188,9 @@ test("GatewayExecutor appends earlier prompts and forwards progressive previews 
                                 deliveredBodies.push(finalText)
                                 return true
                             },
+                            async handoffFinalDelivery() {
+                                return { strategy: { mode: "send" }, previewContext: null }
+                            },
                         },
                     ]
                 },
@@ -226,9 +238,87 @@ test("GatewayExecutor appends earlier prompts and forwards progressive previews 
             },
         ])
         expect(deliveredBodies).toEqual(["hello back"])
-        expect(report.responseText).toBe("hello back")
+        expect(report.execution.responseText).toBe("hello back")
     } finally {
         restoreNow()
+        db.close()
+    }
+})
+
+test("GatewayExecutor records session wait timeouts and evicts the persisted binding", async () => {
+    const db = createMemoryDatabase()
+
+    try {
+        migrateGatewayDatabase(db)
+        const store = new SqliteStore(db)
+        store.putSessionBinding("telegram:42", "ses_stale", 0)
+        const events = new OpencodeEventHub()
+        const executor = new GatewayExecutor(
+            createModule(),
+            store,
+            {
+                async execute(command: BindingOpencodeCommand): Promise<BindingOpencodeCommandResult> {
+                    switch (command.kind) {
+                        case "lookupSession":
+                            return { kind: "lookupSession", sessionId: command.sessionId, found: true }
+                        case "waitUntilIdle":
+                            return {
+                                kind: "error",
+                                commandKind: "waitUntilIdle",
+                                sessionId: command.sessionId,
+                                code: "timeout",
+                                message: "session ses_stale did not become idle within 1000ms",
+                            }
+                        case "appendPrompt":
+                        case "sendPromptAsync":
+                        case "awaitPromptResponse":
+                        case "createSession":
+                            throw new Error("unused")
+                    }
+
+                    throw new Error(`unexpected command: ${command.kind}`)
+                },
+                async isSessionBusy() {
+                    return false
+                },
+                async abortSession(): Promise<void> {},
+            },
+            events,
+            {
+                async openMany() {
+                    return [
+                        {
+                            mode: "oneshot" as const,
+                            async preview(): Promise<void> {},
+                            async finish(): Promise<boolean> {
+                                return true
+                            },
+                            async handoffFinalDelivery() {
+                                return { strategy: { mode: "send" }, previewContext: null }
+                            },
+                        },
+                    ]
+                },
+            },
+            new MemoryLogger(),
+        )
+
+        await expect(executor.handleInboundMessage(createMessage())).rejects.toThrow(
+            "session ses_stale did not become idle within 1000ms",
+        )
+
+        expect(store.getSessionBinding("telegram:42")).toBeNull()
+        const journal = db
+            .query<{ payload_json: string }, []>(
+                "SELECT payload_json FROM runtime_journal WHERE kind = 'execution_timeout' ORDER BY id DESC LIMIT 1;",
+            )
+            .get()
+        expect(journal ? JSON.parse(journal.payload_json) : null).toEqual({
+            stage: "session_wait",
+            sessionId: "ses_stale",
+            error: "session ses_stale did not become idle within 1000ms",
+        })
+    } finally {
         db.close()
     }
 })
@@ -294,6 +384,9 @@ test("GatewayExecutor preserves a session binding that changed during execution"
                             async preview(): Promise<void> {},
                             async finish(): Promise<boolean> {
                                 return true
+                            },
+                            async handoffFinalDelivery() {
+                                return { strategy: { mode: "send" }, previewContext: null }
                             },
                         },
                     ]
@@ -384,6 +477,7 @@ test("GatewayExecutor appends context into the target conversation without trigg
             {
                 kind: "waitUntilIdle",
                 sessionId: "ses_context",
+                timeoutMs: 30 * 60_000,
             },
             {
                 kind: "appendPrompt",
@@ -468,6 +562,9 @@ test("GatewayExecutor aborts a residual busy persisted session before dispatchin
                             async finish(): Promise<boolean> {
                                 return true
                             },
+                            async handoffFinalDelivery() {
+                                return { strategy: { mode: "send" }, previewContext: null }
+                            },
                         },
                     ]
                 },
@@ -548,6 +645,9 @@ test("GatewayExecutor aborts a residual busy session after prompt completion", a
                             async finish(): Promise<boolean> {
                                 return true
                             },
+                            async handoffFinalDelivery() {
+                                return { strategy: { mode: "send" }, previewContext: null }
+                            },
                         },
                     ]
                 },
@@ -626,6 +726,9 @@ test("GatewayExecutor lets a residual busy session settle before aborting it", a
                             async preview(): Promise<void> {},
                             async finish(): Promise<boolean> {
                                 return true
+                            },
+                            async handoffFinalDelivery() {
+                                return { strategy: { mode: "send" }, previewContext: null }
                             },
                         },
                     ]

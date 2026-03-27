@@ -1,4 +1,4 @@
-import type { BindingDeliveryTarget } from "../binding"
+import type { BindingDeferredDeliveryStrategy, BindingDeferredPreviewContext, BindingDeliveryTarget } from "../binding"
 import type { GatewayTransportHost } from "../host/transport"
 import type { SqliteStore } from "../store/sqlite"
 import { recordTelegramPreviewEmit, recordTelegramStreamFallback } from "../telegram/state"
@@ -15,12 +15,23 @@ export type TextDeliverySession = {
     mode: "oneshot" | "progressive"
     preview(preview: TextDeliveryPreview): Promise<void>
     finish(finalText: string | null): Promise<boolean>
+    handoffFinalDelivery(): Promise<TextDeliveryDeferredHandle>
 }
 
 export type TextDeliveryOptions = {
     streamOpenDelayMs?: number
     streamEditIntervalMs?: number
     typingKeepaliveIntervalMs?: number
+}
+
+export type TargetTextDeliverySession = {
+    target: BindingDeliveryTarget
+    session: TextDeliverySession
+}
+
+export type TextDeliveryDeferredHandle = {
+    strategy: BindingDeferredDeliveryStrategy
+    previewContext: BindingDeferredPreviewContext | null
 }
 
 type ProgressiveTextDeliveryOptions = {
@@ -50,12 +61,29 @@ export class GatewayTextDelivery {
         targets: BindingDeliveryTarget[],
         preference: DeliveryModePreference,
     ): Promise<TextDeliverySession[]> {
-        const uniqueTargets = dedupeTargets(targets)
-        if (uniqueTargets.length === 0) {
+        const sessions = await this.openTargetSessions(targets, preference)
+        if (sessions.length === 0) {
             return [new NoopTextDeliverySession()]
         }
+        const uniqueSessions = sessions.map((entry) => entry.session)
 
-        const sessions = await Promise.all(
+        if (uniqueSessions.length === 1) {
+            return uniqueSessions
+        }
+
+        return [new FanoutTextDeliverySession(uniqueSessions)]
+    }
+
+    async openTargetSessions(
+        targets: BindingDeliveryTarget[],
+        preference: DeliveryModePreference,
+    ): Promise<TargetTextDeliverySession[]> {
+        const uniqueTargets = dedupeTargets(targets)
+        if (uniqueTargets.length === 0) {
+            return []
+        }
+
+        return await Promise.all(
             uniqueTargets.map(async (target) => {
                 const mode = await this.telegramSupport.resolveMode(target, preference)
                 if (mode === "progressive") {
@@ -75,18 +103,15 @@ export class GatewayTextDelivery {
                         },
                     )
                     session.start()
-                    return session
+                    return { target, session } satisfies TargetTextDeliverySession
                 }
 
-                return new OneshotTextDeliverySession(target, this.transport)
+                return {
+                    target,
+                    session: new OneshotTextDeliverySession(target, this.transport),
+                } satisfies TargetTextDeliverySession
             }),
         )
-
-        if (sessions.length === 1) {
-            return sessions
-        }
-
-        return [new FanoutTextDeliverySession(sessions)]
     }
 
     async sendTest(
@@ -121,6 +146,13 @@ class NoopTextDeliverySession implements TextDeliverySession {
     async finish(_finalText: string | null): Promise<boolean> {
         return false
     }
+
+    async handoffFinalDelivery(): Promise<TextDeliveryDeferredHandle> {
+        return {
+            strategy: { mode: "send" },
+            previewContext: null,
+        }
+    }
 }
 
 class FanoutTextDeliverySession implements TextDeliverySession {
@@ -142,6 +174,12 @@ class FanoutTextDeliverySession implements TextDeliverySession {
         }
 
         return results.some((result) => result.status === "fulfilled" && result.value)
+    }
+
+    async handoffFinalDelivery(): Promise<TextDeliveryDeferredHandle> {
+        const results = await Promise.all(this.sessions.map((session) => session.handoffFinalDelivery()))
+        const editHandle = results.find((result) => result.strategy.mode === "edit")
+        return editHandle ?? { strategy: { mode: "send" }, previewContext: null }
     }
 }
 
@@ -165,11 +203,18 @@ class OneshotTextDeliverySession implements TextDeliverySession {
             body: finalText,
         })
 
-        if (ack.errorMessage !== null) {
+        if (ack.kind !== "delivered") {
             throw new Error(ack.errorMessage)
         }
 
         return true
+    }
+
+    async handoffFinalDelivery(): Promise<TextDeliveryDeferredHandle> {
+        return {
+            strategy: { mode: "send" },
+            previewContext: null,
+        }
     }
 }
 
@@ -252,6 +297,21 @@ class ProgressiveTextDeliverySession implements TextDeliverySession {
             this.stopTypingKeepalive()
             this.cancelOpenTimer()
             this.cancelFlushTimer()
+        }
+    }
+
+    async handoffFinalDelivery(): Promise<TextDeliveryDeferredHandle> {
+        this.acceptingPreviews = false
+        this.stopTypingKeepalive()
+        this.cancelOpenTimer()
+        this.cancelFlushTimer()
+        await this.awaitPendingWork()
+        this.finished = true
+
+        return {
+            strategy:
+                this.streamMessageId === null ? { mode: "send" } : { mode: "edit", messageId: this.streamMessageId },
+            previewContext: toDeferredPreviewContext(this.latestPreview),
         }
     }
 
@@ -356,7 +416,7 @@ class ProgressiveTextDeliverySession implements TextDeliverySession {
             body: finalText,
         })
 
-        if (ack.errorMessage !== null) {
+        if (ack.kind !== "delivered") {
             throw new Error(ack.errorMessage)
         }
 
@@ -436,6 +496,26 @@ function normalizePreview(preview: TextDeliveryPreview): TextDeliveryPreview | n
         processText,
         reasoningText,
         answerText,
+    }
+}
+
+function toDeferredPreviewContext(preview: TextDeliveryPreview | null): BindingDeferredPreviewContext | null {
+    if (preview === null) {
+        return null
+    }
+
+    const normalized = normalizePreview({
+        processText: preview.processText,
+        reasoningText: preview.reasoningText,
+        answerText: null,
+    })
+    if (normalized === null) {
+        return null
+    }
+
+    return {
+        processText: normalized.processText,
+        reasoningText: normalized.reasoningText,
     }
 }
 

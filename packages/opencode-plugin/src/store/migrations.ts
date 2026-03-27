@@ -1,6 +1,6 @@
 import type { SqliteDatabaseLike } from "./database"
 
-const LATEST_SCHEMA_VERSION = 8
+const LATEST_SCHEMA_VERSION = 12
 
 export function migrateGatewayDatabase(db: SqliteDatabaseLike): void {
     db.exec("PRAGMA journal_mode = WAL;")
@@ -48,6 +48,26 @@ export function migrateGatewayDatabase(db: SqliteDatabaseLike): void {
 
     if (currentVersion === 7) {
         migrateToV8(db)
+        currentVersion = 8
+    }
+
+    if (currentVersion === 8) {
+        migrateToV9(db)
+        currentVersion = 9
+    }
+
+    if (currentVersion === 9) {
+        migrateToV10(db)
+        currentVersion = 10
+    }
+
+    if (currentVersion === 10) {
+        migrateToV11(db)
+        currentVersion = 11
+    }
+
+    if (currentVersion === 11) {
+        migrateToV12(db)
     }
 }
 
@@ -268,6 +288,334 @@ function migrateToV8(db: SqliteDatabaseLike): void {
         FROM pending_questions;
 
         DROP TABLE pending_questions;
+    `)
+    db.exec("PRAGMA user_version = 8;")
+}
+
+function migrateToV9(db: SqliteDatabaseLike): void {
+    db.exec(`
+        DROP TABLE IF EXISTS session_bindings;
+
+        CREATE TABLE session_bindings (
+            conversation_key TEXT PRIMARY KEY NOT NULL,
+            session_id TEXT NOT NULL,
+            updated_at_ms INTEGER NOT NULL
+        );
+
+        DROP TABLE IF EXISTS mailbox_deliveries;
+        DROP TABLE IF EXISTS mailbox_job_entries;
+        DROP TABLE IF EXISTS mailbox_jobs;
+        DROP TABLE IF EXISTS mailbox_entry_attachments;
+        DROP TABLE IF EXISTS mailbox_entries;
+
+        CREATE TABLE mailbox_entries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            mailbox_key TEXT NOT NULL,
+            source_kind TEXT NOT NULL,
+            external_id TEXT NOT NULL,
+            sender TEXT NOT NULL,
+            body TEXT NOT NULL,
+            reply_channel TEXT,
+            reply_target TEXT,
+            reply_topic TEXT,
+            created_at_ms INTEGER NOT NULL
+        );
+
+        CREATE UNIQUE INDEX mailbox_entries_source_kind_external_id_idx
+            ON mailbox_entries (source_kind, external_id);
+
+        CREATE INDEX mailbox_entries_mailbox_key_id_idx
+            ON mailbox_entries (mailbox_key, id);
+
+        CREATE TABLE mailbox_entry_attachments (
+            mailbox_entry_id INTEGER NOT NULL REFERENCES mailbox_entries(id) ON DELETE CASCADE,
+            ordinal INTEGER NOT NULL,
+            kind TEXT NOT NULL,
+            mime_type TEXT NOT NULL,
+            file_name TEXT,
+            local_path TEXT NOT NULL,
+            PRIMARY KEY (mailbox_entry_id, ordinal)
+        );
+
+        CREATE INDEX mailbox_entry_attachments_entry_id_ordinal_idx
+            ON mailbox_entry_attachments (mailbox_entry_id, ordinal);
+
+        CREATE TABLE mailbox_jobs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            mailbox_key TEXT NOT NULL,
+            status TEXT NOT NULL,
+            attempt_count INTEGER NOT NULL,
+            leased_until_ms INTEGER,
+            next_attempt_at_ms INTEGER NOT NULL,
+            last_error TEXT,
+            response_text TEXT,
+            final_text TEXT,
+            session_id TEXT,
+            created_at_ms INTEGER NOT NULL,
+            updated_at_ms INTEGER NOT NULL,
+            started_at_ms INTEGER,
+            finished_at_ms INTEGER
+        );
+
+        CREATE INDEX mailbox_jobs_status_next_attempt_created_at_idx
+            ON mailbox_jobs (status, next_attempt_at_ms, created_at_ms, id);
+
+        CREATE INDEX mailbox_jobs_mailbox_key_created_at_idx
+            ON mailbox_jobs (mailbox_key, created_at_ms, id);
+
+        CREATE TABLE mailbox_job_entries (
+            job_id INTEGER NOT NULL REFERENCES mailbox_jobs(id) ON DELETE CASCADE,
+            mailbox_entry_id INTEGER NOT NULL REFERENCES mailbox_entries(id) ON DELETE CASCADE,
+            ordinal INTEGER NOT NULL,
+            PRIMARY KEY (job_id, ordinal),
+            UNIQUE (mailbox_entry_id)
+        );
+
+        CREATE INDEX mailbox_job_entries_mailbox_entry_id_idx
+            ON mailbox_job_entries (mailbox_entry_id);
+
+        CREATE TABLE mailbox_deliveries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id INTEGER NOT NULL REFERENCES mailbox_jobs(id) ON DELETE CASCADE,
+            delivery_channel TEXT NOT NULL,
+            delivery_target TEXT NOT NULL,
+            delivery_topic TEXT NOT NULL,
+            status TEXT NOT NULL,
+            attempt_count INTEGER NOT NULL,
+            leased_until_ms INTEGER,
+            next_attempt_at_ms INTEGER NOT NULL,
+            last_error TEXT,
+            created_at_ms INTEGER NOT NULL,
+            updated_at_ms INTEGER NOT NULL,
+            delivered_at_ms INTEGER
+        );
+
+        CREATE UNIQUE INDEX mailbox_deliveries_job_target_topic_idx
+            ON mailbox_deliveries (job_id, delivery_channel, delivery_target, delivery_topic);
+
+        CREATE INDEX mailbox_deliveries_status_next_attempt_created_at_idx
+            ON mailbox_deliveries (status, next_attempt_at_ms, created_at_ms, id);
+
+        CREATE INDEX mailbox_deliveries_job_id_status_idx
+            ON mailbox_deliveries (job_id, status, id);
+    `)
+    db.exec("PRAGMA user_version = 9;")
+}
+
+function migrateToV10(db: SqliteDatabaseLike): void {
+    db.exec(`
+        DROP TABLE IF EXISTS mailbox_deliveries;
+        DROP TABLE IF EXISTS mailbox_job_entries;
+        DROP TABLE IF EXISTS mailbox_jobs;
+        DROP TABLE IF EXISTS mailbox_entry_attachments;
+        DROP TABLE IF EXISTS mailbox_entries;
+
+        CREATE TABLE mailbox_entries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            mailbox_key TEXT NOT NULL,
+            source_kind TEXT NOT NULL,
+            external_id TEXT NOT NULL,
+            sender TEXT NOT NULL,
+            body TEXT NOT NULL,
+            reply_channel TEXT,
+            reply_target TEXT,
+            reply_topic TEXT,
+            created_at_ms INTEGER NOT NULL
+        );
+
+        CREATE UNIQUE INDEX mailbox_entries_source_kind_external_id_idx
+            ON mailbox_entries (source_kind, external_id);
+
+        CREATE INDEX mailbox_entries_mailbox_key_id_idx
+            ON mailbox_entries (mailbox_key, id);
+
+        CREATE TABLE mailbox_entry_attachments (
+            mailbox_entry_id INTEGER NOT NULL REFERENCES mailbox_entries(id) ON DELETE CASCADE,
+            ordinal INTEGER NOT NULL,
+            kind TEXT NOT NULL,
+            mime_type TEXT NOT NULL,
+            file_name TEXT,
+            local_path TEXT NOT NULL,
+            PRIMARY KEY (mailbox_entry_id, ordinal)
+        );
+
+        CREATE INDEX mailbox_entry_attachments_entry_id_ordinal_idx
+            ON mailbox_entry_attachments (mailbox_entry_id, ordinal);
+
+        CREATE TABLE mailbox_jobs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            mailbox_key TEXT NOT NULL,
+            status TEXT NOT NULL,
+            attempt_count INTEGER NOT NULL,
+            leased_until_ms INTEGER,
+            next_attempt_at_ms INTEGER NOT NULL,
+            last_error TEXT,
+            response_text TEXT,
+            final_text TEXT,
+            session_id TEXT,
+            created_at_ms INTEGER NOT NULL,
+            updated_at_ms INTEGER NOT NULL,
+            started_at_ms INTEGER,
+            finished_at_ms INTEGER
+        );
+
+        CREATE INDEX mailbox_jobs_status_next_attempt_created_at_idx
+            ON mailbox_jobs (status, next_attempt_at_ms, created_at_ms, id);
+
+        CREATE INDEX mailbox_jobs_mailbox_key_created_at_idx
+            ON mailbox_jobs (mailbox_key, created_at_ms, id);
+
+        CREATE TABLE mailbox_job_entries (
+            job_id INTEGER NOT NULL REFERENCES mailbox_jobs(id) ON DELETE CASCADE,
+            mailbox_entry_id INTEGER NOT NULL REFERENCES mailbox_entries(id) ON DELETE CASCADE,
+            ordinal INTEGER NOT NULL,
+            PRIMARY KEY (job_id, ordinal),
+            UNIQUE (mailbox_entry_id)
+        );
+
+        CREATE INDEX mailbox_job_entries_mailbox_entry_id_idx
+            ON mailbox_job_entries (mailbox_entry_id);
+
+        CREATE TABLE mailbox_deliveries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id INTEGER NOT NULL REFERENCES mailbox_jobs(id) ON DELETE CASCADE,
+            delivery_channel TEXT NOT NULL,
+            delivery_target TEXT NOT NULL,
+            delivery_topic TEXT NOT NULL,
+            stream_message_id INTEGER,
+            status TEXT NOT NULL,
+            attempt_count INTEGER NOT NULL,
+            leased_until_ms INTEGER,
+            next_attempt_at_ms INTEGER NOT NULL,
+            last_error TEXT,
+            created_at_ms INTEGER NOT NULL,
+            updated_at_ms INTEGER NOT NULL,
+            delivered_at_ms INTEGER
+        );
+
+        CREATE UNIQUE INDEX mailbox_deliveries_job_target_topic_idx
+            ON mailbox_deliveries (job_id, delivery_channel, delivery_target, delivery_topic);
+
+        CREATE INDEX mailbox_deliveries_status_next_attempt_created_at_idx
+            ON mailbox_deliveries (status, next_attempt_at_ms, created_at_ms, id);
+
+        CREATE INDEX mailbox_deliveries_job_id_status_idx
+            ON mailbox_deliveries (job_id, status, id);
+    `)
+    db.exec("PRAGMA user_version = 10;")
+}
+
+function migrateToV11(db: SqliteDatabaseLike): void {
+    db.exec(`
+        DROP TABLE IF EXISTS mailbox_deliveries;
+        DROP TABLE IF EXISTS mailbox_job_entries;
+        DROP TABLE IF EXISTS mailbox_jobs;
+        DROP TABLE IF EXISTS mailbox_entry_attachments;
+        DROP TABLE IF EXISTS mailbox_entries;
+
+        CREATE TABLE mailbox_entries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            mailbox_key TEXT NOT NULL,
+            source_kind TEXT NOT NULL,
+            external_id TEXT NOT NULL,
+            sender TEXT NOT NULL,
+            body TEXT NOT NULL,
+            reply_channel TEXT,
+            reply_target TEXT,
+            reply_topic TEXT,
+            created_at_ms INTEGER NOT NULL
+        );
+
+        CREATE UNIQUE INDEX mailbox_entries_source_kind_external_id_idx
+            ON mailbox_entries (source_kind, external_id);
+
+        CREATE INDEX mailbox_entries_mailbox_key_id_idx
+            ON mailbox_entries (mailbox_key, id);
+
+        CREATE TABLE mailbox_entry_attachments (
+            mailbox_entry_id INTEGER NOT NULL REFERENCES mailbox_entries(id) ON DELETE CASCADE,
+            ordinal INTEGER NOT NULL,
+            kind TEXT NOT NULL,
+            mime_type TEXT NOT NULL,
+            file_name TEXT,
+            local_path TEXT NOT NULL,
+            PRIMARY KEY (mailbox_entry_id, ordinal)
+        );
+
+        CREATE INDEX mailbox_entry_attachments_entry_id_ordinal_idx
+            ON mailbox_entry_attachments (mailbox_entry_id, ordinal);
+
+        CREATE TABLE mailbox_jobs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            mailbox_key TEXT NOT NULL,
+            status TEXT NOT NULL,
+            attempt_count INTEGER NOT NULL,
+            leased_until_ms INTEGER,
+            next_attempt_at_ms INTEGER NOT NULL,
+            last_error TEXT,
+            response_text TEXT,
+            final_text TEXT,
+            session_id TEXT,
+            created_at_ms INTEGER NOT NULL,
+            updated_at_ms INTEGER NOT NULL,
+            started_at_ms INTEGER,
+            finished_at_ms INTEGER
+        );
+
+        CREATE INDEX mailbox_jobs_status_next_attempt_created_at_idx
+            ON mailbox_jobs (status, next_attempt_at_ms, created_at_ms, id);
+
+        CREATE INDEX mailbox_jobs_mailbox_key_created_at_idx
+            ON mailbox_jobs (mailbox_key, created_at_ms, id);
+
+        CREATE TABLE mailbox_job_entries (
+            job_id INTEGER NOT NULL REFERENCES mailbox_jobs(id) ON DELETE CASCADE,
+            mailbox_entry_id INTEGER NOT NULL REFERENCES mailbox_entries(id) ON DELETE CASCADE,
+            ordinal INTEGER NOT NULL,
+            PRIMARY KEY (job_id, ordinal),
+            UNIQUE (mailbox_entry_id)
+        );
+
+        CREATE INDEX mailbox_job_entries_mailbox_entry_id_idx
+            ON mailbox_job_entries (mailbox_entry_id);
+
+        CREATE TABLE mailbox_deliveries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id INTEGER NOT NULL REFERENCES mailbox_jobs(id) ON DELETE CASCADE,
+            delivery_channel TEXT NOT NULL,
+            delivery_target TEXT NOT NULL,
+            delivery_topic TEXT NOT NULL,
+            delivery_mode TEXT NOT NULL,
+            stream_message_id INTEGER,
+            status TEXT NOT NULL,
+            attempt_count INTEGER NOT NULL,
+            leased_until_ms INTEGER,
+            next_attempt_at_ms INTEGER NOT NULL,
+            last_error TEXT,
+            created_at_ms INTEGER NOT NULL,
+            updated_at_ms INTEGER NOT NULL,
+            delivered_at_ms INTEGER
+        );
+
+        CREATE UNIQUE INDEX mailbox_deliveries_job_target_topic_idx
+            ON mailbox_deliveries (job_id, delivery_channel, delivery_target, delivery_topic);
+
+        CREATE INDEX mailbox_deliveries_status_next_attempt_created_at_idx
+            ON mailbox_deliveries (status, next_attempt_at_ms, created_at_ms, id);
+
+        CREATE INDEX mailbox_deliveries_job_id_status_idx
+            ON mailbox_deliveries (job_id, status, id);
+    `)
+    db.exec("PRAGMA user_version = 11;")
+}
+
+function migrateToV12(db: SqliteDatabaseLike): void {
+    db.exec(`
+        ALTER TABLE mailbox_deliveries
+        ADD COLUMN preview_process_text TEXT;
+
+        ALTER TABLE mailbox_deliveries
+        ADD COLUMN preview_reasoning_text TEXT;
     `)
     db.exec(`PRAGMA user_version = ${LATEST_SCHEMA_VERSION};`)
 }

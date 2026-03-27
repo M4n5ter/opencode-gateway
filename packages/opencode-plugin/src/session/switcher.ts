@@ -42,7 +42,6 @@ export class ChannelSessionSwitcher {
 
         if (previousSessionId !== null) {
             this.store.deletePendingInteractionsForSession(previousSessionId)
-            this.store.clearSessionReplyTargets(previousSessionId)
         }
 
         this.store.putSessionBinding(conversationKey, newSessionId, recordedAtMs)

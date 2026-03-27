@@ -77,6 +77,11 @@ export class TelegramProgressiveSupport {
             recordTelegramStreamSuccess(this.store, Date.now())
         } catch (error) {
             const message = formatError(error)
+            if (isTelegramNoopEditError(message)) {
+                recordTelegramStreamSuccess(this.store, Date.now())
+                return
+            }
+
             recordTelegramStreamFailure(this.store, message, Date.now())
             recordTelegramStreamFallback(this.store, "stream_edit_failed", Date.now())
             this.logger.log("warn", `telegram stream edit failed: ${message}`)
@@ -113,4 +118,8 @@ export class TelegramProgressiveSupport {
             return false
         }
     }
+}
+
+function isTelegramNoopEditError(message: string): boolean {
+    return message.toLowerCase().includes("message is not modified")
 }
