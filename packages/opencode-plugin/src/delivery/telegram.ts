@@ -8,6 +8,7 @@ import {
     recordTelegramStreamFallback,
     recordTelegramStreamSuccess,
 } from "../telegram/state"
+import type { TelegramInlineKeyboardMarkup } from "../telegram/types"
 import { formatError } from "../utils/error"
 
 export type DeliveryModePreference = "auto" | "oneshot" | "stream"
@@ -45,7 +46,11 @@ export class TelegramProgressiveSupport {
         return "progressive"
     }
 
-    async sendStreamMessage(target: BindingDeliveryTarget, text: string): Promise<number> {
+    async sendStreamMessage(
+        target: BindingDeliveryTarget,
+        text: string,
+        replyMarkup: TelegramInlineKeyboardMarkup | null = null,
+    ): Promise<number> {
         if (this.client === null) {
             throw new Error("telegram transport is not configured")
         }
@@ -53,6 +58,7 @@ export class TelegramProgressiveSupport {
         try {
             const sent = await this.client.sendMessage(target.target, text, target.topic, {
                 parseMode: "HTML",
+                replyMarkup,
             })
             recordTelegramStreamSuccess(this.store, Date.now())
             return sent.message_id
@@ -65,7 +71,12 @@ export class TelegramProgressiveSupport {
         }
     }
 
-    async editStreamMessage(target: BindingDeliveryTarget, messageId: number, text: string): Promise<void> {
+    async editStreamMessage(
+        target: BindingDeliveryTarget,
+        messageId: number,
+        text: string,
+        replyMarkup: TelegramInlineKeyboardMarkup | null = null,
+    ): Promise<void> {
         if (this.client === null) {
             throw new Error("telegram transport is not configured")
         }
@@ -73,6 +84,7 @@ export class TelegramProgressiveSupport {
         try {
             await this.client.editMessageText(target.target, messageId, text, {
                 parseMode: "HTML",
+                replyMarkup,
             })
             recordTelegramStreamSuccess(this.store, Date.now())
         } catch (error) {

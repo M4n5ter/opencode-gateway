@@ -1,14 +1,18 @@
 import type { BindingDeferredDeliveryStrategy, BindingDeferredPreviewContext, BindingDeliveryTarget } from "../binding"
+import type { TelegramToolCallView } from "../config/telegram"
 import type { GatewayTransportHost } from "../host/transport"
 import type { SqliteStore } from "../store/sqlite"
 import { recordTelegramPreviewEmit, recordTelegramStreamFallback } from "../telegram/state"
-import { renderTelegramStreamMessage } from "../telegram/stream-render"
+import { buildTelegramStreamReplyMarkup, renderTelegramStreamMessageForView } from "../telegram/stream-render"
+import type { TelegramToolSection, TelegramToolVisibility } from "../telegram/tool-render"
 import type { DeliveryModePreference, TelegramProgressiveSupport } from "./telegram"
 
 export type TextDeliveryPreview = {
     processText: string | null
     reasoningText: string | null
     answerText: string | null
+    toolSections?: TelegramToolSection[]
+    forceStreamOpen?: boolean
 }
 
 export type TextDeliverySession = {
@@ -49,6 +53,7 @@ export class GatewayTextDelivery {
         private readonly transport: GatewayTransportHost,
         private readonly store: SqliteStore,
         private readonly telegramSupport: TelegramProgressiveSupport,
+        private readonly toolCallView: TelegramToolCallView = "toggle",
         private readonly options: TextDeliveryOptions = {},
     ) {}
 
@@ -92,6 +97,7 @@ export class GatewayTextDelivery {
                         this.transport,
                         this.telegramSupport,
                         this.store,
+                        this.toolCallView,
                         {
                             streamOpenDelayMs:
                                 preference === "stream"
@@ -238,6 +244,7 @@ class ProgressiveTextDeliverySession implements TextDeliverySession {
         private readonly transport: GatewayTransportHost,
         private readonly telegramSupport: TelegramProgressiveSupport,
         private readonly store: SqliteStore,
+        private readonly toolCallView: TelegramToolCallView,
         private readonly options: ProgressiveTextDeliveryOptions,
     ) {}
 
@@ -275,11 +282,12 @@ class ProgressiveTextDeliverySession implements TextDeliverySession {
                     processText: this.latestPreview?.processText ?? null,
                     reasoningText: this.latestPreview?.reasoningText ?? null,
                     answerText: normalizedFinalText,
+                    toolSections: this.latestPreview?.toolSections ?? [],
                 })
 
                 if (finalPreview !== null) {
                     try {
-                        await this.commitFinalBody(renderTelegramStreamMessage(finalPreview))
+                        await this.commitFinalBody(finalPreview)
                         return true
                     } catch {
                         recordTelegramStreamFallback(this.store, "stream_edit_failed", Date.now())
@@ -321,6 +329,12 @@ class ProgressiveTextDeliverySession implements TextDeliverySession {
         }
 
         if (this.streamMessageId === null) {
+            if (this.latestPreview.forceStreamOpen === true) {
+                this.cancelOpenTimer()
+                this.requestImmediateFlush()
+                return
+            }
+
             const elapsedMs = Date.now() - this.startedAtMs
             if (elapsedMs >= this.options.streamOpenDelayMs) {
                 this.cancelOpenTimer()
@@ -376,38 +390,112 @@ class ProgressiveTextDeliverySession implements TextDeliverySession {
         }
 
         recordTelegramPreviewEmit(this.store, Date.now())
-        await this.commitPreviewBody(renderTelegramStreamMessage(this.latestPreview))
+        await this.commitPreview(this.latestPreview)
     }
 
-    private async commitPreviewBody(body: string): Promise<void> {
-        if (this.lastRenderedBody === body) {
+    private async commitPreview(preview: TextDeliveryPreview): Promise<void> {
+        const rendered = this.renderPreview(preview)
+        if (this.lastRenderedBody === rendered.text) {
             return
         }
 
         try {
             if (this.streamMessageId === null) {
-                this.streamMessageId = await this.telegramSupport.sendStreamMessage(this.target, body)
+                this.streamMessageId = await this.telegramSupport.sendStreamMessage(
+                    this.target,
+                    rendered.text,
+                    rendered.replyMarkup,
+                )
                 this.stopTypingKeepalive()
             } else {
-                await this.telegramSupport.editStreamMessage(this.target, this.streamMessageId, body)
+                await this.telegramSupport.editStreamMessage(
+                    this.target,
+                    this.streamMessageId,
+                    rendered.text,
+                    rendered.replyMarkup,
+                )
             }
 
-            this.lastRenderedBody = body
+            this.lastRenderedBody = rendered.text
             this.lastStreamUpdateAtMs = Date.now()
+            this.syncPreviewMessageState(preview)
         } catch {
             this.previewFailed = true
             this.stopTypingKeepalive()
         }
     }
 
-    private async commitFinalBody(body: string): Promise<void> {
-        if (this.streamMessageId === null || this.lastRenderedBody === body) {
+    private async commitFinalBody(preview: TextDeliveryPreview): Promise<void> {
+        if (this.streamMessageId === null) {
             return
         }
 
-        await this.telegramSupport.editStreamMessage(this.target, this.streamMessageId, body)
-        this.lastRenderedBody = body
+        const rendered = this.renderPreview(preview)
+        if (this.lastRenderedBody === rendered.text) {
+            return
+        }
+
+        await this.telegramSupport.editStreamMessage(
+            this.target,
+            this.streamMessageId,
+            rendered.text,
+            rendered.replyMarkup,
+        )
+        this.lastRenderedBody = rendered.text
         this.lastStreamUpdateAtMs = Date.now()
+        this.syncPreviewMessageState(preview)
+    }
+
+    private renderPreview(preview: TextDeliveryPreview): {
+        text: string
+        replyMarkup: ReturnType<typeof buildTelegramStreamReplyMarkup>
+    } {
+        const toolVisibility = this.resolveToolVisibility()
+
+        return {
+            text: renderTelegramStreamMessageForView(preview, {
+                toolCallView: this.toolCallView,
+                toolVisibility,
+            }),
+            replyMarkup: buildTelegramStreamReplyMarkup(preview, {
+                toolCallView: this.toolCallView,
+                toolVisibility,
+            }),
+        }
+    }
+
+    private resolveToolVisibility(): TelegramToolVisibility {
+        if (this.toolCallView !== "toggle" || this.streamMessageId === null) {
+            return "collapsed"
+        }
+
+        return (
+            this.store.getTelegramPreviewMessage(this.target.target, this.streamMessageId)?.toolVisibility ??
+            "collapsed"
+        )
+    }
+
+    private syncPreviewMessageState(preview: TextDeliveryPreview): void {
+        if (this.toolCallView !== "toggle" || this.streamMessageId === null) {
+            return
+        }
+
+        const toolSections = normalizeToolSections(preview.toolSections)
+        if (toolSections.length === 0) {
+            this.store.deleteTelegramPreviewMessage(this.target.target, this.streamMessageId)
+            return
+        }
+
+        this.store.upsertTelegramPreviewMessage({
+            chatId: this.target.target,
+            messageId: this.streamMessageId,
+            toolVisibility: this.resolveToolVisibility(),
+            processText: preview.processText,
+            reasoningText: preview.reasoningText,
+            answerText: preview.answerText,
+            toolSections,
+            recordedAtMs: Date.now(),
+        })
     }
 
     private async sendFinalOneshot(finalText: string): Promise<boolean> {
@@ -488,7 +576,8 @@ function normalizePreview(preview: TextDeliveryPreview): TextDeliveryPreview | n
     const processText = normalizeVisibleText(preview.processText)
     const reasoningText = normalizeVisibleText(preview.reasoningText)
     const answerText = normalizeVisibleText(preview.answerText)
-    if (processText === null && reasoningText === null && answerText === null) {
+    const toolSections = normalizeToolSections(preview.toolSections)
+    if (processText === null && reasoningText === null && answerText === null && toolSections.length === 0) {
         return null
     }
 
@@ -496,6 +585,8 @@ function normalizePreview(preview: TextDeliveryPreview): TextDeliveryPreview | n
         processText,
         reasoningText,
         answerText,
+        toolSections,
+        forceStreamOpen: preview.forceStreamOpen === true,
     }
 }
 
@@ -508,6 +599,7 @@ function toDeferredPreviewContext(preview: TextDeliveryPreview | null): BindingD
         processText: preview.processText,
         reasoningText: preview.reasoningText,
         answerText: null,
+        toolSections: preview.toolSections,
     })
     if (normalized === null) {
         return null
@@ -516,6 +608,7 @@ function toDeferredPreviewContext(preview: TextDeliveryPreview | null): BindingD
     return {
         processText: normalized.processText,
         reasoningText: normalized.reasoningText,
+        toolSections: normalized.toolSections,
     }
 }
 
@@ -525,6 +618,16 @@ function normalizeVisibleText(value: string | null): string | null {
     }
 
     return value.trim().length === 0 ? null : value
+}
+
+function normalizeToolSections(sections: TelegramToolSection[] | undefined): TelegramToolSection[] {
+    if (sections === undefined || sections.length === 0) {
+        return []
+    }
+
+    return sections.filter((section) => {
+        return section.toolName.trim().length > 0 && (section.title === null || section.title.trim().length > 0)
+    })
 }
 
 function dedupeTargets(targets: BindingDeliveryTarget[]): BindingDeliveryTarget[] {

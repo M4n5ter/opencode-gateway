@@ -23,7 +23,8 @@ The current state of the repository is a working local gateway with:
 - Telegram long polling with explicit allowlists
 - recurring cron jobs with a persisted catalog and run history
 - Telegram operational tools
-- private-chat draft preview support
+- private-chat editable stream previews with toggleable tool-call sections
+- auto-cleaned Telegram permission/question interaction prompts
 - a launcher that bootstraps and warms a managed OpenCode instance
 
 ## Repository Layout
@@ -115,7 +116,9 @@ This package now:
 - translates Rust-emitted OpenCode commands into thin plugin SDK calls
 - subscribes to the OpenCode SDK event stream and forwards normalized execution
   observations into Rust-owned execution drivers
-- delivers Telegram replies and private-chat draft previews
+- delivers Telegram replies and private-chat editable stream previews
+- renders Telegram tool-call sections inside progressive replies, with per-message toggle state
+- bridges OpenCode permission/question interactions into Telegram and cleans them up after successful replies
 - exposes gateway, cron, and Telegram operational tools
 
 ## Runtime Model
@@ -157,7 +160,7 @@ opencode-gateway serve
 - thin OpenCode SDK command execution
 - event subscription and raw event normalization
 - SQLite reads and writes
-- Telegram HTTP transport and drafts
+- Telegram HTTP transport, editable streams, tool-toggle callbacks, and interaction cleanup
 - polling loops and timers
 - local environment and config path resolution
 
@@ -226,7 +229,12 @@ The session model for v1 is intentionally conservative:
 The SQLite layer currently revolves around:
 
 - `mailbox_entries`
+- `mailbox_jobs`
+- `mailbox_deliveries`
 - `session_bindings`
+- `session_reply_targets`
+- `pending_interactions`
+- `telegram_message_cleanup_jobs`
 - `runtime_journal`
 - `cron_jobs`
 - `cron_runs`
@@ -252,18 +260,21 @@ The repository already contains:
 - optional mailbox reply batching behind a config flag
 - explicit mailbox route overrides for shared-session ingress
 - SQLite-backed session bindings and runtime journaling
+- SQLite-backed pending interactions and delayed Telegram cleanup jobs
 - SQLite-backed Telegram health snapshots and update cursors
 - SQLite-backed cron catalogs and run history
 - Telegram long polling with allowlists
 - Telegram operational tools
-- private-chat draft preview support
+- private-chat editable stream previews with toggleable tool-call details
+- inline tool-call sections in Telegram progressive replies
+- permission/question bridging with post-reply cleanup
 - a local OpenCode smoke script
 
 ## Next Implementation Steps
 
 The next implementation passes should happen in this order:
 
-1. Finish validating Telegram draft preview behavior end-to-end.
+1. Refine Telegram progressive-reply UX only where the current inline preview model still feels noisy.
 2. Add richer durable gateway tables only where the current catalog/journal split
    becomes limiting.
 3. Revisit how much async execution logic should move back into Rust only if a stable,

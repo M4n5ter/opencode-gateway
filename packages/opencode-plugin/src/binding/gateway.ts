@@ -49,6 +49,15 @@ export type BindingDeferredDeliveryStrategy =
 export type BindingDeferredPreviewContext = {
     processText: string | null
     reasoningText: string | null
+    toolSections?: Array<{
+        callId: string
+        toolName: string
+        status: "pending" | "running" | "completed" | "error"
+        title: string | null
+        inputText: string | null
+        outputText: string | null
+        errorText: string | null
+    }>
 }
 
 export type BindingHostAck =

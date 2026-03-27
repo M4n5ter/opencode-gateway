@@ -53,7 +53,7 @@ test("telegram poller aborts stalled getUpdates calls and records a timeout", as
             },
             new GatewayMailboxRouter([]),
             new NoopMediaStore(),
-            new NoopQuestions(),
+            [new NoopQuestions()],
             {
                 timeoutFloorMs: 10,
                 timeoutGraceMs: 10,
@@ -119,7 +119,7 @@ test("telegram poller logs recovery after a timeout", async () => {
             },
             new GatewayMailboxRouter([]),
             new NoopMediaStore(),
-            new NoopQuestions(),
+            [new NoopQuestions()],
             {
                 timeoutFloorMs: 10,
                 timeoutGraceMs: 10,
@@ -174,7 +174,7 @@ test("telegram poller logs ignored updates at debug level", async () => {
             },
             new GatewayMailboxRouter([]),
             new NoopMediaStore(),
-            new NoopQuestions(),
+            [new NoopQuestions()],
             {
                 timeoutFloorMs: 10,
                 timeoutGraceMs: 10,

@@ -122,6 +122,10 @@ poll_timeout_seconds = 25
 allowed_chats = []
 allowed_users = []
 
+[channels.telegram.ux]
+# Control Telegram tool-call previews: "toggle", "inline", or "off".
+tool_call_view = "toggle"
+
 [[memory.entries]]
 path = "USER.md"
 description = "Persistent user profile and preference memory. Keep this file accurate and concise. Record stable preferences, communication style, workflow habits, project conventions, tool constraints, review expectations, and other recurring facts that should shape future assistance. Update it proactively when you learn something durable about the user. Do not store one-off task details or transient context here."
@@ -157,6 +161,13 @@ globs = ["**/*.md", "notes/**/*.txt"]
 OpenCode tasks and only times out stalled waits: `session_wait_timeout_ms` and
 `prompt_progress_timeout_ms` default to 30 minutes, `hard_timeout_ms` is
 disabled, and `abort_settle_timeout_ms` defaults to 5 seconds.
+
+Telegram UX defaults:
+
+- private Telegram chats use one editable stream message instead of draft transport
+- successful `permission` and `question` prompts are auto-removed shortly after reply
+- tool calls appear in the same preview message and are hidden behind a `Show Tools` button by default
+- the first tool event opens the preview stream immediately so pending/running tool input shows up early
 
 When Telegram is enabled, either set `channels.telegram.bot_token` directly or
 export the token through the configured environment variable, for example:

@@ -319,6 +319,200 @@ test("sqlite store downgrades edit-mode mailbox deliveries back to send without 
     }
 })
 
+test("sqlite store schedules and retries Telegram message cleanup jobs", () => {
+    const db = createMemoryDatabase()
+
+    try {
+        migrateGatewayDatabase(db)
+        const store = new SqliteStore(db)
+
+        store.scheduleTelegramMessageCleanup("interaction", "42", 77, 1_000, 900)
+        store.scheduleTelegramMessageCleanup("interaction", "42", 77, 1_500, 950)
+
+        expect(store.listTelegramMessageCleanupJobs()).toEqual([
+            {
+                id: 1,
+                kind: "interaction",
+                chatId: "42",
+                messageId: 77,
+                nextAttemptAtMs: 1_000,
+                attemptCount: 0,
+                leasedUntilMs: null,
+                lastError: null,
+                createdAtMs: 900,
+                updatedAtMs: 950,
+            },
+        ])
+
+        const claimed = store.claimNextTelegramMessageCleanup(1_000, 2_000)
+        expect(claimed?.id).toBe(1)
+        expect(claimed?.attemptCount).toBe(1)
+
+        const dropped = store.recordTelegramMessageCleanupFailure(1, "timeout", 1_100, 2_100, 3)
+        expect(dropped).toBe(false)
+        expect(store.getTelegramMessageCleanup(1)).toEqual({
+            id: 1,
+            kind: "interaction",
+            chatId: "42",
+            messageId: 77,
+            nextAttemptAtMs: 2_100,
+            attemptCount: 1,
+            leasedUntilMs: null,
+            lastError: "timeout",
+            createdAtMs: 900,
+            updatedAtMs: 1_100,
+        })
+
+        expect(store.claimNextTelegramMessageCleanup(2_100, 3_100)?.attemptCount).toBe(2)
+        expect(store.claimNextTelegramMessageCleanup(2_100, 3_100)).toBeNull()
+        expect(store.recordTelegramMessageCleanupFailure(1, "timeout", 2_200, 3_200, 3)).toBe(false)
+        expect(store.claimNextTelegramMessageCleanup(3_200, 4_200)?.attemptCount).toBe(3)
+        expect(store.recordTelegramMessageCleanupFailure(1, "timeout", 3_300, 4_300, 3)).toBe(true)
+        expect(store.getTelegramMessageCleanup(1)).toBeNull()
+    } finally {
+        db.close()
+    }
+})
+
+test("sqlite store persists mailbox preview tool sections for deferred delivery", () => {
+    const db = createMemoryDatabase()
+
+    try {
+        migrateGatewayDatabase(db)
+        const store = new SqliteStore(db)
+
+        store.enqueueMailboxEntry({
+            mailboxKey: "telegram:42",
+            sourceKind: "telegram_update",
+            externalId: "302",
+            sender: "telegram:7",
+            text: "hello",
+            attachments: [],
+            replyChannel: "telegram",
+            replyTarget: "42",
+            replyTopic: null,
+            recordedAtMs: 100,
+        })
+        store.materializeMailboxJobs(100, false, 0)
+        expect(store.claimNextMailboxJob(100, 200)?.id).toBe(1)
+
+        store.completeMailboxJobExecution({
+            jobId: 1,
+            sessionId: "ses_1",
+            responseText: "ok",
+            finalText: "hello back",
+            deliveries: [
+                {
+                    deliveryTarget: {
+                        channel: "telegram",
+                        target: "42",
+                        topic: null,
+                    },
+                    strategy: {
+                        mode: "edit",
+                        messageId: 77,
+                    },
+                    previewContext: {
+                        processText: "Working",
+                        reasoningText: "Checking cache first",
+                        toolSections: [
+                            {
+                                callId: "call-1",
+                                toolName: "bash",
+                                status: "completed",
+                                title: "List repos",
+                                inputText: '{"cmd":"gh repo list"}',
+                                outputText: "repo-a\nrepo-b",
+                                errorText: null,
+                            },
+                        ],
+                    },
+                },
+            ],
+            recordedAtMs: 150,
+            deliveryRetryAtMs: 150,
+        })
+
+        expect(store.getMailboxDelivery(1)?.previewContext).toEqual({
+            processText: "Working",
+            reasoningText: "Checking cache first",
+            toolSections: [
+                {
+                    callId: "call-1",
+                    toolName: "bash",
+                    status: "completed",
+                    title: "List repos",
+                    inputText: '{"cmd":"gh repo list"}',
+                    outputText: "repo-a\nrepo-b",
+                    errorText: null,
+                },
+            ],
+        })
+    } finally {
+        db.close()
+    }
+})
+
+test("sqlite store persists telegram preview messages and tool visibility", () => {
+    const db = createMemoryDatabase()
+
+    try {
+        migrateGatewayDatabase(db)
+        const store = new SqliteStore(db)
+
+        store.upsertTelegramPreviewMessage({
+            chatId: "42",
+            messageId: 77,
+            toolVisibility: "collapsed",
+            processText: "Working",
+            reasoningText: "Checking cache first",
+            answerText: "Done",
+            toolSections: [
+                {
+                    callId: "call-1",
+                    toolName: "bash",
+                    status: "running",
+                    title: "List repos",
+                    inputText: '{"cmd":"gh repo list"}',
+                    outputText: null,
+                    errorText: null,
+                },
+            ],
+            recordedAtMs: 100,
+        })
+
+        expect(store.getTelegramPreviewMessage("42", 77)).toEqual({
+            chatId: "42",
+            messageId: 77,
+            toolVisibility: "collapsed",
+            processText: "Working",
+            reasoningText: "Checking cache first",
+            answerText: "Done",
+            toolSections: [
+                {
+                    callId: "call-1",
+                    toolName: "bash",
+                    status: "running",
+                    title: "List repos",
+                    inputText: '{"cmd":"gh repo list"}',
+                    outputText: null,
+                    errorText: null,
+                },
+            ],
+            createdAtMs: 100,
+            updatedAtMs: 100,
+        })
+
+        expect(store.setTelegramPreviewToolVisibility("42", 77, "expanded", 150)?.toolVisibility).toBe("expanded")
+        expect(store.getTelegramPreviewMessage("42", 77)?.updatedAtMs).toBe(150)
+
+        store.deleteTelegramPreviewMessage("42", 77)
+        expect(store.getTelegramPreviewMessage("42", 77)).toBeNull()
+    } finally {
+        db.close()
+    }
+})
+
 test("sqlite store persists session reply targets and pending interactions", () => {
     const db = createMemoryDatabase()
 

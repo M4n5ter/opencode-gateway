@@ -1,6 +1,6 @@
 import type { SqliteDatabaseLike } from "./database"
 
-const LATEST_SCHEMA_VERSION = 12
+const LATEST_SCHEMA_VERSION = 15
 
 export function migrateGatewayDatabase(db: SqliteDatabaseLike): void {
     db.exec("PRAGMA journal_mode = WAL;")
@@ -68,6 +68,21 @@ export function migrateGatewayDatabase(db: SqliteDatabaseLike): void {
 
     if (currentVersion === 11) {
         migrateToV12(db)
+        currentVersion = 12
+    }
+
+    if (currentVersion === 12) {
+        migrateToV13(db)
+        currentVersion = 13
+    }
+
+    if (currentVersion === 13) {
+        migrateToV14(db)
+        currentVersion = 14
+    }
+
+    if (currentVersion === 14) {
+        migrateToV15(db)
     }
 }
 
@@ -616,6 +631,56 @@ function migrateToV12(db: SqliteDatabaseLike): void {
 
         ALTER TABLE mailbox_deliveries
         ADD COLUMN preview_reasoning_text TEXT;
+    `)
+    db.exec("PRAGMA user_version = 12;")
+}
+
+function migrateToV13(db: SqliteDatabaseLike): void {
+    db.exec(`
+        CREATE TABLE telegram_message_cleanup_jobs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind TEXT NOT NULL,
+            chat_id TEXT NOT NULL,
+            message_id INTEGER NOT NULL,
+            next_attempt_at_ms INTEGER NOT NULL,
+            attempt_count INTEGER NOT NULL,
+            leased_until_ms INTEGER,
+            last_error TEXT,
+            created_at_ms INTEGER NOT NULL,
+            updated_at_ms INTEGER NOT NULL
+        );
+
+        CREATE UNIQUE INDEX telegram_message_cleanup_jobs_chat_message_idx
+            ON telegram_message_cleanup_jobs (chat_id, message_id);
+
+        CREATE INDEX telegram_message_cleanup_jobs_next_attempt_idx
+            ON telegram_message_cleanup_jobs (next_attempt_at_ms, leased_until_ms, id);
+    `)
+    db.exec("PRAGMA user_version = 13;")
+}
+
+function migrateToV14(db: SqliteDatabaseLike): void {
+    db.exec(`
+        ALTER TABLE mailbox_deliveries
+        ADD COLUMN preview_tool_sections_json TEXT;
+    `)
+    db.exec("PRAGMA user_version = 14;")
+}
+
+function migrateToV15(db: SqliteDatabaseLike): void {
+    db.exec(`
+        CREATE TABLE telegram_preview_messages (
+            chat_id TEXT NOT NULL,
+            message_id INTEGER NOT NULL,
+            tool_visibility TEXT NOT NULL,
+            process_text TEXT,
+            reasoning_text TEXT,
+            answer_text TEXT,
+            tool_sections_json TEXT,
+            created_at_ms INTEGER NOT NULL,
+            updated_at_ms INTEGER NOT NULL,
+            PRIMARY KEY (chat_id, message_id)
+        );
     `)
     db.exec(`PRAGMA user_version = ${LATEST_SCHEMA_VERSION};`)
 }

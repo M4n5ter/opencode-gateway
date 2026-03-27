@@ -7,6 +7,18 @@ type RawTelegramConfig = {
     poll_timeout_seconds?: unknown
     allowed_chats?: unknown
     allowed_users?: unknown
+    ux?: unknown
+}
+
+type RawTelegramUxConfig = {
+    tool_call_view?: unknown
+    show_tool_calls?: unknown
+}
+
+export type TelegramToolCallView = "toggle" | "inline" | "off"
+
+export type TelegramUxConfig = {
+    toolCallView: TelegramToolCallView
 }
 
 export type TelegramConfig =
@@ -20,6 +32,7 @@ export type TelegramConfig =
           pollTimeoutSeconds: number
           allowedChats: string[]
           allowedUsers: string[]
+          ux: TelegramUxConfig
       }
 
 export function parseTelegramConfig(value: unknown, env: EnvSource): TelegramConfig {
@@ -59,6 +72,7 @@ export function parseTelegramConfig(value: unknown, env: EnvSource): TelegramCon
         pollTimeoutSeconds,
         allowedChats,
         allowedUsers,
+        ux: parseTelegramUxConfig(table.ux),
     }
 }
 
@@ -154,4 +168,55 @@ function normalizeIdentifier(value: unknown, field: string): string {
     }
 
     throw new Error(`${field} entries must be strings or safe integers`)
+}
+
+function parseTelegramUxConfig(value: unknown): TelegramUxConfig {
+    const table = readTelegramUxTable(value)
+
+    return {
+        toolCallView: readToolCallView(table),
+    }
+}
+
+function readTelegramUxTable(value: unknown): RawTelegramUxConfig {
+    if (value === undefined) {
+        return {}
+    }
+
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+        throw new Error("channels.telegram.ux must be a table when present")
+    }
+
+    return value as RawTelegramUxConfig
+}
+
+function readToolCallView(table: RawTelegramUxConfig): TelegramToolCallView {
+    if (table.tool_call_view !== undefined && table.show_tool_calls !== undefined) {
+        throw new Error(
+            "channels.telegram.ux.tool_call_view and channels.telegram.ux.show_tool_calls are mutually exclusive",
+        )
+    }
+
+    if (table.tool_call_view !== undefined) {
+        if (typeof table.tool_call_view !== "string") {
+            throw new Error("channels.telegram.ux.tool_call_view must be a string when present")
+        }
+
+        const normalized = table.tool_call_view.trim()
+
+        switch (normalized) {
+            case "toggle":
+            case "inline":
+            case "off":
+                return normalized
+            default:
+                throw new Error("channels.telegram.ux.tool_call_view must be one of toggle, inline, off")
+        }
+    }
+
+    if (table.show_tool_calls !== undefined) {
+        return readBoolean(table.show_tool_calls, "channels.telegram.ux.show_tool_calls", true) ? "inline" : "off"
+    }
+
+    return "toggle"
 }

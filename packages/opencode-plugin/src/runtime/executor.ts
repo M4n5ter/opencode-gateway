@@ -28,6 +28,8 @@ import { delay } from "./delay"
 import { ExecutionBudget, ExecutionHardTimeoutError } from "./execution-budget"
 import { type PromptExecutionResult, runOpencodeDriver } from "./opencode-runner"
 import { OpencodeCommandTimeoutError } from "./opencode-timeout"
+import type { GatewayToolActivityHandle, GatewayToolActivityRuntime } from "./tool-activity"
+import { GatewayToolOverlayPreviewSession } from "./tool-preview"
 
 const SESSION_ABORT_POLL_MS = 250
 const SESSION_RESIDUAL_BUSY_GRACE_POLLS = 3
@@ -59,6 +61,7 @@ export class GatewayExecutor {
         private readonly logger: BindingLoggerHost,
         private readonly executionConfig: GatewayExecutionConfig = DEFAULT_EXECUTION_CONFIG,
         private readonly coordinator: ConversationCoordinator = new ConversationCoordinator(),
+        private readonly toolActivity: GatewayToolActivityRuntime | null = null,
     ) {}
 
     prepareInboundMessage(message: BindingInboundMessage): BindingPreparedExecution {
@@ -314,6 +317,16 @@ export class GatewayExecutor {
         )
         const targetSessions =
             replyTargets.length === 0 ? [] : await openTargetDeliverySessions(this.delivery, replyTargets)
+        let previewSession = createPreviewFanoutSession(targetSessions)
+        let toolActivity: GatewayToolActivityHandle | null = null
+        if (previewSession !== null && previewSession.mode === "progressive" && this.toolActivity !== null) {
+            const overlayPreview = new GatewayToolOverlayPreviewSession(previewSession)
+            previewSession = overlayPreview
+            toolActivity =
+                this.toolActivity.beginExecution(replyTargets, async (toolSections) => {
+                    await overlayPreview.setToolSections(toolSections)
+                }) ?? null
+        }
 
         try {
             const preparedSessionId = await this.preparePersistedSessionForPrompt(
@@ -322,7 +335,6 @@ export class GatewayExecutor {
                 budget,
             )
             const expectedSessionBinding = this.store.getSessionBinding(conversationKey)
-            const previewSession = createPreviewFanoutSession(targetSessions)
             const promptResult = await this.executeDriver(
                 entries,
                 recordedAtMs,
@@ -330,6 +342,7 @@ export class GatewayExecutor {
                 previewSession,
                 replyTargets,
                 budget,
+                toolActivity,
             )
             await this.cleanupResidualBusySession(promptResult.sessionId, budget)
 
@@ -371,6 +384,8 @@ export class GatewayExecutor {
             }
 
             throw error
+        } finally {
+            await toolActivity?.finish(Date.now())
         }
     }
 
@@ -617,6 +632,7 @@ export class GatewayExecutor {
         deliverySession: TextDeliverySessionLike | null,
         replyTargets: NonNullable<BindingPreparedExecution["replyTarget"]>[],
         budget: ExecutionBudget,
+        toolActivity: Pick<GatewayToolActivityHandle, "trackSession" | "finish"> | null,
     ): Promise<PromptExecutionResult> {
         return await runOpencodeDriver({
             module: this.module,
@@ -636,6 +652,7 @@ export class GatewayExecutor {
                     targets: replyTargets,
                     recordedAtMs,
                 })
+                toolActivity?.trackSession(sessionId)
             },
             budget,
         })

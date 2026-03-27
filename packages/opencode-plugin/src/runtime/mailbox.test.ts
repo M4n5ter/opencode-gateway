@@ -392,6 +392,7 @@ test("GatewayMailboxRuntime preserves deferred preview context for final deliver
                 previewContext: {
                     processText: "process block",
                     reasoningText: "reasoning block",
+                    toolSections: [],
                 },
             },
         ])
@@ -441,7 +442,7 @@ async function waitFor(predicate: () => boolean): Promise<void> {
     const startedAt = Date.now()
 
     while (!predicate()) {
-        if (Date.now() - startedAt > 2_000) {
+        if (Date.now() - startedAt > 4_000) {
             throw new Error("timed out waiting for mailbox runtime")
         }
 

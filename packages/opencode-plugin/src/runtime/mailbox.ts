@@ -277,6 +277,9 @@ export class GatewayMailboxRuntime {
             )
             if (ack.kind === "permanent_edit_failure") {
                 this.store.downgradeMailboxDeliveryToSend(delivery.id, ack.errorMessage, Date.now())
+                if (delivery.strategy.mode === "edit") {
+                    this.store.deleteTelegramPreviewMessage(delivery.deliveryTarget.target, delivery.strategy.messageId)
+                }
                 this.logger.log(
                     "warn",
                     `mailbox delivery ${delivery.id} fell back from edit to send: ${ack.errorMessage}`,

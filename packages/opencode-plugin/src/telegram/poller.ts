@@ -1,13 +1,12 @@
 import type { BindingLoggerHost } from "../binding"
 import type { TelegramConfig } from "../config/telegram"
-import type { GatewayInteractionRuntime } from "../interactions/runtime"
 import type { GatewayMailboxRouter } from "../mailbox/router"
 import type { GatewayMailboxRuntime } from "../runtime/mailbox"
 import type { SqliteStore } from "../store/sqlite"
 import { formatError } from "../utils/error"
 import { TelegramApiError, type TelegramPollingClientLike } from "./client"
 import type { TelegramInboundMediaStore } from "./media"
-import { buildTelegramAllowlist, normalizeTelegramUpdate } from "./normalize"
+import { buildTelegramAllowlist, normalizeTelegramUpdate, type TelegramNormalizedCallbackQuery } from "./normalize"
 import {
     recordTelegramChatType,
     recordTelegramPollCompleted,
@@ -43,7 +42,7 @@ export class TelegramPollingService {
         private readonly config: Extract<TelegramConfig, { enabled: true }>,
         private readonly mailboxRouter: MailboxRouterLike,
         private readonly mediaStore: TelegramInboundMediaStoreLike,
-        private readonly interactions: GatewayInteractionRuntimeLike,
+        private readonly callbackHandlers: TelegramCallbackRuntimeLike[],
         timing?: Partial<PollerTiming>,
     ) {
         this.allowlist = buildTelegramAllowlist(config)
@@ -125,7 +124,11 @@ export class TelegramPollingService {
                     }
 
                     if (normalized.kind === "callbackQuery") {
-                        await this.interactions.handleTelegramCallbackQuery(normalized.callbackQuery)
+                        for (const handler of this.callbackHandlers) {
+                            if (await handler.handleTelegramCallbackQuery(normalized.callbackQuery)) {
+                                break
+                            }
+                        }
                         offset = this.advanceOffset(nextOffset)
                         continue
                     }
@@ -188,7 +191,9 @@ export class TelegramPollingService {
 type GatewayMailboxRuntimeLike = Pick<GatewayMailboxRuntime, "enqueueInboundMessage">
 type MailboxRouterLike = Pick<GatewayMailboxRouter, "resolve">
 type TelegramInboundMediaStoreLike = Pick<TelegramInboundMediaStore, "materializeInboundMessage">
-type GatewayInteractionRuntimeLike = Pick<GatewayInteractionRuntime, "handleTelegramCallbackQuery">
+type TelegramCallbackRuntimeLike = {
+    handleTelegramCallbackQuery(query: TelegramNormalizedCallbackQuery): Promise<boolean>
+}
 
 function isPermanentTelegramFailure(error: unknown): boolean {
     return error instanceof TelegramApiError && !error.retryable

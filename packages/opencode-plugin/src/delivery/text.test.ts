@@ -31,7 +31,7 @@ test("GatewayTextDelivery opens a single editable Telegram message for slow priv
                 _chatId: string,
                 text: string,
                 _topic?: string | null,
-                options?: { parseMode?: string },
+                options?: { parseMode?: string; replyMarkup?: unknown },
             ): Promise<{ message_id: number }> {
                 calls.sends.push({
                     text,
@@ -45,7 +45,7 @@ test("GatewayTextDelivery opens a single editable Telegram message for slow priv
                 _chatId: string,
                 messageId: number,
                 text: string,
-                options?: { parseMode?: string },
+                options?: { parseMode?: string; replyMarkup?: unknown },
             ): Promise<void> {
                 calls.edits.push({
                     messageId,
@@ -59,6 +59,7 @@ test("GatewayTextDelivery opens a single editable Telegram message for slow priv
             new GatewayTransportHost(client, store),
             store,
             new TelegramProgressiveSupport(client, store, createLogger()),
+            "toggle",
             {
                 streamOpenDelayMs: 10,
                 streamEditIntervalMs: 10,
@@ -132,7 +133,7 @@ test("GatewayTextDelivery keeps fast private replies in oneshot mode before the 
                 _chatId: string,
                 text: string,
                 _topic?: string | null,
-                options?: { parseMode?: string },
+                options?: { parseMode?: string; replyMarkup?: unknown },
             ): Promise<{ message_id: number }> {
                 sends.push({
                     text,
@@ -151,6 +152,7 @@ test("GatewayTextDelivery keeps fast private replies in oneshot mode before the 
             new GatewayTransportHost(client, store),
             store,
             new TelegramProgressiveSupport(client, store, createLogger()),
+            "toggle",
             {
                 streamOpenDelayMs: 50,
                 streamEditIntervalMs: 10,
@@ -186,7 +188,7 @@ test("GatewayTextDelivery keeps fast private replies in oneshot mode before the 
     }
 })
 
-test("GatewayTextDelivery renders tool progress in a Telegram blockquote above the final answer", async () => {
+test("GatewayTextDelivery renders tool sections inside the Telegram preview message and keeps them in the final edit", async () => {
     const db = createMemoryDatabase()
 
     try {
@@ -207,7 +209,7 @@ test("GatewayTextDelivery renders tool progress in a Telegram blockquote above t
                 _chatId: string,
                 text: string,
                 _topic?: string | null,
-                _options?: { parseMode?: string },
+                _options?: { parseMode?: string; replyMarkup?: unknown },
             ): Promise<{ message_id: number }> {
                 calls.sends.push(text)
                 return {
@@ -218,7 +220,7 @@ test("GatewayTextDelivery renders tool progress in a Telegram blockquote above t
                 _chatId: string,
                 _messageId: number,
                 text: string,
-                _options?: { parseMode?: string },
+                _options?: { parseMode?: string; replyMarkup?: unknown },
             ): Promise<void> {
                 calls.edits.push(text)
             },
@@ -228,6 +230,7 @@ test("GatewayTextDelivery renders tool progress in a Telegram blockquote above t
             new GatewayTransportHost(client, store),
             store,
             new TelegramProgressiveSupport(client, store, createLogger()),
+            "inline",
             {
                 streamOpenDelayMs: 0,
                 streamEditIntervalMs: 10,
@@ -248,12 +251,210 @@ test("GatewayTextDelivery renders tool progress in a Telegram blockquote above t
             processText: "Let me fetch that for you:",
             reasoningText: null,
             answerText: null,
+            toolSections: [
+                {
+                    callId: "call-1",
+                    toolName: "bash",
+                    status: "running",
+                    title: "List repos",
+                    inputText: '{"cmd":"gh repo list"}',
+                    outputText: null,
+                    errorText: null,
+                },
+            ],
         })
         await sleep(10)
         await session.finish("final answer")
 
-        expect(calls.sends).toEqual(["<blockquote>Let me fetch that for you:</blockquote>"])
-        expect(calls.edits).toEqual(["<blockquote>Let me fetch that for you:</blockquote>\n\nfinal answer"])
+        expect(calls.sends).toEqual([
+            '<blockquote>Let me fetch that for you:</blockquote>\n\n<b>List repos</b> <i>running</i>\n<blockquote expandable>Input\n{"cmd":"gh repo list"}</blockquote>',
+        ])
+        expect(calls.edits).toEqual([
+            '<blockquote>Let me fetch that for you:</blockquote>\n\n<b>List repos</b> <i>running</i>\n<blockquote expandable>Input\n{"cmd":"gh repo list"}</blockquote>\n\nfinal answer',
+        ])
+    } finally {
+        db.close()
+    }
+})
+
+test("GatewayTextDelivery keeps tool sections collapsed behind a toggle button by default", async () => {
+    const db = createMemoryDatabase()
+
+    try {
+        migrateGatewayDatabase(db)
+        const store = new SqliteStore(db)
+        store.putStateValue("telegram.chat_type:42", "private", Date.now())
+
+        const calls = {
+            sends: [] as Array<{ text: string; replyMarkup: unknown }>,
+            edits: [] as Array<{ text: string; replyMarkup: unknown }>,
+        }
+        const client = {
+            async getChat() {
+                throw new Error("unused")
+            },
+            async sendChatAction(): Promise<void> {},
+            async sendMessage(
+                _chatId: string,
+                text: string,
+                _topic?: string | null,
+                options?: { parseMode?: string; replyMarkup?: unknown },
+            ): Promise<{ message_id: number }> {
+                calls.sends.push({
+                    text,
+                    replyMarkup: options?.replyMarkup ?? null,
+                })
+                return {
+                    message_id: 9,
+                }
+            },
+            async editMessageText(
+                _chatId: string,
+                _messageId: number,
+                text: string,
+                options?: { parseMode?: string; replyMarkup?: unknown },
+            ): Promise<void> {
+                calls.edits.push({
+                    text,
+                    replyMarkup: options?.replyMarkup ?? null,
+                })
+            },
+        }
+
+        const delivery = new GatewayTextDelivery(
+            new GatewayTransportHost(client, store),
+            store,
+            new TelegramProgressiveSupport(client, store, createLogger()),
+            "toggle",
+            {
+                streamOpenDelayMs: 0,
+                streamEditIntervalMs: 10,
+                typingKeepaliveIntervalMs: 10,
+            },
+        )
+
+        const session = await delivery.open(
+            {
+                channel: "telegram",
+                target: "42",
+                topic: null,
+            },
+            "auto",
+        )
+
+        await session.preview({
+            processText: "Running tools",
+            reasoningText: null,
+            answerText: null,
+            toolSections: [
+                {
+                    callId: "call-1",
+                    toolName: "bash",
+                    status: "running",
+                    title: "List repos",
+                    inputText: '{"cmd":"gh repo list"}',
+                    outputText: null,
+                    errorText: null,
+                },
+            ],
+            forceStreamOpen: true,
+        })
+        await sleep(10)
+        await session.finish("final answer")
+
+        expect(calls.sends).toEqual([
+            {
+                text: "<blockquote>Running tools</blockquote>\n\n<i>Tools: 1 running</i>",
+                replyMarkup: {
+                    inline_keyboard: [[{ text: "Show Tools (1)", callback_data: "tv:show" }]],
+                },
+            },
+        ])
+        expect(calls.edits).toEqual([
+            {
+                text: "<blockquote>Running tools</blockquote>\n\n<i>Tools: 1 running</i>\n\nfinal answer",
+                replyMarkup: {
+                    inline_keyboard: [[{ text: "Show Tools (1)", callback_data: "tv:show" }]],
+                },
+            },
+        ])
+        expect(store.getTelegramPreviewMessage("42", 9)?.toolVisibility).toBe("collapsed")
+    } finally {
+        db.close()
+    }
+})
+
+test("GatewayTextDelivery opens the preview stream immediately when the first tool event arrives", async () => {
+    const db = createMemoryDatabase()
+
+    try {
+        migrateGatewayDatabase(db)
+        const store = new SqliteStore(db)
+        store.putStateValue("telegram.chat_type:42", "private", Date.now())
+
+        const calls = {
+            sends: [] as string[],
+        }
+        const client = {
+            async getChat() {
+                throw new Error("unused")
+            },
+            async sendChatAction(): Promise<void> {},
+            async sendMessage(
+                _chatId: string,
+                text: string,
+                _topic?: string | null,
+                _options?: { parseMode?: string; replyMarkup?: unknown },
+            ): Promise<{ message_id: number }> {
+                calls.sends.push(text)
+                return {
+                    message_id: 1,
+                }
+            },
+            async editMessageText(): Promise<void> {},
+        }
+
+        const delivery = new GatewayTextDelivery(
+            new GatewayTransportHost(client, store),
+            store,
+            new TelegramProgressiveSupport(client, store, createLogger()),
+            "toggle",
+            {
+                streamOpenDelayMs: 10_000,
+                streamEditIntervalMs: 10,
+                typingKeepaliveIntervalMs: 10,
+            },
+        )
+
+        const session = await delivery.open(
+            {
+                channel: "telegram",
+                target: "42",
+                topic: null,
+            },
+            "auto",
+        )
+
+        await session.preview({
+            processText: null,
+            reasoningText: null,
+            answerText: null,
+            toolSections: [
+                {
+                    callId: "call-1",
+                    toolName: "bash",
+                    status: "running",
+                    title: "List repos",
+                    inputText: '{"cmd":"gh repo list"}',
+                    outputText: null,
+                    errorText: null,
+                },
+            ],
+            forceStreamOpen: true,
+        })
+        await sleep(20)
+
+        expect(calls.sends).toEqual(["<i>Tools: 1 running</i>"])
     } finally {
         db.close()
     }
@@ -297,6 +498,7 @@ test("GatewayTextDelivery falls back to oneshot for non-private Telegram chats",
             new GatewayTransportHost(client, store),
             store,
             new TelegramProgressiveSupport(client, store, createLogger()),
+            "toggle",
         )
 
         const result = await delivery.sendTest(
@@ -345,6 +547,7 @@ test("GatewayTextDelivery rejects forced stream mode for non-private chats", asy
             new GatewayTransportHost(client, store),
             store,
             new TelegramProgressiveSupport(client, store, createLogger()),
+            "toggle",
         )
 
         await expect(
@@ -383,7 +586,7 @@ test("GatewayTextDelivery falls back to oneshot when opening the stream message 
                 _chatId: string,
                 text: string,
                 _topic?: string | null,
-                _options?: { parseMode?: string },
+                _options?: { parseMode?: string; replyMarkup?: unknown },
             ): Promise<{ message_id: number }> {
                 if (calls.sends.length === 0) {
                     calls.sends.push(text)
@@ -404,6 +607,7 @@ test("GatewayTextDelivery falls back to oneshot when opening the stream message 
             new GatewayTransportHost(client, store),
             store,
             new TelegramProgressiveSupport(client, store, createLogger()),
+            "toggle",
             {
                 streamOpenDelayMs: 0,
                 streamEditIntervalMs: 10,
@@ -455,7 +659,7 @@ test("GatewayTextDelivery falls back to oneshot when the final stream edit fails
                 _chatId: string,
                 text: string,
                 _topic?: string | null,
-                _options?: { parseMode?: string },
+                _options?: { parseMode?: string; replyMarkup?: unknown },
             ): Promise<{ message_id: number }> {
                 calls.sends.push(text)
                 return {
@@ -471,6 +675,7 @@ test("GatewayTextDelivery falls back to oneshot when the final stream edit fails
             new GatewayTransportHost(client, store),
             store,
             new TelegramProgressiveSupport(client, store, createLogger()),
+            "toggle",
             {
                 streamOpenDelayMs: 0,
                 streamEditIntervalMs: 10,
@@ -514,7 +719,7 @@ test("TelegramProgressiveSupport treats Telegram no-op stream edits as successfu
                 _chatId: string,
                 _messageId: number,
                 _text: string,
-                _options?: { parseMode?: string },
+                _options?: { parseMode?: string; replyMarkup?: unknown },
             ): Promise<void> {
                 throw new Error(
                     "Telegram editMessageText failed (400): Bad Request: message is not modified: specified new message content and reply markup are exactly the same as a current content and reply markup of the message",
@@ -568,7 +773,7 @@ test("GatewayTextDelivery treats Telegram no-op final edits as successful delive
                 _chatId: string,
                 text: string,
                 _topic?: string | null,
-                _options?: { parseMode?: string },
+                _options?: { parseMode?: string; replyMarkup?: unknown },
             ): Promise<{ message_id: number }> {
                 calls.sends.push(text)
                 return {
@@ -587,6 +792,7 @@ test("GatewayTextDelivery treats Telegram no-op final edits as successful delive
             new GatewayTransportHost(client, store),
             store,
             new TelegramProgressiveSupport(client, store, createLogger()),
+            "toggle",
             {
                 streamOpenDelayMs: 0,
                 streamEditIntervalMs: 10,

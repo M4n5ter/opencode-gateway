@@ -100,6 +100,7 @@ test("GatewayInteractionRuntime sends plain-text questions and replies from inbo
         expect(handled).toBe(true)
         expect(replied).toEqual([[["Telegram"]]])
         expect(store.getPendingInteractionForTarget(createTarget("42"))).toBeNull()
+        expect(store.listTelegramMessageCleanupJobs()).toEqual([])
     } finally {
         db.close()
     }
@@ -216,6 +217,20 @@ test("GatewayInteractionRuntime answers Telegram callback queries for single-cho
         expect(replied).toEqual([[["Telegram"]]])
         expect(callbackReplies).toEqual(["Sent: Telegram"])
         expect(store.getPendingInteractionForTarget(createTarget("42"))).toBeNull()
+        expect(store.listTelegramMessageCleanupJobs()).toEqual([
+            {
+                id: 1,
+                kind: "interaction",
+                chatId: "42",
+                messageId: 77,
+                nextAttemptAtMs: expect.any(Number),
+                attemptCount: 0,
+                leasedUntilMs: null,
+                lastError: null,
+                createdAtMs: expect.any(Number),
+                updatedAtMs: expect.any(Number),
+            },
+        ])
     } finally {
         db.close()
     }
@@ -340,6 +355,88 @@ test("GatewayInteractionRuntime sends permission requests with HTML Telegram con
         expect(permissionReplies).toEqual(["always"])
         expect(callbackReplies).toEqual(["Approved for this OpenCode session."])
         expect(store.getPendingInteractionForTarget(createTarget("42"))).toBeNull()
+        expect(store.listTelegramMessageCleanupJobs()).toEqual([
+            {
+                id: 1,
+                kind: "interaction",
+                chatId: "42",
+                messageId: 77,
+                nextAttemptAtMs: expect.any(Number),
+                attemptCount: 0,
+                leasedUntilMs: null,
+                lastError: null,
+                createdAtMs: expect.any(Number),
+                updatedAtMs: expect.any(Number),
+            },
+        ])
+    } finally {
+        db.close()
+    }
+})
+
+test("GatewayInteractionRuntime ignores non-interaction callback namespaces", async () => {
+    const db = createMemoryDatabase()
+
+    try {
+        migrateGatewayDatabase(db)
+        const store = new SqliteStore(db)
+        const sessions = new GatewaySessionContext(store)
+
+        const runtime = new GatewayInteractionRuntime(
+            {
+                permission: {
+                    async list() {
+                        return []
+                    },
+                    async reply() {
+                        throw new Error("unexpected permission reply")
+                    },
+                },
+                question: {
+                    async list() {
+                        return []
+                    },
+                    async reply() {
+                        throw new Error("unexpected question reply")
+                    },
+                    async reject() {
+                        throw new Error("unexpected question reject")
+                    },
+                },
+                session: {
+                    async get(input: { sessionID: string }) {
+                        return { id: input.sessionID }
+                    },
+                },
+            } as never,
+            "/workspace",
+            store,
+            sessions,
+            {
+                async sendMessage() {
+                    throw new Error("unexpected send")
+                },
+            },
+            {
+                async sendInteractiveMessage() {
+                    throw new Error("unexpected interactive send")
+                },
+                async answerCallbackQuery() {
+                    throw new Error("unexpected callback answer")
+                },
+            },
+            new MemoryLogger(),
+        )
+
+        await expect(
+            runtime.handleTelegramCallbackQuery({
+                callbackQueryId: "cb-1",
+                sender: "telegram:7",
+                deliveryTarget: createTarget("42"),
+                messageId: 77,
+                data: "tv:show",
+            }),
+        ).resolves.toBe(false)
     } finally {
         db.close()
     }
@@ -435,6 +532,7 @@ test("GatewayInteractionRuntime handles plain-text permission replies and reject
         expect(acceptedHandled).toBe(true)
         expect(permissionReplies).toEqual(["once"])
         expect(store.getPendingInteractionForTarget(createTarget("42"))).toBeNull()
+        expect(store.listTelegramMessageCleanupJobs()).toEqual([])
     } finally {
         db.close()
     }

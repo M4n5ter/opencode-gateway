@@ -1,6 +1,7 @@
 import type { BindingDeliveryTarget, BindingHostAck, BindingInboundMessage, BindingLoggerHost } from "../binding"
 import type { OpencodeRuntimeEvent } from "../opencode/events"
 import type { GatewaySessionContext } from "../session/context"
+import { type GatewaySessionHierarchyClientLike, GatewaySessionHierarchyResolver } from "../session/hierarchy"
 import type { SqliteStore } from "../store/sqlite"
 import type { TelegramInteractionClientLike } from "../telegram/client"
 import type { TelegramNormalizedCallbackQuery } from "../telegram/normalize"
@@ -27,10 +28,7 @@ import {
 } from "./question"
 import type { GatewayInteractionRequest, GatewayPermissionReply, PendingInteractionRecord } from "./types"
 
-type SessionHierarchyRecord = {
-    id: string
-    parentID?: string
-}
+const INTERACTION_DELETE_DELAY_MS = 2_000
 
 type InteractionClientLike = {
     permission: {
@@ -87,18 +85,7 @@ type InteractionClientLike = {
             },
         ): Promise<unknown>
     }
-    session: {
-        get(
-            input: {
-                sessionID: string
-                directory?: string
-            },
-            options?: {
-                responseStyle?: "data"
-                throwOnError?: boolean
-            },
-        ): Promise<unknown>
-    }
+    session: GatewaySessionHierarchyClientLike["session"]
 }
 
 type QuestionTransportLike = {
@@ -112,15 +99,19 @@ type TelegramInteractiveRequest = {
 }
 
 export class GatewayInteractionRuntime {
+    private readonly hierarchy: GatewaySessionHierarchyResolver
+
     constructor(
         private readonly client: InteractionClientLike,
         private readonly directory: string,
         private readonly store: SqliteStore,
-        private readonly sessions: GatewaySessionContext,
+        sessions: GatewaySessionContext,
         private readonly transport: QuestionTransportLike,
         private readonly telegramClient: TelegramInteractionClientLike | null,
         private readonly logger: BindingLoggerHost,
-    ) {}
+    ) {
+        this.hierarchy = new GatewaySessionHierarchyResolver(client, directory, sessions, logger)
+    }
 
     handleEvent(event: OpencodeRuntimeEvent): void {
         const normalized = normalizeInteractionEvent(event)
@@ -164,6 +155,10 @@ export class GatewayInteractionRuntime {
             return false
         }
 
+        if (!isInteractionCallbackQuery(query.data)) {
+            return false
+        }
+
         const pending = this.store.getPendingInteractionForTelegramMessage(query.deliveryTarget, query.messageId)
         if (pending === null) {
             await this.telegramClient.answerCallbackQuery(query.callbackQueryId, "This request is no longer pending.")
@@ -184,6 +179,7 @@ export class GatewayInteractionRuntime {
                 await this.handleInteractionAsked(event.request)
                 return
             case "resolved":
+                this.schedulePendingInteractionCleanup(event.requestId, Date.now())
                 this.store.deletePendingInteraction(event.requestId)
                 return
         }
@@ -194,7 +190,7 @@ export class GatewayInteractionRuntime {
             return
         }
 
-        const targets = await this.resolveReplyTargets(request.sessionId)
+        const targets = await this.hierarchy.resolveReplyTargets(request.sessionId)
         if (targets.length === 0) {
             this.logger.log(
                 "warn",
@@ -308,10 +304,12 @@ export class GatewayInteractionRuntime {
                 return true
             case "reject":
                 await this.rejectQuestion(pending.requestId)
+                this.scheduleInteractionCleanup(pending, Date.now())
                 this.store.deletePendingInteraction(pending.requestId)
                 return true
             case "reply":
                 await this.replyQuestion(pending.requestId, parsed.answers)
+                this.scheduleInteractionCleanup(pending, Date.now())
                 this.store.deletePendingInteraction(pending.requestId)
                 return true
         }
@@ -328,6 +326,7 @@ export class GatewayInteractionRuntime {
         }
 
         await this.replyPermission(pending.requestId, parsed.reply)
+        this.scheduleInteractionCleanup(pending, Date.now())
         this.store.deletePendingInteraction(pending.requestId)
         return true
     }
@@ -347,6 +346,7 @@ export class GatewayInteractionRuntime {
         }
 
         await this.replyQuestion(pending.requestId, [[answer]])
+        this.scheduleInteractionCleanup(pending, Date.now())
         this.store.deletePendingInteraction(pending.requestId)
         await this.telegramClient.answerCallbackQuery(query.callbackQueryId, `Sent: ${answer}`)
         return true
@@ -367,6 +367,7 @@ export class GatewayInteractionRuntime {
         }
 
         await this.replyPermission(pending.requestId, reply)
+        this.scheduleInteractionCleanup(pending, Date.now())
         this.store.deletePendingInteraction(pending.requestId)
         await this.telegramClient.answerCallbackQuery(query.callbackQueryId, formatPermissionCallbackAck(reply))
         return true
@@ -411,59 +412,6 @@ export class GatewayInteractionRuntime {
                 throwOnError: true,
             },
         )
-    }
-
-    private async resolveReplyTargets(sessionId: string): Promise<BindingDeliveryTarget[]> {
-        const directTargets = this.sessions.listReplyTargets(sessionId)
-        if (directTargets.length > 0) {
-            return directTargets
-        }
-
-        const visited = new Set<string>([sessionId])
-        let currentSessionId: string | null = sessionId
-
-        while (currentSessionId !== null) {
-            const parentSessionId = await this.readParentSessionId(currentSessionId)
-            if (parentSessionId === null || visited.has(parentSessionId)) {
-                return []
-            }
-
-            const inheritedTargets = this.sessions.listReplyTargets(parentSessionId)
-            if (inheritedTargets.length > 0) {
-                this.logger.log(
-                    "debug",
-                    `resolved interaction reply target via ancestor session ${parentSessionId} for ${sessionId}`,
-                )
-                return inheritedTargets
-            }
-
-            visited.add(parentSessionId)
-            currentSessionId = parentSessionId
-        }
-
-        return []
-    }
-
-    private async readParentSessionId(sessionId: string): Promise<string | null> {
-        try {
-            const session = unwrapData<SessionHierarchyRecord>(
-                await this.client.session.get(
-                    {
-                        sessionID: sessionId,
-                        directory: this.directory,
-                    },
-                    {
-                        responseStyle: "data",
-                        throwOnError: true,
-                    },
-                ),
-            )
-
-            return session.parentID ?? null
-        } catch (error) {
-            this.logger.log("warn", `failed to inspect OpenCode session ${sessionId}: ${formatError(error)}`)
-            return null
-        }
     }
 
     private async listPendingQuestions(): Promise<GatewayInteractionRequest[]> {
@@ -522,6 +470,30 @@ export class GatewayInteractionRuntime {
                       },
         }))
     }
+
+    private schedulePendingInteractionCleanup(requestId: string, recordedAtMs: number): void {
+        for (const pending of this.store.listPendingInteractionsByRequestId(requestId)) {
+            this.scheduleInteractionCleanup(pending, recordedAtMs)
+        }
+    }
+
+    private scheduleInteractionCleanup(pending: PendingInteractionRecord, recordedAtMs: number): void {
+        if (pending.deliveryTarget.channel !== "telegram" || pending.telegramMessageId === null) {
+            return
+        }
+
+        this.store.scheduleTelegramMessageCleanup(
+            "interaction",
+            pending.deliveryTarget.target,
+            pending.telegramMessageId,
+            recordedAtMs + INTERACTION_DELETE_DELAY_MS,
+            recordedAtMs,
+        )
+    }
+}
+
+function isInteractionCallbackQuery(data: string | null): boolean {
+    return data !== null && (data.startsWith("q:") || data.startsWith("p:"))
 }
 
 function formatPlainTextInteraction(request: GatewayInteractionRequest): string {

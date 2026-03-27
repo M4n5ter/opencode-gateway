@@ -4,16 +4,22 @@ import type {
     BindingOutboundMessage,
     BindingTransportHost,
 } from "../binding"
+import type { TelegramToolCallView } from "../config/telegram"
 import type { SqliteStore } from "../store/sqlite"
 import type { TelegramDeliveryClientLike } from "../telegram/client"
 import { recordTelegramSendFailure, recordTelegramSendSuccess } from "../telegram/state"
-import { renderTelegramFinalMessage, renderTelegramStreamMessage } from "../telegram/stream-render"
+import {
+    buildTelegramStreamReplyMarkup,
+    renderTelegramFinalMessage,
+    renderTelegramStreamMessageForView,
+} from "../telegram/stream-render"
 import { formatError } from "../utils/error"
 
 export class GatewayTransportHost implements BindingTransportHost {
     constructor(
         private readonly telegramClient: TelegramDeliveryClientLike | null,
         private readonly store: SqliteStore,
+        private readonly toolCallView: TelegramToolCallView = "toggle",
     ) {}
 
     async sendMessage(message: BindingOutboundMessage): Promise<BindingHostAck> {
@@ -38,21 +44,29 @@ export class GatewayTransportHost implements BindingTransportHost {
                 throw new Error("telegram outbound message body must not be empty")
             }
 
-            const rendered = renderOutboundBody(message)
+            const rendered = this.renderOutboundMessage(message, strategy)
             if (strategy.mode === "send") {
                 await this.telegramClient.sendMessage(
                     message.deliveryTarget.target,
-                    rendered,
+                    rendered.text,
                     message.deliveryTarget.topic,
                     {
                         parseMode: "HTML",
+                        replyMarkup: rendered.replyMarkup,
                     },
                 )
             } else {
-                await this.telegramClient.editMessageText(message.deliveryTarget.target, strategy.messageId, rendered, {
-                    parseMode: "HTML",
-                })
+                await this.telegramClient.editMessageText(
+                    message.deliveryTarget.target,
+                    strategy.messageId,
+                    rendered.text,
+                    {
+                        parseMode: "HTML",
+                        replyMarkup: rendered.replyMarkup,
+                    },
+                )
             }
+            this.syncPreviewMessageState(message, strategy)
             recordTelegramSendSuccess(this.store, Date.now())
             return {
                 kind: "delivered",
@@ -68,19 +82,82 @@ export class GatewayTransportHost implements BindingTransportHost {
             return ack
         }
     }
-}
 
-function renderOutboundBody(message: BindingOutboundMessage): string {
-    const previewContext = message.previewContext ?? null
-    if (previewContext === null) {
-        return renderTelegramFinalMessage(message.body)
+    private renderOutboundMessage(
+        message: BindingOutboundMessage,
+        strategy: BindingDeferredDeliveryStrategy,
+    ): { text: string; replyMarkup: ReturnType<typeof buildTelegramStreamReplyMarkup> } {
+        const previewContext = message.previewContext ?? null
+        if (previewContext === null) {
+            return {
+                text: renderTelegramFinalMessage(message.body),
+                replyMarkup: null,
+            }
+        }
+
+        const toolVisibility =
+            strategy.mode === "edit"
+                ? (this.store.getTelegramPreviewMessage(message.deliveryTarget.target, strategy.messageId)
+                      ?.toolVisibility ?? "collapsed")
+                : "collapsed"
+
+        return {
+            text: renderTelegramStreamMessageForView(
+                {
+                    processText: previewContext.processText,
+                    reasoningText: previewContext.reasoningText,
+                    answerText: message.body,
+                    toolSections: previewContext.toolSections,
+                },
+                {
+                    toolCallView: this.toolCallView,
+                    toolVisibility,
+                },
+            ),
+            replyMarkup:
+                strategy.mode === "edit"
+                    ? buildTelegramStreamReplyMarkup(
+                          {
+                              processText: previewContext.processText,
+                              reasoningText: previewContext.reasoningText,
+                              answerText: message.body,
+                              toolSections: previewContext.toolSections,
+                          },
+                          {
+                              toolCallView: this.toolCallView,
+                              toolVisibility,
+                          },
+                      )
+                    : null,
+        }
     }
 
-    return renderTelegramStreamMessage({
-        processText: previewContext.processText,
-        reasoningText: previewContext.reasoningText,
-        answerText: message.body,
-    })
+    private syncPreviewMessageState(message: BindingOutboundMessage, strategy: BindingDeferredDeliveryStrategy): void {
+        if (this.toolCallView !== "toggle" || strategy.mode !== "edit") {
+            return
+        }
+
+        const previewContext = message.previewContext
+        const toolSections = previewContext?.toolSections ?? []
+        if (previewContext == null || toolSections.length === 0) {
+            this.store.deleteTelegramPreviewMessage(message.deliveryTarget.target, strategy.messageId)
+            return
+        }
+
+        const toolVisibility =
+            this.store.getTelegramPreviewMessage(message.deliveryTarget.target, strategy.messageId)?.toolVisibility ??
+            "collapsed"
+        this.store.upsertTelegramPreviewMessage({
+            chatId: message.deliveryTarget.target,
+            messageId: strategy.messageId,
+            toolVisibility,
+            processText: previewContext.processText,
+            reasoningText: previewContext.reasoningText,
+            answerText: message.body,
+            toolSections,
+            recordedAtMs: Date.now(),
+        })
+    }
 }
 
 function classifyTelegramDeliveryFailure(error: unknown, strategy: BindingDeferredDeliveryStrategy): BindingHostAck {

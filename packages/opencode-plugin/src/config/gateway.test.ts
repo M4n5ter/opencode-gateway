@@ -339,7 +339,52 @@ test("loadGatewayConfig accepts a direct Telegram bot token from config", async 
             pollTimeoutSeconds: 25,
             allowedChats: [],
             allowedUsers: ["42"],
+            ux: {
+                toolCallView: "toggle",
+            },
         })
+    } finally {
+        await rm(root, { recursive: true, force: true })
+    }
+})
+
+test("loadGatewayConfig enables Telegram tool-call UX by default and parses explicit overrides", async () => {
+    const root = await mkdtemp(join(tmpdir(), "opencode-gateway-config-"))
+    const configPath = join(root, "config.toml")
+
+    try {
+        await writeFile(
+            configPath,
+            [
+                "[channels.telegram]",
+                "enabled = true",
+                'bot_token = "123456:ABCDEF"',
+                "allowed_users = [42]",
+                "",
+                "[channels.telegram.ux]",
+                'tool_call_view = "off"',
+            ].join("\n"),
+        )
+
+        const overridden = await loadGatewayConfig({
+            OPENCODE_GATEWAY_CONFIG: configPath,
+        })
+        expect(overridden.telegram.enabled).toBe(true)
+        if (overridden.telegram.enabled) {
+            expect(overridden.telegram.ux.toolCallView).toBe("off")
+        }
+
+        await writeFile(
+            configPath,
+            ["[channels.telegram]", "enabled = true", 'bot_token = "123456:ABCDEF"', "allowed_users = [42]"].join("\n"),
+        )
+        const defaulted = await loadGatewayConfig({
+            OPENCODE_GATEWAY_CONFIG: configPath,
+        })
+        expect(defaulted.telegram.enabled).toBe(true)
+        if (defaulted.telegram.enabled) {
+            expect(defaulted.telegram.ux.toolCallView).toBe("toggle")
+        }
     } finally {
         await rm(root, { recursive: true, force: true })
     }
@@ -399,6 +444,9 @@ test("loadGatewayConfig normalizes Telegram allowlist identifiers", async () => 
             pollTimeoutSeconds: 25,
             allowedChats: ["-100123456", "-100999888"],
             allowedUsers: ["42", "77"],
+            ux: {
+                toolCallView: "toggle",
+            },
         })
         expect(config.mailbox).toEqual({
             batchReplies: false,

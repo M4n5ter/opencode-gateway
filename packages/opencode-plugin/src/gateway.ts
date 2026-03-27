@@ -20,15 +20,18 @@ import { OpencodeEventHub } from "./opencode/events"
 import { GatewayExecutor } from "./runtime/executor"
 import { GatewayMailboxRuntime } from "./runtime/mailbox"
 import { getOrCreateRuntimeSingleton } from "./runtime/runtime-singleton"
+import { GatewayToolActivityRuntime } from "./runtime/tool-activity"
 import { GatewaySessionContext } from "./session/context"
 import { resolveConversationKeyForTarget } from "./session/conversation-key"
 import { ChannelSessionSwitcher } from "./session/switcher"
 import { GatewaySystemPromptBuilder } from "./session/system-prompt"
 import { openSqliteStore } from "./store/sqlite"
+import { TelegramMessageCleanupRuntime } from "./telegram/cleanup"
 import { TelegramBotClient } from "./telegram/client"
 import { TelegramInboundMediaStore } from "./telegram/media"
 import { TelegramPollingService } from "./telegram/poller"
 import { GatewayTelegramRuntime } from "./telegram/runtime"
+import { TelegramToolToggleRuntime } from "./telegram/tool-toggle"
 
 export type GatewayPluginStatus = {
     runtimeMode: string
@@ -104,7 +107,11 @@ export async function createGatewayRuntime(
         const opencodeEvents = new OpencodeEventHub()
         const opencode = new OpencodeSdkAdapter(input.client, config.workspaceDirPath)
         const interactionClient = createInteractionClient(input.client, input.serverUrl, config.workspaceDirPath)
-        const transport = new GatewayTransportHost(telegramClient, store)
+        const transport = new GatewayTransportHost(
+            telegramClient,
+            store,
+            config.telegram.enabled ? config.telegram.ux.toolCallView : "off",
+        )
         const files = new ChannelFileSender(telegramClient)
         const channelSessions = new ChannelSessionSwitcher(
             store,
@@ -123,8 +130,26 @@ export async function createGatewayRuntime(
             telegramClient,
             logger,
         )
+        const cleanup = new TelegramMessageCleanupRuntime(telegramClient, store, logger)
         const progressiveSupport = new TelegramProgressiveSupport(telegramClient, store, logger)
-        const delivery = new GatewayTextDelivery(transport, store, progressiveSupport)
+        const delivery = new GatewayTextDelivery(
+            transport,
+            store,
+            progressiveSupport,
+            config.telegram.enabled ? config.telegram.ux.toolCallView : "off",
+        )
+        const toolActivity = new GatewayToolActivityRuntime(
+            interactionClient,
+            config.workspaceDirPath,
+            sessionContext,
+            logger,
+            config.telegram,
+        )
+        const toolToggle = new TelegramToolToggleRuntime(
+            telegramClient,
+            store,
+            config.telegram.enabled ? config.telegram.ux.toolCallView : "off",
+        )
         const executor = new GatewayExecutor(
             module,
             store,
@@ -133,6 +158,8 @@ export async function createGatewayRuntime(
             delivery,
             logger,
             config.execution,
+            undefined,
+            toolActivity,
         )
         const mailbox = new GatewayMailboxRuntime(executor, transport, store, logger, config.mailbox, interactions)
         const cron = new GatewayCronRuntime(
@@ -148,7 +175,7 @@ export async function createGatewayRuntime(
             input.client,
             config.workspaceDirPath,
             opencodeEvents,
-            [interactions],
+            [interactions, toolActivity],
             logger,
         )
         const telegramPolling =
@@ -161,7 +188,7 @@ export async function createGatewayRuntime(
                       config.telegram,
                       mailboxRouter,
                       telegramMediaStore,
-                      interactions,
+                      [toolToggle, interactions],
                   )
                 : null
         const telegram = new GatewayTelegramRuntime(
@@ -177,6 +204,7 @@ export async function createGatewayRuntime(
         cron.start()
         mailbox.start()
         telegram.start()
+        cleanup.start()
         setTimeout(() => {
             void interactions.reconcilePendingRequests().catch((error) => {
                 logger.log("warn", `interaction reconcile failed during startup: ${String(error)}`)

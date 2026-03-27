@@ -13,6 +13,7 @@ import type {
 
 type TelegramTextOptions = {
     parseMode?: "HTML" | "MarkdownV2" | "Markdown"
+    replyMarkup?: TelegramInlineKeyboardMarkup | null
 }
 
 export class TelegramApiError extends Error {
@@ -86,6 +87,7 @@ export class TelegramBotClient {
             text,
             message_thread_id: parseMessageThreadId(messageThreadId),
             parse_mode: options.parseMode,
+            reply_markup: options.replyMarkup ?? undefined,
         })
     }
 
@@ -160,6 +162,18 @@ export class TelegramBotClient {
             message_id: messageId,
             text,
             parse_mode: options.parseMode,
+            reply_markup: options.replyMarkup ?? undefined,
+        })
+    }
+
+    async deleteMessage(chatId: string, messageId: number): Promise<void> {
+        if (!Number.isSafeInteger(messageId) || messageId <= 0) {
+            throw new Error(`invalid Telegram message id: ${messageId}`)
+        }
+
+        await this.call("deleteMessage", {
+            chat_id: chatId,
+            message_id: messageId,
         })
     }
 
@@ -233,6 +247,7 @@ export type TelegramMediaClientLike = Pick<TelegramBotClient, "getFile" | "downl
 export type TelegramFileSendClientLike = Pick<TelegramBotClient, "sendPhoto" | "sendDocument">
 export type TelegramChatActionClientLike = Pick<TelegramBotClient, "sendChatAction">
 export type TelegramMessageEditClientLike = Pick<TelegramBotClient, "editMessageText">
+export type TelegramMessageDeleteClientLike = Pick<TelegramBotClient, "deleteMessage">
 
 async function readLocalFileBlob(filePath: string, mimeType: string): Promise<Blob> {
     const bytes = await readFile(filePath)
@@ -247,6 +262,7 @@ function inferUploadFileName(filePath: string): string {
 export type TelegramProbeClientLike = Pick<TelegramBotClient, "getMe">
 export type TelegramChatClientLike = Pick<TelegramBotClient, "getChat">
 export type TelegramInteractionClientLike = Pick<TelegramBotClient, "sendInteractiveMessage" | "answerCallbackQuery">
+export type TelegramCallbackClientLike = Pick<TelegramBotClient, "answerCallbackQuery" | "editMessageText">
 export type TelegramOpsClientLike = TelegramSendClientLike & TelegramProbeClientLike
 export type TelegramDeliveryClientLike = TelegramSendClientLike &
     TelegramMessageEditClientLike &
@@ -254,6 +270,7 @@ export type TelegramDeliveryClientLike = TelegramSendClientLike &
     TelegramChatActionClientLike
 export type TelegramRuntimeClientLike = TelegramOpsClientLike &
     TelegramDeliveryClientLike &
+    TelegramMessageDeleteClientLike &
     TelegramMediaClientLike &
     TelegramFileSendClientLike
 

@@ -9,6 +9,7 @@ import type {
     GatewayQuestionRequest,
     PendingInteractionRecord,
 } from "../interactions/types"
+import type { TelegramToolVisibility } from "../telegram/tool-render"
 import type { SqliteDatabaseLike } from "./database"
 import { migrateGatewayDatabase } from "./migrations"
 
@@ -122,6 +123,33 @@ export type MailboxPreparedDelivery = {
     deliveryTarget: BindingDeliveryTarget
     strategy: BindingDeferredDeliveryStrategy
     previewContext: BindingDeferredPreviewContext | null
+}
+
+export type TelegramMessageCleanupKind = "interaction" | "tool_activity"
+
+export type TelegramMessageCleanupRecord = {
+    id: number
+    kind: TelegramMessageCleanupKind
+    chatId: string
+    messageId: number
+    nextAttemptAtMs: number
+    attemptCount: number
+    leasedUntilMs: number | null
+    lastError: string | null
+    createdAtMs: number
+    updatedAtMs: number
+}
+
+export type TelegramPreviewMessageRecord = {
+    chatId: string
+    messageId: number
+    toolVisibility: TelegramToolVisibility
+    processText: string | null
+    reasoningText: string | null
+    answerText: string | null
+    toolSections: NonNullable<BindingDeferredPreviewContext["toolSections"]>
+    createdAtMs: number
+    updatedAtMs: number
 }
 
 export type CompleteMailboxJobExecutionInput = {
@@ -499,6 +527,319 @@ export class SqliteStore {
         return row ? mapPendingInteractionRow(row) : null
     }
 
+    listPendingInteractionsByRequestId(requestId: string): PendingInteractionRecord[] {
+        const rows = this.db
+            .query<PendingInteractionRow, [string]>(
+                `
+                    SELECT
+                        id,
+                        request_id,
+                        session_id,
+                        kind,
+                        delivery_channel,
+                        delivery_target,
+                        delivery_topic,
+                        payload_json,
+                        telegram_message_id,
+                        created_at_ms
+                    FROM pending_interactions
+                    WHERE request_id = ?1
+                    ORDER BY created_at_ms ASC, id ASC;
+                `,
+            )
+            .all(requestId)
+
+        return rows.map(mapPendingInteractionRow)
+    }
+
+    scheduleTelegramMessageCleanup(
+        kind: TelegramMessageCleanupKind,
+        chatId: string,
+        messageId: number,
+        notBeforeMs: number,
+        recordedAtMs: number,
+    ): void {
+        assertSafeInteger(messageId, "telegram cleanup messageId")
+        assertSafeInteger(notBeforeMs, "telegram cleanup notBeforeMs")
+        assertSafeInteger(recordedAtMs, "telegram cleanup recordedAtMs")
+
+        this.db
+            .query(
+                `
+                    INSERT INTO telegram_message_cleanup_jobs (
+                        kind,
+                        chat_id,
+                        message_id,
+                        next_attempt_at_ms,
+                        attempt_count,
+                        leased_until_ms,
+                        last_error,
+                        created_at_ms,
+                        updated_at_ms
+                    )
+                    VALUES (?1, ?2, ?3, ?4, 0, NULL, NULL, ?5, ?5)
+                    ON CONFLICT(chat_id, message_id) DO UPDATE SET
+                        kind = excluded.kind,
+                        next_attempt_at_ms = MIN(telegram_message_cleanup_jobs.next_attempt_at_ms, excluded.next_attempt_at_ms),
+                        leased_until_ms = NULL,
+                        updated_at_ms = excluded.updated_at_ms;
+                `,
+            )
+            .run(kind, chatId, messageId, notBeforeMs, recordedAtMs)
+    }
+
+    claimNextTelegramMessageCleanup(nowMs: number, leaseUntilMs: number): TelegramMessageCleanupRecord | null {
+        assertSafeInteger(nowMs, "telegram cleanup nowMs")
+        assertSafeInteger(leaseUntilMs, "telegram cleanup leaseUntilMs")
+
+        const selectCandidate = this.db.query<{ id: number }, [number]>(
+            `
+                SELECT id
+                FROM telegram_message_cleanup_jobs
+                WHERE next_attempt_at_ms <= ?1
+                  AND (leased_until_ms IS NULL OR leased_until_ms <= ?1)
+                ORDER BY next_attempt_at_ms ASC, id ASC
+                LIMIT 1;
+            `,
+        )
+        const claimCandidate = this.db.query(
+            `
+                UPDATE telegram_message_cleanup_jobs
+                SET
+                    leased_until_ms = ?2,
+                    attempt_count = attempt_count + 1,
+                    updated_at_ms = ?3
+                WHERE id = ?1
+                  AND next_attempt_at_ms <= ?3
+                  AND (leased_until_ms IS NULL OR leased_until_ms <= ?3);
+            `,
+        )
+
+        return this.db.transaction((clockMs: number, deadlineMs: number) => {
+            const candidate = selectCandidate.get(clockMs)
+            if (candidate === null || candidate === undefined) {
+                return null
+            }
+
+            const result = claimCandidate.run(candidate.id, deadlineMs, clockMs)
+            if (result.changes === 0) {
+                return null
+            }
+
+            return this.getTelegramMessageCleanup(candidate.id)
+        })(nowMs, leaseUntilMs)
+    }
+
+    getTelegramMessageCleanup(jobId: number): TelegramMessageCleanupRecord | null {
+        assertSafeInteger(jobId, "telegram cleanup id")
+        const row = this.db
+            .query<TelegramMessageCleanupRow, [number]>(
+                `
+                    SELECT
+                        id,
+                        kind,
+                        chat_id,
+                        message_id,
+                        next_attempt_at_ms,
+                        attempt_count,
+                        leased_until_ms,
+                        last_error,
+                        created_at_ms,
+                        updated_at_ms
+                    FROM telegram_message_cleanup_jobs
+                    WHERE id = ?1;
+                `,
+            )
+            .get(jobId)
+
+        return row ? mapTelegramCleanupRow(row) : null
+    }
+
+    listTelegramMessageCleanupJobs(): TelegramMessageCleanupRecord[] {
+        return this.db
+            .query<TelegramMessageCleanupRow, []>(
+                `
+                    SELECT
+                        id,
+                        kind,
+                        chat_id,
+                        message_id,
+                        next_attempt_at_ms,
+                        attempt_count,
+                        leased_until_ms,
+                        last_error,
+                        created_at_ms,
+                        updated_at_ms
+                    FROM telegram_message_cleanup_jobs
+                    ORDER BY next_attempt_at_ms ASC, id ASC;
+                `,
+            )
+            .all()
+            .map(mapTelegramCleanupRow)
+    }
+
+    completeTelegramMessageCleanup(jobId: number): void {
+        assertSafeInteger(jobId, "telegram cleanup id")
+        this.db.query("DELETE FROM telegram_message_cleanup_jobs WHERE id = ?1;").run(jobId)
+    }
+
+    recordTelegramMessageCleanupFailure(
+        jobId: number,
+        errorMessage: string,
+        recordedAtMs: number,
+        nextAttemptAtMs: number,
+        maxAttempts: number,
+    ): boolean {
+        assertSafeInteger(jobId, "telegram cleanup id")
+        assertSafeInteger(recordedAtMs, "telegram cleanup recordedAtMs")
+        assertSafeInteger(nextAttemptAtMs, "telegram cleanup nextAttemptAtMs")
+        assertSafeInteger(maxAttempts, "telegram cleanup maxAttempts")
+
+        return this.db.transaction(
+            (targetJobId: number, message: string, nowMs: number, retryAtMs: number, retryLimit: number) => {
+                const row = this.db
+                    .query<{ attempt_count: number }, [number]>(
+                        "SELECT attempt_count FROM telegram_message_cleanup_jobs WHERE id = ?1 LIMIT 1;",
+                    )
+                    .get(targetJobId)
+                if (row === null || row === undefined) {
+                    throw new Error(`unknown telegram cleanup job: ${targetJobId}`)
+                }
+
+                if (row.attempt_count >= retryLimit) {
+                    this.db.query("DELETE FROM telegram_message_cleanup_jobs WHERE id = ?1;").run(targetJobId)
+                    return true
+                }
+
+                this.db
+                    .query(
+                        `
+                            UPDATE telegram_message_cleanup_jobs
+                            SET
+                                leased_until_ms = NULL,
+                                next_attempt_at_ms = ?2,
+                                last_error = ?3,
+                                updated_at_ms = ?4
+                            WHERE id = ?1;
+                        `,
+                    )
+                    .run(targetJobId, retryAtMs, message, nowMs)
+                return false
+            },
+        )(jobId, errorMessage, recordedAtMs, nextAttemptAtMs, maxAttempts)
+    }
+
+    upsertTelegramPreviewMessage(input: {
+        chatId: string
+        messageId: number
+        toolVisibility: TelegramToolVisibility
+        processText: string | null
+        reasoningText: string | null
+        answerText: string | null
+        toolSections: NonNullable<BindingDeferredPreviewContext["toolSections"]>
+        recordedAtMs: number
+    }): void {
+        assertSafeInteger(input.messageId, "telegram preview messageId")
+        assertSafeInteger(input.recordedAtMs, "telegram preview recordedAtMs")
+
+        this.db
+            .query(
+                `
+                    INSERT INTO telegram_preview_messages (
+                        chat_id,
+                        message_id,
+                        tool_visibility,
+                        process_text,
+                        reasoning_text,
+                        answer_text,
+                        tool_sections_json,
+                        created_at_ms,
+                        updated_at_ms
+                    )
+                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)
+                    ON CONFLICT(chat_id, message_id) DO UPDATE SET
+                        tool_visibility = excluded.tool_visibility,
+                        process_text = excluded.process_text,
+                        reasoning_text = excluded.reasoning_text,
+                        answer_text = excluded.answer_text,
+                        tool_sections_json = excluded.tool_sections_json,
+                        updated_at_ms = excluded.updated_at_ms;
+                `,
+            )
+            .run(
+                input.chatId,
+                input.messageId,
+                input.toolVisibility,
+                normalizeStoredMailboxText(input.processText ?? ""),
+                normalizeStoredMailboxText(input.reasoningText ?? ""),
+                normalizeStoredMailboxText(input.answerText ?? ""),
+                encodeMailboxToolSections(input.toolSections),
+                input.recordedAtMs,
+            )
+    }
+
+    getTelegramPreviewMessage(chatId: string, messageId: number): TelegramPreviewMessageRecord | null {
+        assertSafeInteger(messageId, "telegram preview messageId")
+        const row = this.db
+            .query<TelegramPreviewMessageRow, [string, number]>(
+                `
+                    SELECT
+                        chat_id,
+                        message_id,
+                        tool_visibility,
+                        process_text,
+                        reasoning_text,
+                        answer_text,
+                        tool_sections_json,
+                        created_at_ms,
+                        updated_at_ms
+                    FROM telegram_preview_messages
+                    WHERE chat_id = ?1
+                      AND message_id = ?2
+                    LIMIT 1;
+                `,
+            )
+            .get(chatId, messageId)
+
+        return row ? mapTelegramPreviewMessageRow(row) : null
+    }
+
+    setTelegramPreviewToolVisibility(
+        chatId: string,
+        messageId: number,
+        toolVisibility: TelegramToolVisibility,
+        recordedAtMs: number,
+    ): TelegramPreviewMessageRecord | null {
+        assertSafeInteger(messageId, "telegram preview messageId")
+        assertSafeInteger(recordedAtMs, "telegram preview recordedAtMs")
+
+        const updated = this.db
+            .query(
+                `
+                    UPDATE telegram_preview_messages
+                    SET
+                        tool_visibility = ?3,
+                        updated_at_ms = ?4
+                    WHERE chat_id = ?1
+                      AND message_id = ?2;
+                `,
+            )
+            .run(chatId, messageId, toolVisibility, recordedAtMs)
+
+        if (updated.changes === 0) {
+            return null
+        }
+
+        return this.getTelegramPreviewMessage(chatId, messageId)
+    }
+
+    deleteTelegramPreviewMessage(chatId: string, messageId: number): void {
+        assertSafeInteger(messageId, "telegram preview messageId")
+        this.db
+            .query("DELETE FROM telegram_preview_messages WHERE chat_id = ?1 AND message_id = ?2;")
+            .run(chatId, messageId)
+    }
+
     hasMailboxEntry(sourceKind: string, externalId: string): boolean {
         const row = this.db
             .query<{ present: number }, [string, string]>(
@@ -781,6 +1122,7 @@ export class SqliteStore {
                         stream_message_id,
                         preview_process_text,
                         preview_reasoning_text,
+                        preview_tool_sections_json,
                         status,
                         attempt_count,
                         leased_until_ms,
@@ -927,6 +1269,7 @@ export class SqliteStore {
                     stream_message_id,
                     preview_process_text,
                     preview_reasoning_text,
+                    preview_tool_sections_json,
                     status,
                     attempt_count,
                     leased_until_ms,
@@ -936,7 +1279,7 @@ export class SqliteStore {
                     updated_at_ms,
                     delivered_at_ms
                 )
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL, ?11, ?12, ?13, ?14, ?15);
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, NULL, ?12, ?13, ?14, ?15, ?16);
             `,
         )
 
@@ -970,6 +1313,7 @@ export class SqliteStore {
                     delivery.strategy.mode === "edit" ? delivery.strategy.messageId : null,
                     normalizeStoredMailboxText(delivery.previewContext?.processText ?? ""),
                     normalizeStoredMailboxText(delivery.previewContext?.reasoningText ?? ""),
+                    encodeMailboxToolSections(delivery.previewContext?.toolSections ?? []),
                     "pending",
                     0,
                     payload.deliveryRetryAtMs,
@@ -1106,6 +1450,7 @@ export class SqliteStore {
                         stream_message_id,
                         preview_process_text,
                         preview_reasoning_text,
+                        preview_tool_sections_json,
                         status,
                         attempt_count,
                         leased_until_ms,
@@ -1736,6 +2081,7 @@ type MailboxDeliveryRow = {
     stream_message_id: number | null
     preview_process_text: string | null
     preview_reasoning_text: string | null
+    preview_tool_sections_json: string | null
     status: string
     attempt_count: number
     leased_until_ms: number | null
@@ -1767,6 +2113,31 @@ type PendingInteractionRow = {
     payload_json: string
     telegram_message_id: number | null
     created_at_ms: number
+}
+
+type TelegramMessageCleanupRow = {
+    id: number
+    kind: string
+    chat_id: string
+    message_id: number
+    next_attempt_at_ms: number
+    attempt_count: number
+    leased_until_ms: number | null
+    last_error: string | null
+    created_at_ms: number
+    updated_at_ms: number
+}
+
+type TelegramPreviewMessageRow = {
+    chat_id: string
+    message_id: number
+    tool_visibility: string
+    process_text: string | null
+    reasoning_text: string | null
+    answer_text: string | null
+    tool_sections_json: string | null
+    created_at_ms: number
+    updated_at_ms: number
 }
 
 type PendingInteractionPayload =
@@ -2071,18 +2442,97 @@ function mapMailboxDeliveryRow(row: MailboxDeliveryRow): MailboxDeliveryRecord {
 }
 
 function parseMailboxPreviewContext(
-    row: Pick<MailboxDeliveryRow, "preview_process_text" | "preview_reasoning_text">,
+    row: Pick<MailboxDeliveryRow, "preview_process_text" | "preview_reasoning_text" | "preview_tool_sections_json">,
 ): BindingDeferredPreviewContext | null {
     const processText = normalizeStoredMailboxText(row.preview_process_text ?? "")
     const reasoningText = normalizeStoredMailboxText(row.preview_reasoning_text ?? "")
-    if (processText === null && reasoningText === null) {
+    const toolSections = parseMailboxToolSections(row.preview_tool_sections_json)
+    if (processText === null && reasoningText === null && toolSections.length === 0) {
         return null
     }
 
     return {
         processText,
         reasoningText,
+        toolSections,
     }
+}
+
+function encodeMailboxToolSections(
+    toolSections: NonNullable<BindingDeferredPreviewContext["toolSections"]>,
+): string | null {
+    if (toolSections.length === 0) {
+        return null
+    }
+
+    return JSON.stringify(toolSections)
+}
+
+function parseMailboxToolSections(value: string | null): NonNullable<BindingDeferredPreviewContext["toolSections"]> {
+    if (value === null || value.trim().length === 0) {
+        return []
+    }
+
+    const parsed = JSON.parse(value)
+    if (!Array.isArray(parsed)) {
+        throw new Error("mailbox preview tool sections must be an array")
+    }
+
+    return parsed.map((entry, index) => parseMailboxToolSection(entry, index))
+}
+
+function parseMailboxToolSection(
+    value: unknown,
+    index: number,
+): NonNullable<BindingDeferredPreviewContext["toolSections"]>[number] {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+        throw new Error(`mailbox preview tool section ${index} must be an object`)
+    }
+
+    return {
+        callId: readRequiredStoredObjectStringField(value, "callId", `toolSections[${index}]`),
+        toolName: readRequiredStoredObjectStringField(value, "toolName", `toolSections[${index}]`),
+        status: readMailboxToolStatus(value, index),
+        title: readOptionalStoredObjectStringField(value, "title", `toolSections[${index}]`),
+        inputText: readOptionalStoredObjectStringField(value, "inputText", `toolSections[${index}]`),
+        outputText: readOptionalStoredObjectStringField(value, "outputText", `toolSections[${index}]`),
+        errorText: readOptionalStoredObjectStringField(value, "errorText", `toolSections[${index}]`),
+    }
+}
+
+function readMailboxToolStatus(
+    value: object,
+    index: number,
+): NonNullable<BindingDeferredPreviewContext["toolSections"]>[number]["status"] {
+    const status = readRequiredStoredObjectStringField(value, "status", `toolSections[${index}]`)
+    if (status === "pending" || status === "running" || status === "completed" || status === "error") {
+        return status
+    }
+
+    throw new Error(`toolSections[${index}].status must be one of pending, running, completed, error`)
+}
+
+function readRequiredStoredObjectStringField(value: object, key: string, field: string): string {
+    const raw = (value as Record<string, unknown>)[key]
+    if (typeof raw !== "string" || raw.trim().length === 0) {
+        throw new Error(`stored field ${field}.${key} is invalid`)
+    }
+
+    return raw
+}
+
+function readOptionalStoredObjectStringField(value: object, key: string, field: string): string | null {
+    const raw = (value as Record<string, unknown>)[key]
+    if (raw === null || raw === undefined) {
+        return null
+    }
+
+    if (typeof raw !== "string") {
+        throw new Error(`stored field ${field}.${key} is invalid`)
+    }
+
+    const trimmed = raw.trim()
+    return trimmed.length === 0 ? null : raw
 }
 
 function deleteMailboxJobEntries(db: SqliteDatabaseLike, jobId: number): MailboxEntryRecord[] {
@@ -2225,6 +2675,55 @@ function mapPendingInteractionRow(row: PendingInteractionRow): PendingInteractio
         },
         telegramMessageId: row.telegram_message_id,
         createdAtMs: row.created_at_ms,
+    }
+}
+
+function mapTelegramCleanupRow(row: TelegramMessageCleanupRow): TelegramMessageCleanupRecord {
+    return {
+        id: row.id,
+        kind: parseTelegramCleanupKind(row.kind),
+        chatId: row.chat_id,
+        messageId: row.message_id,
+        nextAttemptAtMs: row.next_attempt_at_ms,
+        attemptCount: row.attempt_count,
+        leasedUntilMs: row.leased_until_ms,
+        lastError: row.last_error,
+        createdAtMs: row.created_at_ms,
+        updatedAtMs: row.updated_at_ms,
+    }
+}
+
+function mapTelegramPreviewMessageRow(row: TelegramPreviewMessageRow): TelegramPreviewMessageRecord {
+    return {
+        chatId: row.chat_id,
+        messageId: row.message_id,
+        toolVisibility: parseTelegramToolVisibility(row.tool_visibility),
+        processText: normalizeStoredMailboxText(row.process_text ?? ""),
+        reasoningText: normalizeStoredMailboxText(row.reasoning_text ?? ""),
+        answerText: normalizeStoredMailboxText(row.answer_text ?? ""),
+        toolSections: parseMailboxToolSections(row.tool_sections_json),
+        createdAtMs: row.created_at_ms,
+        updatedAtMs: row.updated_at_ms,
+    }
+}
+
+function parseTelegramCleanupKind(value: string): TelegramMessageCleanupKind {
+    switch (value) {
+        case "interaction":
+        case "tool_activity":
+            return value
+        default:
+            throw new Error(`stored telegram cleanup kind is invalid: ${value}`)
+    }
+}
+
+function parseTelegramToolVisibility(value: string): TelegramToolVisibility {
+    switch (value) {
+        case "collapsed":
+        case "expanded":
+            return value
+        default:
+            throw new Error(`stored telegram preview tool visibility is invalid: ${value}`)
     }
 }
 

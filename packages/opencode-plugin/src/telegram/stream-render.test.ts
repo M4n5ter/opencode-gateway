@@ -1,6 +1,11 @@
 import { expect, test } from "bun:test"
 
-import { renderTelegramFinalMessage, renderTelegramStreamMessage } from "./stream-render"
+import {
+    buildTelegramStreamReplyMarkup,
+    renderTelegramFinalMessage,
+    renderTelegramStreamMessage,
+    renderTelegramStreamMessageForView,
+} from "./stream-render"
 
 test("renderTelegramStreamMessage places reasoning into an expandable italic blockquote", () => {
     expect(
@@ -12,6 +17,85 @@ test("renderTelegramStreamMessage places reasoning into an expandable italic blo
     ).toBe(
         "<blockquote expandable><i>I should check memory first</i></blockquote>\n\n<blockquote>Fetching data</blockquote>\n\nDone",
     )
+})
+
+test("renderTelegramStreamMessage renders tool sections as sibling expandable blocks", () => {
+    expect(
+        renderTelegramStreamMessage({
+            processText: "Fetching data",
+            reasoningText: "I should check memory first",
+            answerText: "Done",
+            toolSections: [
+                {
+                    callId: "call-1",
+                    toolName: "bash",
+                    status: "completed",
+                    title: "List repos",
+                    inputText: '{"cmd":"gh repo list"}',
+                    outputText: "repo-a\nrepo-b",
+                    errorText: null,
+                },
+            ],
+        }),
+    ).toBe(
+        '<blockquote expandable><i>I should check memory first</i></blockquote>\n\n<blockquote>Fetching data</blockquote>\n\n<b>List repos</b> <i>completed</i>\n<blockquote expandable>Input\n{"cmd":"gh repo list"}\n\nOutput\nrepo-a\nrepo-b</blockquote>\n\nDone',
+    )
+})
+
+test("renderTelegramStreamMessageForView keeps tool sections collapsed behind a summary by default", () => {
+    expect(
+        renderTelegramStreamMessageForView(
+            {
+                processText: "Fetching data",
+                reasoningText: "I should check memory first",
+                answerText: "Done",
+                toolSections: [
+                    {
+                        callId: "call-1",
+                        toolName: "bash",
+                        status: "completed",
+                        title: "List repos",
+                        inputText: '{"cmd":"gh repo list"}',
+                        outputText: "repo-a\nrepo-b",
+                        errorText: null,
+                    },
+                ],
+            },
+            {
+                toolCallView: "toggle",
+                toolVisibility: "collapsed",
+            },
+        ),
+    ).toBe(
+        "<blockquote expandable><i>I should check memory first</i></blockquote>\n\n<blockquote>Fetching data</blockquote>\n\n<i>Tools: 1 completed</i>\n\nDone",
+    )
+
+    expect(
+        buildTelegramStreamReplyMarkup(
+            {
+                processText: null,
+                reasoningText: null,
+                answerText: null,
+                toolSections: [
+                    {
+                        callId: "call-1",
+                        toolName: "bash",
+                        status: "completed",
+                        title: "List repos",
+                        inputText: '{"cmd":"gh repo list"}',
+                        outputText: "repo-a\nrepo-b",
+                        errorText: null,
+                    },
+                ],
+            },
+            {
+                toolCallView: "toggle",
+                toolVisibility: "collapsed",
+            },
+        ),
+    ).toEqual({
+        inline_keyboard: [[{ text: "Show Tools (1)", callback_data: "tv:show" }]],
+    })
 })
 
 test("renderTelegramFinalMessage renders common markdown into Telegram HTML", () => {
