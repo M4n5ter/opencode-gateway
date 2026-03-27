@@ -109,12 +109,14 @@ export class GatewayTransportHost implements BindingTransportHost {
                 toolCallView: this.toolCallView,
                 viewState: {
                     viewMode: "preview",
+                    previewPage: storedViewState.previewPage,
                     toolsPage: storedViewState.toolsPage,
                 },
             },
         )
         const nextViewState = {
             viewMode: viewState.viewMode,
+            previewPage: viewState.previewPage,
             toolsPage: viewState.toolsPage,
         } satisfies TelegramPreviewViewState
 
@@ -156,7 +158,7 @@ export class GatewayTransportHost implements BindingTransportHost {
 
         const previewContext = message.previewContext
         const toolSections = previewContext?.toolSections ?? []
-        if (previewContext == null || toolSections.length === 0) {
+        if (previewContext == null) {
             this.store.deleteTelegramPreviewMessage(message.deliveryTarget.target, strategy.messageId)
             return
         }
@@ -173,14 +175,21 @@ export class GatewayTransportHost implements BindingTransportHost {
                 toolCallView: this.toolCallView,
                 viewState: {
                     viewMode: "preview",
+                    previewPage: storedViewState.previewPage,
                     toolsPage: storedViewState.toolsPage,
                 },
             },
         )
+        if (viewState.toolCount === 0 && viewState.previewPageCount <= 1) {
+            this.store.deleteTelegramPreviewMessage(message.deliveryTarget.target, strategy.messageId)
+            return
+        }
+
         this.store.upsertTelegramPreviewMessage({
             chatId: message.deliveryTarget.target,
             messageId: strategy.messageId,
             viewMode: viewState.viewMode,
+            previewPage: viewState.previewPage,
             toolsPage: viewState.toolsPage,
             processText: previewContext.processText,
             reasoningText: previewContext.reasoningText,
@@ -197,6 +206,7 @@ export class GatewayTransportHost implements BindingTransportHost {
         if (strategy.mode !== "edit") {
             return {
                 viewMode: "preview",
+                previewPage: 0,
                 toolsPage: 0,
             }
         }
@@ -205,6 +215,7 @@ export class GatewayTransportHost implements BindingTransportHost {
         return (
             preview ?? {
                 viewMode: "preview",
+                previewPage: 0,
                 toolsPage: 0,
             }
         )

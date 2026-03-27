@@ -65,6 +65,7 @@ test("toggle preview mode preserves reasoning, process, and answer instead of re
             toolCallView: "toggle",
             viewState: {
                 viewMode: "preview",
+                previewPage: 0,
                 toolsPage: 0,
             },
         }),
@@ -77,6 +78,7 @@ test("toggle preview mode preserves reasoning, process, and answer instead of re
             toolCallView: "toggle",
             viewState: {
                 viewMode: "preview",
+                previewPage: 0,
                 toolsPage: 0,
             },
         }),
@@ -113,6 +115,7 @@ test("toggle preview mode falls back to a small tool summary when no preview tex
                 toolCallView: "toggle",
                 viewState: {
                     viewMode: "preview",
+                    previewPage: 0,
                     toolsPage: 0,
                 },
             },
@@ -141,6 +144,7 @@ test("toggle tools mode paginates newest tool sections without dropping preview 
         toolCallView: "toggle",
         viewState: {
             viewMode: "tools",
+            previewPage: 0,
             toolsPage: 0,
         },
     })
@@ -153,6 +157,7 @@ test("toggle tools mode paginates newest tool sections without dropping preview 
             toolCallView: "toggle",
             viewState: {
                 viewMode: "tools",
+                previewPage: 0,
                 toolsPage: 0,
             },
         }),
@@ -188,4 +193,61 @@ test("renderTelegramStreamMessage drops reasoning before process text when the p
             answerText: answer,
         }),
     ).toBe(`<blockquote>${longProcess}</blockquote>\n\ndone`)
+})
+
+test("toggle preview mode paginates long preview bodies and omits pagination when not needed", () => {
+    const preview = {
+        processText: "Working",
+        reasoningText: null,
+        answerText: ["alpha", "x".repeat(3500), "omega", "y".repeat(1200)].join("\n\n"),
+        toolSections: [],
+    }
+
+    expect(
+        renderTelegramStreamMessageForView(preview, {
+            toolCallView: "toggle",
+            viewState: {
+                viewMode: "preview",
+                previewPage: 1,
+                toolsPage: 0,
+            },
+        }),
+    ).toContain("yyyy")
+
+    expect(
+        buildTelegramStreamReplyMarkup(preview, {
+            toolCallView: "toggle",
+            viewState: {
+                viewMode: "preview",
+                previewPage: 0,
+                toolsPage: 0,
+            },
+        }),
+    ).toEqual({
+        inline_keyboard: [
+            [
+                { text: "1/2", callback_data: "tv:noop" },
+                { text: "Next", callback_data: "tv:preview_next" },
+            ],
+        ],
+    })
+
+    expect(
+        buildTelegramStreamReplyMarkup(
+            {
+                processText: "short",
+                reasoningText: null,
+                answerText: "done",
+                toolSections: [],
+            },
+            {
+                toolCallView: "toggle",
+                viewState: {
+                    viewMode: "preview",
+                    previewPage: 0,
+                    toolsPage: 0,
+                },
+            },
+        ),
+    ).toBeNull()
 })

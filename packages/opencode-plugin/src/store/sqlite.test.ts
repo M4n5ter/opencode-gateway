@@ -466,6 +466,7 @@ test("sqlite store persists telegram preview messages and view state", () => {
             chatId: "42",
             messageId: 77,
             viewMode: "preview",
+            previewPage: 0,
             toolsPage: 0,
             processText: "Working",
             reasoningText: "Checking cache first",
@@ -488,6 +489,7 @@ test("sqlite store persists telegram preview messages and view state", () => {
             chatId: "42",
             messageId: 77,
             viewMode: "preview",
+            previewPage: 0,
             toolsPage: 0,
             processText: "Working",
             reasoningText: "Checking cache first",
@@ -507,8 +509,9 @@ test("sqlite store persists telegram preview messages and view state", () => {
             updatedAtMs: 100,
         })
 
-        expect(store.setTelegramPreviewViewState("42", 77, "tools", 1, 150)).toMatchObject({
+        expect(store.setTelegramPreviewViewState("42", 77, "tools", 0, 1, 150)).toMatchObject({
             viewMode: "tools",
+            previewPage: 0,
             toolsPage: 1,
         })
         expect(store.getTelegramPreviewMessage("42", 77)?.updatedAtMs).toBe(150)

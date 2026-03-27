@@ -1,6 +1,6 @@
 import type { SqliteDatabaseLike } from "./database"
 
-const LATEST_SCHEMA_VERSION = 17
+const LATEST_SCHEMA_VERSION = 18
 
 export function migrateGatewayDatabase(db: SqliteDatabaseLike): void {
     db.exec("PRAGMA journal_mode = WAL;")
@@ -93,6 +93,11 @@ export function migrateGatewayDatabase(db: SqliteDatabaseLike): void {
 
     if (currentVersion === 16) {
         migrateToV17(db)
+        currentVersion = 17
+    }
+
+    if (currentVersion === 17) {
+        migrateToV18(db)
     }
 }
 
@@ -772,6 +777,28 @@ function migrateToV17(db: SqliteDatabaseLike): void {
 
         CREATE INDEX pending_interactions_scope_created_at_ms_idx
             ON pending_interactions (scope_kind, scope_id, created_at_ms);
+    `)
+    db.exec("PRAGMA user_version = 17;")
+}
+
+function migrateToV18(db: SqliteDatabaseLike): void {
+    db.exec(`
+        DROP TABLE IF EXISTS telegram_preview_messages;
+
+        CREATE TABLE telegram_preview_messages (
+            chat_id TEXT NOT NULL,
+            message_id INTEGER NOT NULL,
+            view_mode TEXT NOT NULL,
+            preview_page INTEGER NOT NULL,
+            tools_page INTEGER NOT NULL,
+            process_text TEXT,
+            reasoning_text TEXT,
+            answer_text TEXT,
+            tool_sections_json TEXT,
+            created_at_ms INTEGER NOT NULL,
+            updated_at_ms INTEGER NOT NULL,
+            PRIMARY KEY (chat_id, message_id)
+        );
     `)
     db.exec(`PRAGMA user_version = ${LATEST_SCHEMA_VERSION};`)
 }

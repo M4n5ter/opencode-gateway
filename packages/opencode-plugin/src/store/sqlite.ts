@@ -154,6 +154,7 @@ export type TelegramPreviewMessageRecord = {
     chatId: string
     messageId: number
     viewMode: TelegramPreviewViewMode
+    previewPage: number
     toolsPage: number
     processText: string | null
     reasoningText: string | null
@@ -787,6 +788,7 @@ export class SqliteStore {
         chatId: string
         messageId: number
         viewMode: TelegramPreviewViewMode
+        previewPage: number
         toolsPage: number
         processText: string | null
         reasoningText: string | null
@@ -796,6 +798,7 @@ export class SqliteStore {
     }): void {
         assertSafeInteger(input.messageId, "telegram preview messageId")
         assertSafeInteger(input.recordedAtMs, "telegram preview recordedAtMs")
+        assertSafeInteger(input.previewPage, "telegram preview previewPage")
         assertSafeInteger(input.toolsPage, "telegram preview toolsPage")
 
         this.db
@@ -805,6 +808,7 @@ export class SqliteStore {
                         chat_id,
                         message_id,
                         view_mode,
+                        preview_page,
                         tools_page,
                         process_text,
                         reasoning_text,
@@ -813,9 +817,10 @@ export class SqliteStore {
                         created_at_ms,
                         updated_at_ms
                     )
-                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)
+                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)
                     ON CONFLICT(chat_id, message_id) DO UPDATE SET
                         view_mode = excluded.view_mode,
+                        preview_page = excluded.preview_page,
                         tools_page = excluded.tools_page,
                         process_text = excluded.process_text,
                         reasoning_text = excluded.reasoning_text,
@@ -828,6 +833,7 @@ export class SqliteStore {
                 input.chatId,
                 input.messageId,
                 input.viewMode,
+                input.previewPage,
                 input.toolsPage,
                 normalizeStoredMailboxText(input.processText ?? ""),
                 normalizeStoredMailboxText(input.reasoningText ?? ""),
@@ -846,6 +852,7 @@ export class SqliteStore {
                         chat_id,
                         message_id,
                         view_mode,
+                        preview_page,
                         tools_page,
                         process_text,
                         reasoning_text,
@@ -868,11 +875,13 @@ export class SqliteStore {
         chatId: string,
         messageId: number,
         viewMode: TelegramPreviewViewMode,
+        previewPage: number,
         toolsPage: number,
         recordedAtMs: number,
     ): TelegramPreviewMessageRecord | null {
         assertSafeInteger(messageId, "telegram preview messageId")
         assertSafeInteger(recordedAtMs, "telegram preview recordedAtMs")
+        assertSafeInteger(previewPage, "telegram preview previewPage")
         assertSafeInteger(toolsPage, "telegram preview toolsPage")
 
         const updated = this.db
@@ -881,13 +890,14 @@ export class SqliteStore {
                     UPDATE telegram_preview_messages
                     SET
                         view_mode = ?3,
-                        tools_page = ?4,
-                        updated_at_ms = ?5
+                        preview_page = ?4,
+                        tools_page = ?5,
+                        updated_at_ms = ?6
                     WHERE chat_id = ?1
                       AND message_id = ?2;
                 `,
             )
-            .run(chatId, messageId, viewMode, toolsPage, recordedAtMs)
+            .run(chatId, messageId, viewMode, previewPage, toolsPage, recordedAtMs)
 
         if (updated.changes === 0) {
             return null
@@ -2296,6 +2306,7 @@ type TelegramPreviewMessageRow = {
     chat_id: string
     message_id: number
     view_mode: string
+    preview_page: number
     tools_page: number
     process_text: string | null
     reasoning_text: string | null
@@ -2943,6 +2954,7 @@ function mapTelegramPreviewMessageRow(row: TelegramPreviewMessageRow): TelegramP
         chatId: row.chat_id,
         messageId: row.message_id,
         viewMode: parseTelegramPreviewViewMode(row.view_mode),
+        previewPage: row.preview_page,
         toolsPage: row.tools_page,
         processText: normalizeStoredMailboxText(row.process_text ?? ""),
         reasoningText: normalizeStoredMailboxText(row.reasoning_text ?? ""),

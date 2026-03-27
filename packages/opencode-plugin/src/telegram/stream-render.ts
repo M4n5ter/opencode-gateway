@@ -1,24 +1,41 @@
 import type { TelegramToolCallView } from "../config/telegram"
 import type { TextDeliveryPreview } from "../delivery/text"
-import { escapeTelegramHtml, renderTelegramMarkdownHtml } from "./markdown"
+import {
+    escapeTelegramHtml,
+    extractVisibleTelegramHtmlText,
+    renderTelegramMarkdownBlocks,
+    renderTelegramMarkdownHtml,
+    visibleTelegramHtmlLength,
+} from "./markdown"
 import { renderTelegramToolSection, type TelegramToolSection, visibleTelegramToolSectionLength } from "./tool-render"
 import type { TelegramInlineKeyboardButton, TelegramInlineKeyboardMarkup } from "./types"
 
 const TELEGRAM_VISIBLE_TEXT_LIMIT = 4_096
+const PREVIEW_BLOCK_TEXT_CHUNK_LIMIT = TELEGRAM_VISIBLE_TEXT_LIMIT - 128
 const TOOL_VIEW_PREVIEW_DATA = "tv:preview"
 const TOOL_VIEW_TOOLS_DATA = "tv:tools"
 const TOOL_VIEW_NEWER_DATA = "tv:newer"
 const TOOL_VIEW_OLDER_DATA = "tv:older"
+const PREVIEW_VIEW_PREVIOUS_DATA = "tv:preview_prev"
+const PREVIEW_VIEW_NEXT_DATA = "tv:preview_next"
 const TOOL_VIEW_NOOP_DATA = "tv:noop"
 
 export type TelegramPreviewViewMode = "preview" | "tools"
 
 export type TelegramPreviewViewState = {
     viewMode: TelegramPreviewViewMode
+    previewPage: number
     toolsPage: number
 }
 
-export type TelegramToolToggleAction = "preview" | "tools" | "newer" | "older" | "noop"
+export type TelegramToolToggleAction =
+    | "preview"
+    | "tools"
+    | "newer"
+    | "older"
+    | "preview_previous"
+    | "preview_next"
+    | "noop"
 
 type TelegramStreamRenderOptions = {
     toolCallView?: TelegramToolCallView
@@ -29,6 +46,13 @@ type TelegramResolvedPreviewViewState = TelegramPreviewViewState & {
     toolCount: number
     toolsPageCount: number
     visibleToolSections: TelegramToolSection[]
+    previewPageCount: number
+    previewBody: string
+}
+
+type RenderedPreviewBlock = {
+    html: string
+    visibleLength: number
 }
 
 export function renderTelegramFinalMessage(text: string): string {
@@ -74,15 +98,7 @@ export function renderTelegramStreamMessageForView(
         return buildSections(null, null, null, resolvedView.visibleToolSections, null)
     }
 
-    return renderPreviewOnlyMessage({
-        reasoningText,
-        processText,
-        answerText,
-        fallbackToolSummary:
-            reasoningText === null && processText === null && answerText === null && allToolSections.length > 0
-                ? `<i>${escapeTelegramHtml(formatToolSummary(allToolSections))}</i>`
-                : null,
-    })
+    return resolvedView.previewBody
 }
 
 export function buildTelegramStreamReplyMarkup(
@@ -90,13 +106,15 @@ export function buildTelegramStreamReplyMarkup(
     options: TelegramStreamRenderOptions,
 ): TelegramInlineKeyboardMarkup | null {
     const toolCallView = options.toolCallView ?? "toggle"
-    if (toolCallView !== "toggle" || (preview.toolSections?.length ?? 0) === 0) {
+    if (toolCallView !== "toggle") {
         return null
     }
 
     const resolvedView = resolveTelegramPreviewViewState(preview, options)
-    const rows: TelegramInlineKeyboardButton[][] = [
-        [
+    const rows: TelegramInlineKeyboardButton[][] = []
+
+    if (resolvedView.toolCount > 0) {
+        rows.push([
             {
                 text: resolvedView.viewMode === "preview" ? "• Preview" : "Preview",
                 callback_data: TOOL_VIEW_PREVIEW_DATA,
@@ -108,33 +126,40 @@ export function buildTelegramStreamReplyMarkup(
                         : `Tools (${resolvedView.toolCount})`,
                 callback_data: TOOL_VIEW_TOOLS_DATA,
             },
-        ],
-    ]
+        ])
+    }
+
+    if (resolvedView.viewMode === "preview" && resolvedView.previewPageCount > 1) {
+        rows.push(
+            buildPaginationRow({
+                page: resolvedView.previewPage,
+                pageCount: resolvedView.previewPageCount,
+                previousLabel: "Prev",
+                previousData: PREVIEW_VIEW_PREVIOUS_DATA,
+                nextLabel: "Next",
+                nextData: PREVIEW_VIEW_NEXT_DATA,
+            }),
+        )
+    }
 
     if (resolvedView.viewMode === "tools" && resolvedView.toolsPageCount > 1) {
-        const paginationRow: TelegramInlineKeyboardButton[] = []
-        if (resolvedView.toolsPage > 0) {
-            paginationRow.push({
-                text: "Newer",
-                callback_data: TOOL_VIEW_NEWER_DATA,
-            })
-        }
-        paginationRow.push({
-            text: `${resolvedView.toolsPage + 1}/${resolvedView.toolsPageCount}`,
-            callback_data: TOOL_VIEW_NOOP_DATA,
-        })
-        if (resolvedView.toolsPage < resolvedView.toolsPageCount - 1) {
-            paginationRow.push({
-                text: "Older",
-                callback_data: TOOL_VIEW_OLDER_DATA,
-            })
-        }
-        rows.push(paginationRow)
+        rows.push(
+            buildPaginationRow({
+                page: resolvedView.toolsPage,
+                pageCount: resolvedView.toolsPageCount,
+                previousLabel: "Newer",
+                previousData: TOOL_VIEW_NEWER_DATA,
+                nextLabel: "Older",
+                nextData: TOOL_VIEW_OLDER_DATA,
+            }),
+        )
     }
 
-    return {
-        inline_keyboard: rows,
-    }
+    return rows.length === 0
+        ? null
+        : {
+              inline_keyboard: rows,
+          }
 }
 
 export function parseTelegramToolToggleCallback(data: string | null): TelegramToolToggleAction | null {
@@ -147,6 +172,10 @@ export function parseTelegramToolToggleCallback(data: string | null): TelegramTo
             return "newer"
         case TOOL_VIEW_OLDER_DATA:
             return "older"
+        case PREVIEW_VIEW_PREVIOUS_DATA:
+            return "preview_previous"
+        case PREVIEW_VIEW_NEXT_DATA:
+            return "preview_next"
         case TOOL_VIEW_NOOP_DATA:
             return "noop"
         default:
@@ -159,10 +188,29 @@ export function resolveTelegramPreviewViewState(
     options: TelegramStreamRenderOptions,
 ): TelegramResolvedPreviewViewState {
     const toolCallView = options.toolCallView ?? "toggle"
+    const processText = normalizeVisibleText(preview.processText)
+    const reasoningText = normalizeVisibleText(preview.reasoningText)
+    const answerText = normalizeVisibleText(preview.answerText)
     const allToolSections = [...(preview.toolSections ?? [])]
-    if (toolCallView !== "toggle" || allToolSections.length === 0) {
+    const previewPages = paginatePreviewBodyPages({
+        reasoningText,
+        processText,
+        answerText,
+        fallbackToolSummary:
+            reasoningText === null && processText === null && answerText === null && allToolSections.length > 0
+                ? `<i>${escapeTelegramHtml(formatToolSummary(allToolSections))}</i>`
+                : null,
+    })
+    const maxPreviewPageIndex = Math.max(0, previewPages.length - 1)
+    const requestedPreviewPage = options.viewState?.previewPage ?? 0
+    const previewPage = clamp(Math.trunc(requestedPreviewPage), 0, maxPreviewPageIndex)
+
+    if (toolCallView !== "toggle") {
         return {
             viewMode: "preview",
+            previewPage,
+            previewPageCount: previewPages.length,
+            previewBody: previewPages[previewPage] ?? "",
             toolsPage: 0,
             toolCount: allToolSections.length,
             toolsPageCount: allToolSections.length === 0 ? 0 : 1,
@@ -171,14 +219,18 @@ export function resolveTelegramPreviewViewState(
     }
 
     const pages = paginateToolSections(allToolSections)
-    const maxPageIndex = Math.max(0, pages.length - 1)
-    const requestedPage = options.viewState?.toolsPage ?? 0
-    const toolsPage = clamp(Math.trunc(requestedPage), 0, maxPageIndex)
+    const maxToolsPageIndex = Math.max(0, pages.length - 1)
+    const requestedToolsPage = options.viewState?.toolsPage ?? 0
+    const toolsPage = clamp(Math.trunc(requestedToolsPage), 0, maxToolsPageIndex)
     const requestedViewMode = options.viewState?.viewMode ?? "preview"
-    const viewMode: TelegramPreviewViewMode = requestedViewMode === "tools" ? "tools" : "preview"
+    const viewMode: TelegramPreviewViewMode =
+        allToolSections.length > 0 && requestedViewMode === "tools" ? "tools" : "preview"
 
     return {
         viewMode,
+        previewPage,
+        previewPageCount: previewPages.length,
+        previewBody: previewPages[previewPage] ?? "",
         toolsPage,
         toolCount: allToolSections.length,
         toolsPageCount: pages.length,
@@ -348,6 +400,144 @@ function visibleLength(
     }
 
     return textSegments.reduce((length, segment) => length + segment.length, 0) + toolLength + (sectionCount - 1) * 2
+}
+
+function paginatePreviewBodyPages(input: {
+    reasoningText: string | null
+    processText: string | null
+    answerText: string | null
+    fallbackToolSummary: string | null
+}): string[] {
+    const blocks = [
+        ...renderTextPreviewBlocks(input.reasoningText, renderReasoningBlock),
+        ...renderTextPreviewBlocks(input.processText, renderProcessBlock),
+        ...(input.fallbackToolSummary === null
+            ? []
+            : [
+                  {
+                      html: input.fallbackToolSummary,
+                      visibleLength: visibleTelegramHtmlLength(input.fallbackToolSummary),
+                  } satisfies RenderedPreviewBlock,
+              ]),
+        ...renderAnswerPreviewBlocks(input.answerText),
+    ]
+
+    if (blocks.length === 0) {
+        return [""]
+    }
+
+    return paginateRenderedPreviewBlocks(blocks)
+}
+
+function renderTextPreviewBlocks(
+    text: string | null,
+    renderBlock: (text: string) => string | null,
+): RenderedPreviewBlock[] {
+    if (text === null) {
+        return []
+    }
+
+    return chunkVisibleText(text).flatMap((chunk) => {
+        const html = renderBlock(chunk)
+        return html === null ? [] : [{ html, visibleLength: chunk.length }]
+    })
+}
+
+function renderAnswerPreviewBlocks(answerText: string | null): RenderedPreviewBlock[] {
+    if (answerText === null) {
+        return []
+    }
+
+    return renderTelegramMarkdownBlocks(answerText).flatMap(splitOversizedPreviewBlock)
+}
+
+function splitOversizedPreviewBlock(block: RenderedPreviewBlock): RenderedPreviewBlock[] {
+    if (block.visibleLength <= TELEGRAM_VISIBLE_TEXT_LIMIT) {
+        return [block]
+    }
+
+    return chunkVisibleText(extractVisibleTelegramHtmlText(block.html)).map((chunk) => ({
+        html: escapeTelegramHtml(chunk),
+        visibleLength: chunk.length,
+    }))
+}
+
+function paginateRenderedPreviewBlocks(blocks: RenderedPreviewBlock[]): string[] {
+    const pages: string[] = []
+    let currentPage: RenderedPreviewBlock[] = []
+    let currentLength = 0
+
+    for (const block of blocks) {
+        const nextLength = currentPage.length === 0 ? block.visibleLength : currentLength + 2 + block.visibleLength
+        if (currentPage.length > 0 && nextLength > TELEGRAM_VISIBLE_TEXT_LIMIT) {
+            pages.push(currentPage.map((entry) => entry.html).join("\n\n"))
+            currentPage = [block]
+            currentLength = block.visibleLength
+            continue
+        }
+
+        currentPage.push(block)
+        currentLength = nextLength
+    }
+
+    if (currentPage.length > 0) {
+        pages.push(currentPage.map((entry) => entry.html).join("\n\n"))
+    }
+
+    return pages.length === 0 ? [""] : pages
+}
+
+function chunkVisibleText(text: string): string[] {
+    if (text.length <= PREVIEW_BLOCK_TEXT_CHUNK_LIMIT) {
+        return [text]
+    }
+
+    const chunks: string[] = []
+    let remaining = text
+    while (remaining.length > PREVIEW_BLOCK_TEXT_CHUNK_LIMIT) {
+        let splitAt = remaining.lastIndexOf("\n", PREVIEW_BLOCK_TEXT_CHUNK_LIMIT)
+        if (splitAt <= 0) {
+            splitAt = PREVIEW_BLOCK_TEXT_CHUNK_LIMIT
+        }
+
+        chunks.push(remaining.slice(0, splitAt))
+        remaining = remaining.slice(splitAt).replace(/^\n+/u, "")
+    }
+
+    if (remaining.length > 0) {
+        chunks.push(remaining)
+    }
+
+    return chunks
+}
+
+function buildPaginationRow(input: {
+    page: number
+    pageCount: number
+    previousLabel: string
+    previousData: string
+    nextLabel: string
+    nextData: string
+}): TelegramInlineKeyboardButton[] {
+    const row: TelegramInlineKeyboardButton[] = []
+    if (input.page > 0) {
+        row.push({
+            text: input.previousLabel,
+            callback_data: input.previousData,
+        })
+    }
+    row.push({
+        text: `${input.page + 1}/${input.pageCount}`,
+        callback_data: TOOL_VIEW_NOOP_DATA,
+    })
+    if (input.page < input.pageCount - 1) {
+        row.push({
+            text: input.nextLabel,
+            callback_data: input.nextData,
+        })
+    }
+
+    return row
 }
 
 function normalizeVisibleText(value: string | null): string | null {

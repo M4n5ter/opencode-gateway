@@ -390,6 +390,7 @@ test("GatewayTextDelivery keeps preview content visible and moves tools behind a
         ])
         expect(store.getTelegramPreviewMessage("42", 9)).toMatchObject({
             viewMode: "preview",
+            previewPage: 0,
             toolsPage: 0,
         })
     } finally {
@@ -671,7 +672,7 @@ test("GatewayTextDelivery forces the final edit back to preview mode after tools
         })
         await sleep(10)
 
-        store.setTelegramPreviewViewState("42", 12, "tools", 0, Date.now())
+        store.setTelegramPreviewViewState("42", 12, "tools", 0, 0, Date.now())
 
         await session.finish("final answer")
 
@@ -688,6 +689,7 @@ test("GatewayTextDelivery forces the final edit back to preview mode after tools
         })
         expect(store.getTelegramPreviewMessage("42", 12)).toMatchObject({
             viewMode: "preview",
+            previewPage: 0,
             toolsPage: 0,
         })
     } finally {

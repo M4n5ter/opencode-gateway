@@ -2,6 +2,11 @@ import { marked, Renderer, type Tokens } from "marked"
 
 const TELEGRAM_HR = "----------"
 
+export type TelegramMarkdownBlock = {
+    html: string
+    visibleLength: number
+}
+
 export function renderTelegramMarkdownHtml(markdown: string): string {
     const source = markdown.trim()
     if (source.length === 0) {
@@ -17,8 +22,43 @@ export function renderTelegramMarkdownHtml(markdown: string): string {
     return trimRenderedBlock(rendered)
 }
 
+export function renderTelegramMarkdownBlocks(markdown: string): TelegramMarkdownBlock[] {
+    const source = markdown.trim()
+    if (source.length === 0) {
+        return []
+    }
+
+    const renderer = createTelegramRenderer()
+    return marked
+        .lexer(source, {
+            async: false,
+            gfm: true,
+        })
+        .filter((token) => token.type !== "space")
+        .map((token) => trimRenderedBlock(marked.parser([token], { async: false, gfm: true, renderer })))
+        .filter((html) => html.length > 0)
+        .map((html) => ({
+            html,
+            visibleLength: visibleTelegramHtmlLength(html),
+        }))
+}
+
 export function escapeTelegramHtml(text: string): string {
     return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
+}
+
+export function visibleTelegramHtmlLength(html: string): number {
+    return extractVisibleTelegramHtmlText(html).length
+}
+
+export function extractVisibleTelegramHtmlText(html: string): string {
+    return html
+        .replace(/<[^>]+>/gu, "")
+        .replaceAll("&lt;", "<")
+        .replaceAll("&gt;", ">")
+        .replaceAll("&amp;", "&")
+        .replaceAll("&quot;", '"')
+        .replaceAll("&#39;", "'")
 }
 
 function createTelegramRenderer(): Renderer<string, string> {

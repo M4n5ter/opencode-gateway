@@ -52,6 +52,7 @@ export class TelegramToolToggleRuntime {
         })
         const persistedViewState = {
             viewMode: resolvedViewState.viewMode,
+            previewPage: resolvedViewState.previewPage,
             toolsPage: resolvedViewState.toolsPage,
         } satisfies TelegramPreviewViewState
 
@@ -81,63 +82,92 @@ export class TelegramToolToggleRuntime {
             query.deliveryTarget.target,
             query.messageId,
             persistedViewState.viewMode,
+            persistedViewState.previewPage,
             persistedViewState.toolsPage,
             Date.now(),
         )
         await this.client.answerCallbackQuery(
             query.callbackQueryId,
-            formatToggleAck(action, resolvedViewState.toolsPage, resolvedViewState.toolsPageCount),
+            formatToggleAck({
+                action,
+                previewPage: resolvedViewState.previewPage,
+                previewPageCount: resolvedViewState.previewPageCount,
+                toolsPage: resolvedViewState.toolsPage,
+                toolsPageCount: resolvedViewState.toolsPageCount,
+            }),
         )
         return true
     }
 }
 
 function resolveNextViewState(
-    preview: Pick<TelegramPreviewMessageRecord, "viewMode" | "toolsPage">,
+    preview: Pick<TelegramPreviewMessageRecord, "viewMode" | "previewPage" | "toolsPage">,
     action: TelegramToolToggleAction,
 ): TelegramPreviewViewState {
     switch (action) {
         case "preview":
             return {
                 viewMode: "preview",
+                previewPage: preview.previewPage,
                 toolsPage: preview.toolsPage,
             }
         case "tools":
             return {
                 viewMode: "tools",
+                previewPage: preview.previewPage,
+                toolsPage: preview.toolsPage,
+            }
+        case "preview_previous":
+            return {
+                viewMode: "preview",
+                previewPage: Math.max(0, preview.previewPage - 1),
+                toolsPage: preview.toolsPage,
+            }
+        case "preview_next":
+            return {
+                viewMode: "preview",
+                previewPage: preview.previewPage + 1,
                 toolsPage: preview.toolsPage,
             }
         case "newer":
             return {
                 viewMode: "tools",
+                previewPage: preview.previewPage,
                 toolsPage: Math.max(0, preview.toolsPage - 1),
             }
         case "older":
             return {
                 viewMode: "tools",
+                previewPage: preview.previewPage,
                 toolsPage: preview.toolsPage + 1,
             }
         case "noop":
             return {
                 viewMode: preview.viewMode,
+                previewPage: preview.previewPage,
                 toolsPage: preview.toolsPage,
             }
     }
 }
 
-function formatToggleAck(
-    action: TelegramToolToggleAction,
-    toolsPage: number,
-    toolsPageCount: number,
-): string | undefined {
-    switch (action) {
+function formatToggleAck(input: {
+    action: TelegramToolToggleAction
+    previewPage: number
+    previewPageCount: number
+    toolsPage: number
+    toolsPageCount: number
+}): string | undefined {
+    switch (input.action) {
         case "preview":
             return "Showing preview"
         case "tools":
             return "Showing tools"
+        case "preview_previous":
+        case "preview_next":
+            return `Preview ${input.previewPage + 1}/${Math.max(input.previewPageCount, 1)}`
         case "newer":
         case "older":
-            return `Tools ${toolsPage + 1}/${Math.max(toolsPageCount, 1)}`
+            return `Tools ${input.toolsPage + 1}/${Math.max(input.toolsPageCount, 1)}`
         case "noop":
             return undefined
     }

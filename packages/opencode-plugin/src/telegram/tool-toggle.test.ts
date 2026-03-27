@@ -15,6 +15,7 @@ test("TelegramToolToggleRuntime switches the preview message into tools view", a
             chatId: "42",
             messageId: 77,
             viewMode: "preview",
+            previewPage: 0,
             toolsPage: 0,
             processText: "Fetching data",
             reasoningText: null,
@@ -95,6 +96,7 @@ test("TelegramToolToggleRuntime keeps tools paging interactive after completion"
             chatId: "42",
             messageId: 77,
             viewMode: "preview",
+            previewPage: 0,
             toolsPage: 0,
             processText: "Fetching data",
             reasoningText: "Check cache",
@@ -177,9 +179,79 @@ test("TelegramToolToggleRuntime keeps tools paging interactive after completion"
         })
         expect(store.getTelegramPreviewMessage("42", 77)).toMatchObject({
             viewMode: "preview",
+            previewPage: 0,
             toolsPage: 1,
         })
         expect(answers).toEqual(["Showing tools", "Tools 2/2", "Showing preview"])
+    } finally {
+        db.close()
+    }
+})
+
+test("TelegramToolToggleRuntime paginates long preview bodies without requiring tools", async () => {
+    const db = createMemoryDatabase()
+
+    try {
+        migrateGatewayDatabase(db)
+        const store = new SqliteStore(db)
+        store.upsertTelegramPreviewMessage({
+            chatId: "42",
+            messageId: 77,
+            viewMode: "preview",
+            previewPage: 0,
+            toolsPage: 0,
+            processText: "Working",
+            reasoningText: null,
+            answerText: ["alpha", "x".repeat(3500), "omega", "y".repeat(1200)].join("\n\n"),
+            toolSections: [],
+            recordedAtMs: 1,
+        })
+
+        const edits: Array<{ text: string; replyMarkup: unknown }> = []
+        const answers: string[] = []
+        const runtime = new TelegramToolToggleRuntime(
+            {
+                async answerCallbackQuery(_callbackQueryId, text) {
+                    answers.push(text ?? "")
+                },
+                async editMessageText(_chatId, _messageId, text, options = {}) {
+                    edits.push({
+                        text,
+                        replyMarkup: options.replyMarkup ?? null,
+                    })
+                },
+            },
+            store,
+            "toggle",
+        )
+
+        await runtime.handleTelegramCallbackQuery({
+            callbackQueryId: "cb-1",
+            sender: "telegram:42",
+            deliveryTarget: {
+                channel: "telegram",
+                target: "42",
+                topic: null,
+            },
+            messageId: 77,
+            data: "tv:preview_next",
+        })
+
+        expect(edits[0]?.text).toContain("yyyy")
+        expect(edits[0]?.replyMarkup).toEqual({
+            inline_keyboard: [
+                [
+                    { text: "Prev", callback_data: "tv:preview_prev" },
+                    { text: "2/2", callback_data: "tv:noop" },
+                ],
+            ],
+        })
+        expect(store.getTelegramPreviewMessage("42", 77)).toMatchObject({
+            viewMode: "preview",
+            previewPage: 1,
+            toolsPage: 0,
+        })
+        expect(answers).toEqual(["Preview 2/2"])
     } finally {
         db.close()
     }

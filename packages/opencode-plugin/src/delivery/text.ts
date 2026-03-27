@@ -473,11 +473,13 @@ class ProgressiveTextDeliverySession implements TextDeliverySession {
             toolCallView: this.toolCallView,
             viewState: {
                 viewMode: overrideViewState?.viewMode ?? storedViewState.viewMode,
+                previewPage: overrideViewState?.previewPage ?? storedViewState.previewPage,
                 toolsPage: overrideViewState?.toolsPage ?? storedViewState.toolsPage,
             },
         })
         const viewState = {
             viewMode: resolvedViewState.viewMode,
+            previewPage: resolvedViewState.previewPage,
             toolsPage: resolvedViewState.toolsPage,
         } satisfies TelegramPreviewViewState
 
@@ -498,6 +500,7 @@ class ProgressiveTextDeliverySession implements TextDeliverySession {
         if (this.toolCallView !== "toggle" || this.streamMessageId === null) {
             return {
                 viewMode: "preview",
+                previewPage: 0,
                 toolsPage: 0,
             }
         }
@@ -506,6 +509,7 @@ class ProgressiveTextDeliverySession implements TextDeliverySession {
         return (
             preview ?? {
                 viewMode: "preview",
+                previewPage: 0,
                 toolsPage: 0,
             }
         )
@@ -517,7 +521,11 @@ class ProgressiveTextDeliverySession implements TextDeliverySession {
         }
 
         const toolSections = normalizeToolSections(preview.toolSections)
-        if (toolSections.length === 0) {
+        const resolvedViewState = resolveTelegramPreviewViewState(preview, {
+            toolCallView: this.toolCallView,
+            viewState,
+        })
+        if (resolvedViewState.toolCount === 0 && resolvedViewState.previewPageCount <= 1) {
             this.store.deleteTelegramPreviewMessage(this.target.target, this.streamMessageId)
             return
         }
@@ -526,6 +534,7 @@ class ProgressiveTextDeliverySession implements TextDeliverySession {
             chatId: this.target.target,
             messageId: this.streamMessageId,
             viewMode: viewState.viewMode,
+            previewPage: viewState.previewPage,
             toolsPage: viewState.toolsPage,
             processText: preview.processText,
             reasoningText: preview.reasoningText,
