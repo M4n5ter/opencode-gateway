@@ -1,9 +1,15 @@
 import type { TelegramToolCallView } from "../config/telegram"
-import type { SqliteStore } from "../store/sqlite"
+import type { SqliteStore, TelegramPreviewMessageRecord } from "../store/sqlite"
 import { TelegramApiError, type TelegramCallbackClientLike } from "./client"
 import type { TelegramNormalizedCallbackQuery } from "./normalize"
-import { buildTelegramStreamReplyMarkup, renderTelegramStreamMessageForView } from "./stream-render"
-import { parseTelegramToolVisibilityCallback } from "./tool-render"
+import {
+    buildTelegramStreamReplyMarkup,
+    parseTelegramToolToggleCallback,
+    renderTelegramStreamMessageForView,
+    resolveTelegramPreviewViewState,
+    type TelegramPreviewViewState,
+    type TelegramToolToggleAction,
+} from "./stream-render"
 
 export class TelegramToolToggleRuntime {
     constructor(
@@ -17,9 +23,14 @@ export class TelegramToolToggleRuntime {
             return false
         }
 
-        const nextVisibility = parseTelegramToolVisibilityCallback(query.data)
-        if (nextVisibility === null) {
+        const action = parseTelegramToolToggleCallback(query.data)
+        if (action === null) {
             return false
+        }
+
+        if (action === "noop") {
+            await this.client.answerCallbackQuery(query.callbackQueryId)
+            return true
         }
 
         const preview = this.store.getTelegramPreviewMessage(query.deliveryTarget.target, query.messageId)
@@ -34,6 +45,15 @@ export class TelegramToolToggleRuntime {
             answerText: preview.answerText,
             toolSections: preview.toolSections,
         }
+        const nextViewState = resolveNextViewState(preview, action)
+        const resolvedViewState = resolveTelegramPreviewViewState(renderedPreview, {
+            toolCallView: "toggle",
+            viewState: nextViewState,
+        })
+        const persistedViewState = {
+            viewMode: resolvedViewState.viewMode,
+            toolsPage: resolvedViewState.toolsPage,
+        } satisfies TelegramPreviewViewState
 
         try {
             await this.client.editMessageText(
@@ -41,13 +61,13 @@ export class TelegramToolToggleRuntime {
                 query.messageId,
                 renderTelegramStreamMessageForView(renderedPreview, {
                     toolCallView: "toggle",
-                    toolVisibility: nextVisibility,
+                    viewState: persistedViewState,
                 }),
                 {
                     parseMode: "HTML",
                     replyMarkup: buildTelegramStreamReplyMarkup(renderedPreview, {
                         toolCallView: "toggle",
-                        toolVisibility: nextVisibility,
+                        viewState: persistedViewState,
                     }),
                 },
             )
@@ -57,17 +77,69 @@ export class TelegramToolToggleRuntime {
             }
         }
 
-        this.store.setTelegramPreviewToolVisibility(
+        this.store.setTelegramPreviewViewState(
             query.deliveryTarget.target,
             query.messageId,
-            nextVisibility,
+            persistedViewState.viewMode,
+            persistedViewState.toolsPage,
             Date.now(),
         )
         await this.client.answerCallbackQuery(
             query.callbackQueryId,
-            nextVisibility === "expanded" ? "Showing tools" : "Hiding tools",
+            formatToggleAck(action, resolvedViewState.toolsPage, resolvedViewState.toolsPageCount),
         )
         return true
+    }
+}
+
+function resolveNextViewState(
+    preview: Pick<TelegramPreviewMessageRecord, "viewMode" | "toolsPage">,
+    action: TelegramToolToggleAction,
+): TelegramPreviewViewState {
+    switch (action) {
+        case "preview":
+            return {
+                viewMode: "preview",
+                toolsPage: preview.toolsPage,
+            }
+        case "tools":
+            return {
+                viewMode: "tools",
+                toolsPage: preview.toolsPage,
+            }
+        case "newer":
+            return {
+                viewMode: "tools",
+                toolsPage: Math.max(0, preview.toolsPage - 1),
+            }
+        case "older":
+            return {
+                viewMode: "tools",
+                toolsPage: preview.toolsPage + 1,
+            }
+        case "noop":
+            return {
+                viewMode: preview.viewMode,
+                toolsPage: preview.toolsPage,
+            }
+    }
+}
+
+function formatToggleAck(
+    action: TelegramToolToggleAction,
+    toolsPage: number,
+    toolsPageCount: number,
+): string | undefined {
+    switch (action) {
+        case "preview":
+            return "Showing preview"
+        case "tools":
+            return "Showing tools"
+        case "newer":
+        case "older":
+            return `Tools ${toolsPage + 1}/${Math.max(toolsPageCount, 1)}`
+        case "noop":
+            return undefined
     }
 }
 

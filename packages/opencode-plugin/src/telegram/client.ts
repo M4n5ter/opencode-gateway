@@ -14,6 +14,7 @@ import type {
 type TelegramTextOptions = {
     parseMode?: "HTML" | "MarkdownV2" | "Markdown"
     replyMarkup?: TelegramInlineKeyboardMarkup | null
+    disableLinkPreview?: boolean
 }
 
 export class TelegramApiError extends Error {
@@ -88,6 +89,7 @@ export class TelegramBotClient {
             message_thread_id: parseMessageThreadId(messageThreadId),
             parse_mode: options.parseMode,
             reply_markup: options.replyMarkup ?? undefined,
+            link_preview_options: buildTelegramLinkPreviewOptions(options),
         })
     }
 
@@ -104,6 +106,7 @@ export class TelegramBotClient {
             message_thread_id: parseMessageThreadId(messageThreadId),
             parse_mode: options.parseMode,
             reply_markup: replyMarkup,
+            link_preview_options: buildTelegramLinkPreviewOptions(options),
         })
     }
 
@@ -163,6 +166,7 @@ export class TelegramBotClient {
             text,
             parse_mode: options.parseMode,
             reply_markup: options.replyMarkup ?? undefined,
+            link_preview_options: buildTelegramLinkPreviewOptions(options),
         })
     }
 
@@ -248,6 +252,14 @@ export type TelegramFileSendClientLike = Pick<TelegramBotClient, "sendPhoto" | "
 export type TelegramChatActionClientLike = Pick<TelegramBotClient, "sendChatAction">
 export type TelegramMessageEditClientLike = Pick<TelegramBotClient, "editMessageText">
 export type TelegramMessageDeleteClientLike = Pick<TelegramBotClient, "deleteMessage">
+
+function buildTelegramLinkPreviewOptions(options: TelegramTextOptions): { is_disabled: true } | undefined {
+    if (options.disableLinkPreview === false) {
+        return undefined
+    }
+
+    return { is_disabled: true }
+}
 
 async function readLocalFileBlob(filePath: string, mimeType: string): Promise<Blob> {
     const bytes = await readFile(filePath)

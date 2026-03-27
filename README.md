@@ -115,6 +115,7 @@ allowed_users = []
 
 [channels.telegram.ux]
 # Control Telegram tool-call previews: "toggle", "inline", or "off".
+# "toggle" keeps one preview message with Preview / Tools buttons.
 tool_call_view = "toggle"
 
 [[memory.entries]]
@@ -157,7 +158,9 @@ Telegram UX defaults:
 
 - private Telegram chats use one editable stream message instead of draft transport
 - successful `permission` and `question` prompts are auto-removed shortly after reply
-- tool calls appear in the same preview message and are hidden behind a `Show Tools` button by default
+- `tool_call_view = "toggle"` uses one preview message with `Preview` / `Tools` buttons instead of mixing tool details into the main preview body
+- the `Preview` view keeps `reasoning`, `process`, and the final answer visible; the `Tools` view paginates tool details newest-first
+- when the task finishes, the message returns to `Preview`, but `Tools` stays available for later inspection
 - the first tool event opens the preview stream immediately so pending/running tool input shows up early
 
 When `cron.timezone` is omitted, recurring cron expressions are interpreted in

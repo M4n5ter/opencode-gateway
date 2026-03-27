@@ -12,6 +12,8 @@ import {
     buildTelegramStreamReplyMarkup,
     renderTelegramFinalMessage,
     renderTelegramStreamMessageForView,
+    resolveTelegramPreviewViewState,
+    type TelegramPreviewViewState,
 } from "../telegram/stream-render"
 import { formatError } from "../utils/error"
 
@@ -95,11 +97,26 @@ export class GatewayTransportHost implements BindingTransportHost {
             }
         }
 
-        const toolVisibility =
-            strategy.mode === "edit"
-                ? (this.store.getTelegramPreviewMessage(message.deliveryTarget.target, strategy.messageId)
-                      ?.toolVisibility ?? "collapsed")
-                : "collapsed"
+        const storedViewState = this.resolveStoredViewState(message.deliveryTarget.target, strategy)
+        const viewState = resolveTelegramPreviewViewState(
+            {
+                processText: previewContext.processText,
+                reasoningText: previewContext.reasoningText,
+                answerText: message.body,
+                toolSections: previewContext.toolSections,
+            },
+            {
+                toolCallView: this.toolCallView,
+                viewState: {
+                    viewMode: "preview",
+                    toolsPage: storedViewState.toolsPage,
+                },
+            },
+        )
+        const nextViewState = {
+            viewMode: viewState.viewMode,
+            toolsPage: viewState.toolsPage,
+        } satisfies TelegramPreviewViewState
 
         return {
             text: renderTelegramStreamMessageForView(
@@ -111,7 +128,7 @@ export class GatewayTransportHost implements BindingTransportHost {
                 },
                 {
                     toolCallView: this.toolCallView,
-                    toolVisibility,
+                    viewState: nextViewState,
                 },
             ),
             replyMarkup:
@@ -125,7 +142,7 @@ export class GatewayTransportHost implements BindingTransportHost {
                           },
                           {
                               toolCallView: this.toolCallView,
-                              toolVisibility,
+                              viewState: nextViewState,
                           },
                       )
                     : null,
@@ -144,19 +161,53 @@ export class GatewayTransportHost implements BindingTransportHost {
             return
         }
 
-        const toolVisibility =
-            this.store.getTelegramPreviewMessage(message.deliveryTarget.target, strategy.messageId)?.toolVisibility ??
-            "collapsed"
+        const storedViewState = this.resolveStoredViewState(message.deliveryTarget.target, strategy)
+        const viewState = resolveTelegramPreviewViewState(
+            {
+                processText: previewContext.processText,
+                reasoningText: previewContext.reasoningText,
+                answerText: message.body,
+                toolSections,
+            },
+            {
+                toolCallView: this.toolCallView,
+                viewState: {
+                    viewMode: "preview",
+                    toolsPage: storedViewState.toolsPage,
+                },
+            },
+        )
         this.store.upsertTelegramPreviewMessage({
             chatId: message.deliveryTarget.target,
             messageId: strategy.messageId,
-            toolVisibility,
+            viewMode: viewState.viewMode,
+            toolsPage: viewState.toolsPage,
             processText: previewContext.processText,
             reasoningText: previewContext.reasoningText,
             answerText: message.body,
             toolSections,
             recordedAtMs: Date.now(),
         })
+    }
+
+    private resolveStoredViewState(
+        chatId: string,
+        strategy: BindingDeferredDeliveryStrategy,
+    ): TelegramPreviewViewState {
+        if (strategy.mode !== "edit") {
+            return {
+                viewMode: "preview",
+                toolsPage: 0,
+            }
+        }
+
+        const preview = this.store.getTelegramPreviewMessage(chatId, strategy.messageId)
+        return (
+            preview ?? {
+                viewMode: "preview",
+                toolsPage: 0,
+            }
+        )
     }
 }
 

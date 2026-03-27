@@ -453,7 +453,7 @@ test("sqlite store persists mailbox preview tool sections for deferred delivery"
     }
 })
 
-test("sqlite store persists telegram preview messages and tool visibility", () => {
+test("sqlite store persists telegram preview messages and view state", () => {
     const db = createMemoryDatabase()
 
     try {
@@ -463,7 +463,8 @@ test("sqlite store persists telegram preview messages and tool visibility", () =
         store.upsertTelegramPreviewMessage({
             chatId: "42",
             messageId: 77,
-            toolVisibility: "collapsed",
+            viewMode: "preview",
+            toolsPage: 0,
             processText: "Working",
             reasoningText: "Checking cache first",
             answerText: "Done",
@@ -484,7 +485,8 @@ test("sqlite store persists telegram preview messages and tool visibility", () =
         expect(store.getTelegramPreviewMessage("42", 77)).toEqual({
             chatId: "42",
             messageId: 77,
-            toolVisibility: "collapsed",
+            viewMode: "preview",
+            toolsPage: 0,
             processText: "Working",
             reasoningText: "Checking cache first",
             answerText: "Done",
@@ -503,7 +505,10 @@ test("sqlite store persists telegram preview messages and tool visibility", () =
             updatedAtMs: 100,
         })
 
-        expect(store.setTelegramPreviewToolVisibility("42", 77, "expanded", 150)?.toolVisibility).toBe("expanded")
+        expect(store.setTelegramPreviewViewState("42", 77, "tools", 1, 150)).toMatchObject({
+            viewMode: "tools",
+            toolsPage: 1,
+        })
         expect(store.getTelegramPreviewMessage("42", 77)?.updatedAtMs).toBe(150)
 
         store.deleteTelegramPreviewMessage("42", 77)

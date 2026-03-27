@@ -1,9 +1,6 @@
 import { escapeTelegramHtml } from "./markdown"
-import type { TelegramInlineKeyboardMarkup } from "./types"
 
-const TOOL_SECTION_TEXT_LIMIT = 1_500
-const TOOL_TOGGLE_SHOW_DATA = "tv:show"
-const TOOL_TOGGLE_HIDE_DATA = "tv:hide"
+const TOOL_SECTION_TEXT_LIMIT = 1_000
 
 export type TelegramToolSection = {
     callId: string
@@ -14,8 +11,6 @@ export type TelegramToolSection = {
     outputText: string | null
     errorText: string | null
 }
-
-export type TelegramToolVisibility = "collapsed" | "expanded"
 
 export function renderTelegramToolSection(section: TelegramToolSection): string {
     const title = section.title === null ? section.toolName : section.title
@@ -33,37 +28,6 @@ export function renderTelegramToolSection(section: TelegramToolSection): string 
     }
 
     return `${header}\n<blockquote expandable>${details}</blockquote>`
-}
-
-export function buildTelegramToolReplyMarkup(
-    sections: TelegramToolSection[],
-    visibility: TelegramToolVisibility,
-): TelegramInlineKeyboardMarkup | null {
-    if (sections.length === 0) {
-        return null
-    }
-
-    return {
-        inline_keyboard: [
-            [
-                {
-                    text: visibility === "expanded" ? "Hide Tools" : `Show Tools (${sections.length})`,
-                    callback_data: visibility === "expanded" ? TOOL_TOGGLE_HIDE_DATA : TOOL_TOGGLE_SHOW_DATA,
-                },
-            ],
-        ],
-    }
-}
-
-export function parseTelegramToolVisibilityCallback(data: string | null): TelegramToolVisibility | null {
-    switch (data) {
-        case TOOL_TOGGLE_SHOW_DATA:
-            return "expanded"
-        case TOOL_TOGGLE_HIDE_DATA:
-            return "collapsed"
-        default:
-            return null
-    }
 }
 
 export function visibleTelegramToolSectionLength(section: TelegramToolSection): number {

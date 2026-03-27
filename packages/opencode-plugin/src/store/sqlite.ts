@@ -9,7 +9,7 @@ import type {
     GatewayQuestionRequest,
     PendingInteractionRecord,
 } from "../interactions/types"
-import type { TelegramToolVisibility } from "../telegram/tool-render"
+import type { TelegramPreviewViewMode } from "../telegram/stream-render"
 import type { SqliteDatabaseLike } from "./database"
 import { migrateGatewayDatabase } from "./migrations"
 
@@ -143,7 +143,8 @@ export type TelegramMessageCleanupRecord = {
 export type TelegramPreviewMessageRecord = {
     chatId: string
     messageId: number
-    toolVisibility: TelegramToolVisibility
+    viewMode: TelegramPreviewViewMode
+    toolsPage: number
     processText: string | null
     reasoningText: string | null
     answerText: string | null
@@ -732,7 +733,8 @@ export class SqliteStore {
     upsertTelegramPreviewMessage(input: {
         chatId: string
         messageId: number
-        toolVisibility: TelegramToolVisibility
+        viewMode: TelegramPreviewViewMode
+        toolsPage: number
         processText: string | null
         reasoningText: string | null
         answerText: string | null
@@ -741,6 +743,7 @@ export class SqliteStore {
     }): void {
         assertSafeInteger(input.messageId, "telegram preview messageId")
         assertSafeInteger(input.recordedAtMs, "telegram preview recordedAtMs")
+        assertSafeInteger(input.toolsPage, "telegram preview toolsPage")
 
         this.db
             .query(
@@ -748,7 +751,8 @@ export class SqliteStore {
                     INSERT INTO telegram_preview_messages (
                         chat_id,
                         message_id,
-                        tool_visibility,
+                        view_mode,
+                        tools_page,
                         process_text,
                         reasoning_text,
                         answer_text,
@@ -756,9 +760,10 @@ export class SqliteStore {
                         created_at_ms,
                         updated_at_ms
                     )
-                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)
+                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)
                     ON CONFLICT(chat_id, message_id) DO UPDATE SET
-                        tool_visibility = excluded.tool_visibility,
+                        view_mode = excluded.view_mode,
+                        tools_page = excluded.tools_page,
                         process_text = excluded.process_text,
                         reasoning_text = excluded.reasoning_text,
                         answer_text = excluded.answer_text,
@@ -769,7 +774,8 @@ export class SqliteStore {
             .run(
                 input.chatId,
                 input.messageId,
-                input.toolVisibility,
+                input.viewMode,
+                input.toolsPage,
                 normalizeStoredMailboxText(input.processText ?? ""),
                 normalizeStoredMailboxText(input.reasoningText ?? ""),
                 normalizeStoredMailboxText(input.answerText ?? ""),
@@ -786,7 +792,8 @@ export class SqliteStore {
                     SELECT
                         chat_id,
                         message_id,
-                        tool_visibility,
+                        view_mode,
+                        tools_page,
                         process_text,
                         reasoning_text,
                         answer_text,
@@ -804,27 +811,30 @@ export class SqliteStore {
         return row ? mapTelegramPreviewMessageRow(row) : null
     }
 
-    setTelegramPreviewToolVisibility(
+    setTelegramPreviewViewState(
         chatId: string,
         messageId: number,
-        toolVisibility: TelegramToolVisibility,
+        viewMode: TelegramPreviewViewMode,
+        toolsPage: number,
         recordedAtMs: number,
     ): TelegramPreviewMessageRecord | null {
         assertSafeInteger(messageId, "telegram preview messageId")
         assertSafeInteger(recordedAtMs, "telegram preview recordedAtMs")
+        assertSafeInteger(toolsPage, "telegram preview toolsPage")
 
         const updated = this.db
             .query(
                 `
                     UPDATE telegram_preview_messages
                     SET
-                        tool_visibility = ?3,
-                        updated_at_ms = ?4
+                        view_mode = ?3,
+                        tools_page = ?4,
+                        updated_at_ms = ?5
                     WHERE chat_id = ?1
                       AND message_id = ?2;
                 `,
             )
-            .run(chatId, messageId, toolVisibility, recordedAtMs)
+            .run(chatId, messageId, viewMode, toolsPage, recordedAtMs)
 
         if (updated.changes === 0) {
             return null
@@ -2131,7 +2141,8 @@ type TelegramMessageCleanupRow = {
 type TelegramPreviewMessageRow = {
     chat_id: string
     message_id: number
-    tool_visibility: string
+    view_mode: string
+    tools_page: number
     process_text: string | null
     reasoning_text: string | null
     answer_text: string | null
@@ -2697,7 +2708,8 @@ function mapTelegramPreviewMessageRow(row: TelegramPreviewMessageRow): TelegramP
     return {
         chatId: row.chat_id,
         messageId: row.message_id,
-        toolVisibility: parseTelegramToolVisibility(row.tool_visibility),
+        viewMode: parseTelegramPreviewViewMode(row.view_mode),
+        toolsPage: row.tools_page,
         processText: normalizeStoredMailboxText(row.process_text ?? ""),
         reasoningText: normalizeStoredMailboxText(row.reasoning_text ?? ""),
         answerText: normalizeStoredMailboxText(row.answer_text ?? ""),
@@ -2717,13 +2729,13 @@ function parseTelegramCleanupKind(value: string): TelegramMessageCleanupKind {
     }
 }
 
-function parseTelegramToolVisibility(value: string): TelegramToolVisibility {
+function parseTelegramPreviewViewMode(value: string): TelegramPreviewViewMode {
     switch (value) {
-        case "collapsed":
-        case "expanded":
+        case "preview":
+        case "tools":
             return value
         default:
-            throw new Error(`stored telegram preview tool visibility is invalid: ${value}`)
+            throw new Error(`stored telegram preview view mode is invalid: ${value}`)
     }
 }
 

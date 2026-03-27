@@ -23,7 +23,7 @@ The current state of the repository is a working local gateway with:
 - Telegram long polling with explicit allowlists
 - recurring cron jobs with a persisted catalog and run history
 - Telegram operational tools
-- private-chat editable stream previews with toggleable tool-call sections
+- private-chat editable stream previews with split Preview / Tools tool-call views
 - auto-cleaned Telegram permission/question interaction prompts
 - a launcher that bootstraps and warms a managed OpenCode instance
 
@@ -117,7 +117,7 @@ This package now:
 - subscribes to the OpenCode SDK event stream and forwards normalized execution
   observations into Rust-owned execution drivers
 - delivers Telegram replies and private-chat editable stream previews
-- renders Telegram tool-call sections inside progressive replies, with per-message toggle state
+- renders Telegram tool-call details through per-message Preview / Tools view state with paginated tool history
 - bridges OpenCode permission/question interactions into Telegram and cleans them up after successful replies
 - exposes gateway, cron, and Telegram operational tools
 
@@ -160,7 +160,7 @@ opencode-gateway serve
 - thin OpenCode SDK command execution
 - event subscription and raw event normalization
 - SQLite reads and writes
-- Telegram HTTP transport, editable streams, tool-toggle callbacks, and interaction cleanup
+- Telegram HTTP transport, editable streams, split preview/tool callbacks, and interaction cleanup
 - polling loops and timers
 - local environment and config path resolution
 
@@ -265,8 +265,8 @@ The repository already contains:
 - SQLite-backed cron catalogs and run history
 - Telegram long polling with allowlists
 - Telegram operational tools
-- private-chat editable stream previews with toggleable tool-call details
-- inline tool-call sections in Telegram progressive replies
+- private-chat editable stream previews with split Preview / Tools tool-call details
+- paginated tool-call history inside the Telegram `Tools` view
 - permission/question bridging with post-reply cleanup
 - a local OpenCode smoke script
 
@@ -274,7 +274,7 @@ The repository already contains:
 
 The next implementation passes should happen in this order:
 
-1. Refine Telegram progressive-reply UX only where the current inline preview model still feels noisy.
+1. Refine Telegram progressive-reply UX only where the current split Preview / Tools model still feels noisy.
 2. Add richer durable gateway tables only where the current catalog/journal split
    becomes limiting.
 3. Revisit how much async execution logic should move back into Rust only if a stable,

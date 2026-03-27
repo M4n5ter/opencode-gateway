@@ -434,7 +434,7 @@ test("GatewayInteractionRuntime ignores non-interaction callback namespaces", as
                 sender: "telegram:7",
                 deliveryTarget: createTarget("42"),
                 messageId: 77,
-                data: "tv:show",
+                data: "tv:tools",
             }),
         ).resolves.toBe(false)
     } finally {

@@ -19,7 +19,7 @@ test("renderTelegramStreamMessage places reasoning into an expandable italic blo
     )
 })
 
-test("renderTelegramStreamMessage renders tool sections as sibling expandable blocks", () => {
+test("renderTelegramStreamMessage renders tool sections as sibling expandable blocks in inline mode", () => {
     expect(
         renderTelegramStreamMessage({
             processText: "Fetching data",
@@ -42,36 +42,57 @@ test("renderTelegramStreamMessage renders tool sections as sibling expandable bl
     )
 })
 
-test("renderTelegramStreamMessageForView keeps tool sections collapsed behind a summary by default", () => {
+test("toggle preview mode preserves reasoning, process, and answer instead of rendering tool sections inline", () => {
+    const preview = {
+        processText: "Fetching data",
+        reasoningText: "I should check memory first",
+        answerText: "Done",
+        toolSections: [
+            {
+                callId: "call-1",
+                toolName: "bash",
+                status: "completed",
+                title: "List repos",
+                inputText: '{"cmd":"gh repo list"}',
+                outputText: "repo-a\nrepo-b",
+                errorText: null,
+            },
+        ],
+    }
+
     expect(
-        renderTelegramStreamMessageForView(
-            {
-                processText: "Fetching data",
-                reasoningText: "I should check memory first",
-                answerText: "Done",
-                toolSections: [
-                    {
-                        callId: "call-1",
-                        toolName: "bash",
-                        status: "completed",
-                        title: "List repos",
-                        inputText: '{"cmd":"gh repo list"}',
-                        outputText: "repo-a\nrepo-b",
-                        errorText: null,
-                    },
-                ],
+        renderTelegramStreamMessageForView(preview, {
+            toolCallView: "toggle",
+            viewState: {
+                viewMode: "preview",
+                toolsPage: 0,
             },
-            {
-                toolCallView: "toggle",
-                toolVisibility: "collapsed",
-            },
-        ),
+        }),
     ).toBe(
-        "<blockquote expandable><i>I should check memory first</i></blockquote>\n\n<blockquote>Fetching data</blockquote>\n\n<i>Tools: 1 completed</i>\n\nDone",
+        "<blockquote expandable><i>I should check memory first</i></blockquote>\n\n<blockquote>Fetching data</blockquote>\n\nDone",
     )
 
     expect(
-        buildTelegramStreamReplyMarkup(
+        buildTelegramStreamReplyMarkup(preview, {
+            toolCallView: "toggle",
+            viewState: {
+                viewMode: "preview",
+                toolsPage: 0,
+            },
+        }),
+    ).toEqual({
+        inline_keyboard: [
+            [
+                { text: "• Preview", callback_data: "tv:preview" },
+                { text: "Tools (1)", callback_data: "tv:tools" },
+            ],
+        ],
+    })
+})
+
+test("toggle preview mode falls back to a small tool summary when no preview text exists yet", () => {
+    expect(
+        renderTelegramStreamMessageForView(
             {
                 processText: null,
                 reasoningText: null,
@@ -80,21 +101,72 @@ test("renderTelegramStreamMessageForView keeps tool sections collapsed behind a 
                     {
                         callId: "call-1",
                         toolName: "bash",
-                        status: "completed",
+                        status: "running",
                         title: "List repos",
                         inputText: '{"cmd":"gh repo list"}',
-                        outputText: "repo-a\nrepo-b",
+                        outputText: null,
                         errorText: null,
                     },
                 ],
             },
             {
                 toolCallView: "toggle",
-                toolVisibility: "collapsed",
+                viewState: {
+                    viewMode: "preview",
+                    toolsPage: 0,
+                },
             },
         ),
+    ).toBe("<i>Tools: 1 running</i>")
+})
+
+test("toggle tools mode paginates newest tool sections without dropping preview state", () => {
+    const longInput = "x".repeat(900)
+    const preview = {
+        processText: "Fetching data",
+        reasoningText: "I should check memory first",
+        answerText: "Done",
+        toolSections: Array.from({ length: 6 }, (_, index) => ({
+            callId: `call-${index + 1}`,
+            toolName: "bash",
+            status: "completed" as const,
+            title: `Step ${index + 1}`,
+            inputText: longInput,
+            outputText: null,
+            errorText: null,
+        })),
+    }
+
+    const rendered = renderTelegramStreamMessageForView(preview, {
+        toolCallView: "toggle",
+        viewState: {
+            viewMode: "tools",
+            toolsPage: 0,
+        },
+    })
+
+    expect(rendered).toContain("<b>Step 6</b>")
+    expect(rendered).not.toContain("<blockquote>Fetching data</blockquote>")
+    expect(rendered).not.toContain("<b>Step 1</b>")
+    expect(
+        buildTelegramStreamReplyMarkup(preview, {
+            toolCallView: "toggle",
+            viewState: {
+                viewMode: "tools",
+                toolsPage: 0,
+            },
+        }),
     ).toEqual({
-        inline_keyboard: [[{ text: "Show Tools (1)", callback_data: "tv:show" }]],
+        inline_keyboard: [
+            [
+                { text: "Preview", callback_data: "tv:preview" },
+                { text: "• Tools (6)", callback_data: "tv:tools" },
+            ],
+            [
+                { text: "1/2", callback_data: "tv:noop" },
+                { text: "Older", callback_data: "tv:older" },
+            ],
+        ],
     })
 })
 

@@ -3,8 +3,13 @@ import type { TelegramToolCallView } from "../config/telegram"
 import type { GatewayTransportHost } from "../host/transport"
 import type { SqliteStore } from "../store/sqlite"
 import { recordTelegramPreviewEmit, recordTelegramStreamFallback } from "../telegram/state"
-import { buildTelegramStreamReplyMarkup, renderTelegramStreamMessageForView } from "../telegram/stream-render"
-import type { TelegramToolSection, TelegramToolVisibility } from "../telegram/tool-render"
+import {
+    buildTelegramStreamReplyMarkup,
+    renderTelegramStreamMessageForView,
+    resolveTelegramPreviewViewState,
+    type TelegramPreviewViewState,
+} from "../telegram/stream-render"
+import type { TelegramToolSection } from "../telegram/tool-render"
 import type { DeliveryModePreference, TelegramProgressiveSupport } from "./telegram"
 
 export type TextDeliveryPreview = {
@@ -233,6 +238,7 @@ class ProgressiveTextDeliverySession implements TextDeliverySession {
     private latestPreview: TextDeliveryPreview | null = null
     private streamMessageId: number | null = null
     private lastRenderedBody: string | null = null
+    private lastRenderedReplyMarkupKey: string | null = null
     private lastStreamUpdateAtMs = 0
     private pendingWork = Promise.resolve()
     private openTimer: ReturnType<typeof setTimeout> | null = null
@@ -395,7 +401,10 @@ class ProgressiveTextDeliverySession implements TextDeliverySession {
 
     private async commitPreview(preview: TextDeliveryPreview): Promise<void> {
         const rendered = this.renderPreview(preview)
-        if (this.lastRenderedBody === rendered.text) {
+        if (
+            this.lastRenderedBody === rendered.text &&
+            this.lastRenderedReplyMarkupKey === serializeReplyMarkup(rendered.replyMarkup)
+        ) {
             return
         }
 
@@ -417,8 +426,9 @@ class ProgressiveTextDeliverySession implements TextDeliverySession {
             }
 
             this.lastRenderedBody = rendered.text
+            this.lastRenderedReplyMarkupKey = serializeReplyMarkup(rendered.replyMarkup)
             this.lastStreamUpdateAtMs = Date.now()
-            this.syncPreviewMessageState(preview)
+            this.syncPreviewMessageState(preview, rendered.viewState)
         } catch {
             this.previewFailed = true
             this.stopTypingKeepalive()
@@ -430,8 +440,11 @@ class ProgressiveTextDeliverySession implements TextDeliverySession {
             return
         }
 
-        const rendered = this.renderPreview(preview)
-        if (this.lastRenderedBody === rendered.text) {
+        const rendered = this.renderPreview(preview, { viewMode: "preview" })
+        if (
+            this.lastRenderedBody === rendered.text &&
+            this.lastRenderedReplyMarkupKey === serializeReplyMarkup(rendered.replyMarkup)
+        ) {
             return
         }
 
@@ -442,40 +455,63 @@ class ProgressiveTextDeliverySession implements TextDeliverySession {
             rendered.replyMarkup,
         )
         this.lastRenderedBody = rendered.text
+        this.lastRenderedReplyMarkupKey = serializeReplyMarkup(rendered.replyMarkup)
         this.lastStreamUpdateAtMs = Date.now()
-        this.syncPreviewMessageState(preview)
+        this.syncPreviewMessageState(preview, rendered.viewState)
     }
 
-    private renderPreview(preview: TextDeliveryPreview): {
+    private renderPreview(
+        preview: TextDeliveryPreview,
+        overrideViewState?: Partial<TelegramPreviewViewState>,
+    ): {
         text: string
         replyMarkup: ReturnType<typeof buildTelegramStreamReplyMarkup>
+        viewState: TelegramPreviewViewState
     } {
-        const toolVisibility = this.resolveToolVisibility()
+        const storedViewState = this.resolveStoredViewState()
+        const resolvedViewState = resolveTelegramPreviewViewState(preview, {
+            toolCallView: this.toolCallView,
+            viewState: {
+                viewMode: overrideViewState?.viewMode ?? storedViewState.viewMode,
+                toolsPage: overrideViewState?.toolsPage ?? storedViewState.toolsPage,
+            },
+        })
+        const viewState = {
+            viewMode: resolvedViewState.viewMode,
+            toolsPage: resolvedViewState.toolsPage,
+        } satisfies TelegramPreviewViewState
 
         return {
             text: renderTelegramStreamMessageForView(preview, {
                 toolCallView: this.toolCallView,
-                toolVisibility,
+                viewState,
             }),
             replyMarkup: buildTelegramStreamReplyMarkup(preview, {
                 toolCallView: this.toolCallView,
-                toolVisibility,
+                viewState,
             }),
+            viewState,
         }
     }
 
-    private resolveToolVisibility(): TelegramToolVisibility {
+    private resolveStoredViewState(): TelegramPreviewViewState {
         if (this.toolCallView !== "toggle" || this.streamMessageId === null) {
-            return "collapsed"
+            return {
+                viewMode: "preview",
+                toolsPage: 0,
+            }
         }
 
+        const preview = this.store.getTelegramPreviewMessage(this.target.target, this.streamMessageId)
         return (
-            this.store.getTelegramPreviewMessage(this.target.target, this.streamMessageId)?.toolVisibility ??
-            "collapsed"
+            preview ?? {
+                viewMode: "preview",
+                toolsPage: 0,
+            }
         )
     }
 
-    private syncPreviewMessageState(preview: TextDeliveryPreview): void {
+    private syncPreviewMessageState(preview: TextDeliveryPreview, viewState: TelegramPreviewViewState): void {
         if (this.toolCallView !== "toggle" || this.streamMessageId === null) {
             return
         }
@@ -489,7 +525,8 @@ class ProgressiveTextDeliverySession implements TextDeliverySession {
         this.store.upsertTelegramPreviewMessage({
             chatId: this.target.target,
             messageId: this.streamMessageId,
-            toolVisibility: this.resolveToolVisibility(),
+            viewMode: viewState.viewMode,
+            toolsPage: viewState.toolsPage,
             processText: preview.processText,
             reasoningText: preview.reasoningText,
             answerText: preview.answerText,
@@ -618,6 +655,10 @@ function normalizeVisibleText(value: string | null): string | null {
     }
 
     return value.trim().length === 0 ? null : value
+}
+
+function serializeReplyMarkup(replyMarkup: ReturnType<typeof buildTelegramStreamReplyMarkup>): string | null {
+    return replyMarkup === null ? null : JSON.stringify(replyMarkup)
 }
 
 function normalizeToolSections(sections: TelegramToolSection[] | undefined): TelegramToolSection[] {
