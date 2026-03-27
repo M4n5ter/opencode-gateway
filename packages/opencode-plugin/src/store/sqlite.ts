@@ -3,7 +3,9 @@ import { dirname } from "node:path"
 
 import type { BindingDeferredDeliveryStrategy, BindingDeferredPreviewContext, BindingDeliveryTarget } from "../binding"
 import type {
+    GatewayInflightPolicyRequest,
     GatewayInteractionRequest,
+    GatewayInteractionScope,
     GatewayPermissionRequest,
     GatewayQuestionInfo,
     GatewayQuestionRequest,
@@ -63,6 +65,7 @@ export type CronJobRecord = {
 export type MailboxEntryRecord = {
     id: number
     mailboxKey: string
+    ingressState: MailboxEntryIngressState
     sourceKind: string
     externalId: string
     sender: string
@@ -82,7 +85,14 @@ export type MailboxEntryAttachmentRecord = {
     localPath: string
 }
 
-export type MailboxJobStatus = "pending" | "executing" | "ready_to_deliver" | "completed" | "quarantined"
+export type MailboxEntryIngressState = "ready" | "held_for_inflight_policy"
+export type MailboxJobStatus =
+    | "pending"
+    | "executing"
+    | "ready_to_deliver"
+    | "completed"
+    | "interrupted"
+    | "quarantined"
 export type MailboxDeliveryStatus = "pending" | "delivering" | "delivered" | "quarantined"
 
 export type MailboxJobRecord = {
@@ -164,7 +174,7 @@ export type CompleteMailboxJobExecutionInput = {
 }
 
 export type MailboxJobFinalizeResult = {
-    status: Extract<MailboxJobStatus, "ready_to_deliver" | "completed" | "quarantined">
+    status: Extract<MailboxJobStatus, "ready_to_deliver" | "completed" | "interrupted" | "quarantined">
     cleanupEntries: MailboxEntryRecord[]
 }
 
@@ -184,6 +194,7 @@ export type PersistCronJobInput = {
 
 export type PersistMailboxEntryInput = {
     mailboxKey: string
+    ingressState?: MailboxEntryIngressState
     sourceKind: string
     externalId: string
     sender: string
@@ -412,8 +423,9 @@ export class SqliteStore {
             `
                 INSERT INTO pending_interactions (
                     request_id,
-                    session_id,
                     kind,
+                    scope_kind,
+                    scope_id,
                     delivery_channel,
                     delivery_target,
                     delivery_topic,
@@ -421,7 +433,7 @@ export class SqliteStore {
                     telegram_message_id,
                     created_at_ms
                 )
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9);
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10);
             `,
         )
 
@@ -431,8 +443,9 @@ export class SqliteStore {
             for (const target of payload.targets) {
                 insertInteraction.run(
                     payload.request.requestId,
-                    payload.request.sessionId,
                     payload.request.kind,
+                    payload.request.kind === "inflight_policy" ? "mailbox" : "session",
+                    payload.request.kind === "inflight_policy" ? payload.request.mailboxKey : payload.request.sessionId,
                     target.deliveryTarget.channel,
                     target.deliveryTarget.target,
                     normalizeKeyField(target.deliveryTarget.topic),
@@ -464,7 +477,44 @@ export class SqliteStore {
     }
 
     deletePendingInteractionsForSession(sessionId: string): void {
-        this.db.query("DELETE FROM pending_interactions WHERE session_id = ?1;").run(sessionId)
+        this.db.query("DELETE FROM pending_interactions WHERE scope_kind = 'session' AND scope_id = ?1;").run(sessionId)
+    }
+
+    deletePendingInteractionsForMailbox(mailboxKey: string): void {
+        this.db
+            .query("DELETE FROM pending_interactions WHERE scope_kind = 'mailbox' AND scope_id = ?1;")
+            .run(mailboxKey)
+    }
+
+    listPendingInteractionsForMailbox(mailboxKey: string): PendingInteractionRecord[] {
+        const rows = this.db
+            .query<PendingInteractionRow, [string]>(
+                `
+                    SELECT
+                        id,
+                        request_id,
+                        kind,
+                        scope_kind,
+                        scope_id,
+                        delivery_channel,
+                        delivery_target,
+                        delivery_topic,
+                        payload_json,
+                        telegram_message_id,
+                        created_at_ms
+                    FROM pending_interactions
+                    WHERE scope_kind = 'mailbox'
+                      AND scope_id = ?1
+                    ORDER BY created_at_ms ASC, id ASC;
+                `,
+            )
+            .all(mailboxKey)
+
+        return rows.map(mapPendingInteractionRow)
+    }
+
+    clearLocalInflightInteractions(): void {
+        this.db.query("DELETE FROM pending_interactions WHERE scope_kind = 'mailbox';").run()
     }
 
     getPendingInteractionForTarget(target: BindingDeliveryTarget): PendingInteractionRecord | null {
@@ -474,8 +524,9 @@ export class SqliteStore {
                     SELECT
                         id,
                         request_id,
-                        session_id,
                         kind,
+                        scope_kind,
+                        scope_id,
                         delivery_channel,
                         delivery_target,
                         delivery_topic,
@@ -506,8 +557,9 @@ export class SqliteStore {
                     SELECT
                         id,
                         request_id,
-                        session_id,
                         kind,
+                        scope_kind,
+                        scope_id,
                         delivery_channel,
                         delivery_target,
                         delivery_topic,
@@ -535,8 +587,9 @@ export class SqliteStore {
                     SELECT
                         id,
                         request_id,
-                        session_id,
                         kind,
+                        scope_kind,
+                        scope_id,
                         delivery_channel,
                         delivery_target,
                         delivery_topic,
@@ -871,6 +924,7 @@ export class SqliteStore {
             `
                 INSERT INTO mailbox_entries (
                     mailbox_key,
+                    ingress_state,
                     source_kind,
                     external_id,
                     sender,
@@ -880,7 +934,7 @@ export class SqliteStore {
                     reply_topic,
                     created_at_ms
                 )
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
                 ON CONFLICT(source_kind, external_id) DO NOTHING;
             `,
         )
@@ -901,6 +955,7 @@ export class SqliteStore {
         this.db.transaction((payload: PersistMailboxEntryInput) => {
             const result = insertEntry.run(
                 payload.mailboxKey,
+                payload.ingressState ?? "ready",
                 payload.sourceKind,
                 payload.externalId,
                 payload.sender,
@@ -929,6 +984,59 @@ export class SqliteStore {
         })(input)
     }
 
+    releaseHeldMailboxEntries(mailboxKey: string, _recordedAtMs: number): number {
+        return this.db
+            .query(
+                `
+                    UPDATE mailbox_entries
+                    SET ingress_state = 'ready'
+                    WHERE mailbox_key = ?1
+                      AND ingress_state = 'held_for_inflight_policy';
+                `,
+            )
+            .run(mailboxKey).changes
+    }
+
+    releaseAllHeldMailboxEntries(_recordedAtMs: number): number {
+        return this.db
+            .query(
+                `
+                    UPDATE mailbox_entries
+                    SET ingress_state = 'ready'
+                    WHERE ingress_state = 'held_for_inflight_policy';
+                `,
+            )
+            .run().changes
+    }
+
+    listHeldMailboxReplyTargets(mailboxKey: string): BindingDeliveryTarget[] {
+        const rows = this.db
+            .query<{ reply_channel: string | null; reply_target: string | null; reply_topic: string | null }, [string]>(
+                `
+                    SELECT DISTINCT reply_channel, reply_target, reply_topic
+                    FROM mailbox_entries
+                    WHERE mailbox_key = ?1
+                      AND ingress_state = 'held_for_inflight_policy'
+                      AND reply_channel IS NOT NULL
+                      AND reply_target IS NOT NULL
+                    ORDER BY rowid ASC;
+                `,
+            )
+            .all(mailboxKey)
+
+        return rows.map((row) => {
+            if (row.reply_channel === null || row.reply_target === null) {
+                throw new Error("held mailbox reply targets must include both channel and target")
+            }
+
+            return {
+                channel: row.reply_channel,
+                target: row.reply_target,
+                topic: normalizeStoredKeyField(row.reply_topic ?? ""),
+            }
+        })
+    }
+
     listPendingMailboxKeys(): string[] {
         const rows = this.db
             .query<{ mailbox_key: string }, []>(
@@ -938,6 +1046,7 @@ export class SqliteStore {
                     LEFT JOIN mailbox_job_entries AS job_entry
                       ON job_entry.mailbox_entry_id = entry.id
                     WHERE job_entry.mailbox_entry_id IS NULL
+                      AND entry.ingress_state = 'ready'
                     ORDER BY mailbox_key ASC;
                 `,
             )
@@ -965,6 +1074,7 @@ export class SqliteStore {
                 SELECT
                     entry.id,
                     entry.mailbox_key,
+                    entry.ingress_state,
                     entry.source_kind,
                     entry.external_id,
                     entry.sender,
@@ -978,7 +1088,17 @@ export class SqliteStore {
                   ON job_entry.mailbox_entry_id = entry.id
                 WHERE entry.mailbox_key = ?1
                   AND job_entry.mailbox_entry_id IS NULL
+                  AND entry.ingress_state = 'ready'
                 ORDER BY entry.id ASC;
+            `,
+        )
+        const mailboxHasBlockingJob = this.db.query<{ present: number }, [string]>(
+            `
+                SELECT 1 AS present
+                FROM mailbox_jobs
+                WHERE mailbox_key = ?1
+                  AND status IN ('pending', 'executing')
+                LIMIT 1;
             `,
         )
         const insertJob = this.db.query(
@@ -1018,6 +1138,10 @@ export class SqliteStore {
             let createdJobs = 0
 
             for (const row of listMailboxKeys.all()) {
+                if (mailboxHasBlockingJob.get(row.mailbox_key)?.present === 1) {
+                    continue
+                }
+
                 const entries = listUnassignedEntries.all(row.mailbox_key)
                 if (entries.length === 0) {
                     continue
@@ -1066,6 +1190,7 @@ export class SqliteStore {
                     SELECT
                         id,
                         mailbox_key,
+                        ingress_state,
                         source_kind,
                         external_id,
                         sender,
@@ -1246,6 +1371,33 @@ export class SqliteStore {
         }
 
         return mapMailboxJobs(this.db, [row])[0] ?? null
+    }
+
+    interruptMailboxJob(jobId: number, recordedAtMs: number): MailboxJobFinalizeResult {
+        assertSafeInteger(jobId, "mailbox job id")
+        assertSafeInteger(recordedAtMs, "mailbox job recordedAtMs")
+
+        return this.db.transaction((targetJobId: number, nowMs: number) => {
+            this.db
+                .query(
+                    `
+                        UPDATE mailbox_jobs
+                        SET
+                            status = 'interrupted',
+                            leased_until_ms = NULL,
+                            last_error = NULL,
+                            updated_at_ms = ?2,
+                            finished_at_ms = ?2
+                        WHERE id = ?1;
+                    `,
+                )
+                .run(targetJobId, nowMs)
+
+            return {
+                status: "interrupted",
+                cleanupEntries: deleteMailboxJobEntries(this.db, targetJobId),
+            } satisfies MailboxJobFinalizeResult
+        })(jobId, recordedAtMs)
     }
 
     completeMailboxJobExecution(input: CompleteMailboxJobExecutionInput): MailboxJobFinalizeResult {
@@ -2039,6 +2191,7 @@ type CronJobRow = {
 type MailboxEntryRow = {
     id: number
     mailbox_key: string
+    ingress_state: string
     source_kind: string
     external_id: string
     sender: string
@@ -2115,8 +2268,9 @@ type SessionReplyTargetRow = {
 type PendingInteractionRow = {
     id: number
     request_id: string
-    session_id: string
     kind: string
+    scope_kind: string
+    scope_id: string
     delivery_channel: string
     delivery_target: string
     delivery_topic: string
@@ -2154,6 +2308,7 @@ type TelegramPreviewMessageRow = {
 type PendingInteractionPayload =
     | Pick<GatewayQuestionRequest, "kind" | "questions">
     | Pick<GatewayPermissionRequest, "kind" | "permission" | "patterns" | "metadata" | "always" | "tool">
+    | Pick<GatewayInflightPolicyRequest, "kind" | "mailboxKey">
 
 function mapCronJobRow(row: CronJobRow): CronJobRecord {
     const kind = parseScheduleJobKind(row.kind)
@@ -2199,6 +2354,7 @@ function mapMailboxEntryRow(row: MailboxEntryRow, attachments: MailboxEntryAttac
     return {
         id: row.id,
         mailboxKey: row.mailbox_key,
+        ingressState: parseMailboxEntryIngressState(row.ingress_state),
         sourceKind: row.source_kind,
         externalId: row.external_id,
         sender: row.sender,
@@ -2208,6 +2364,16 @@ function mapMailboxEntryRow(row: MailboxEntryRow, attachments: MailboxEntryAttac
         replyTarget: row.reply_target,
         replyTopic: row.reply_topic,
         createdAtMs: row.created_at_ms,
+    }
+}
+
+function parseMailboxEntryIngressState(value: string): MailboxEntryIngressState {
+    switch (value) {
+        case "ready":
+        case "held_for_inflight_policy":
+            return value
+        default:
+            throw new Error(`stored mailbox entry ingress state is invalid: ${value}`)
     }
 }
 
@@ -2338,6 +2504,7 @@ function listMailboxJobEntries(
                     job_entry.ordinal,
                     entry.id,
                     entry.mailbox_key,
+                    entry.ingress_state,
                     entry.source_kind,
                     entry.external_id,
                     entry.sender,
@@ -2363,6 +2530,7 @@ function listMailboxJobEntries(
                 {
                     id: row.id,
                     mailbox_key: row.mailbox_key,
+                    ingress_state: row.ingress_state,
                     source_kind: row.source_kind,
                     external_id: row.external_id,
                     sender: row.sender,
@@ -2387,6 +2555,7 @@ function parseMailboxJobStatus(value: string): MailboxJobStatus {
         case "executing":
         case "ready_to_deliver":
         case "completed":
+        case "interrupted":
         case "quarantined":
             return value
         default:
@@ -2554,6 +2723,7 @@ function deleteMailboxJobEntries(db: SqliteDatabaseLike, jobId: number): Mailbox
                 SELECT
                     entry.id,
                     entry.mailbox_key,
+                    entry.ingress_state,
                     entry.source_kind,
                     entry.external_id,
                     entry.sender,
@@ -2675,10 +2845,14 @@ function mapSessionReplyTargetRow(row: SessionReplyTargetRow): BindingDeliveryTa
 
 function mapPendingInteractionRow(row: PendingInteractionRow): PendingInteractionRecord {
     const payload = parsePendingInteractionPayload(row.kind, row.payload_json)
+    const scope = {
+        kind: parsePendingInteractionScopeKind(row.scope_kind),
+        id: row.scope_id,
+    } satisfies GatewayInteractionScope
+    const request = mapPendingInteractionRequest(scope, row.request_id, payload)
     return {
-        requestId: row.request_id,
-        sessionId: row.session_id,
-        ...payload,
+        ...request,
+        scope,
         deliveryTarget: {
             channel: row.delivery_channel,
             target: row.delivery_target,
@@ -2686,6 +2860,66 @@ function mapPendingInteractionRow(row: PendingInteractionRow): PendingInteractio
         },
         telegramMessageId: row.telegram_message_id,
         createdAtMs: row.created_at_ms,
+    }
+}
+
+function mapPendingInteractionRequest(
+    scope: GatewayInteractionScope,
+    requestId: string,
+    payload: PendingInteractionPayload,
+): GatewayInteractionRequest {
+    switch (payload.kind) {
+        case "question":
+            assertSessionScopedInteraction(scope, payload.kind)
+            return {
+                kind: payload.kind,
+                requestId,
+                sessionId: scope.id,
+                questions: payload.questions,
+            }
+        case "permission":
+            assertSessionScopedInteraction(scope, payload.kind)
+            return {
+                kind: payload.kind,
+                requestId,
+                sessionId: scope.id,
+                permission: payload.permission,
+                patterns: payload.patterns,
+                metadata: payload.metadata,
+                always: payload.always,
+                tool: payload.tool,
+            }
+        case "inflight_policy":
+            if (scope.kind !== "mailbox" || scope.id !== payload.mailboxKey) {
+                throw new Error("stored pending inflight policy scope is invalid")
+            }
+            return {
+                kind: payload.kind,
+                requestId,
+                mailboxKey: payload.mailboxKey,
+            }
+    }
+}
+
+function assertSessionScopedInteraction(
+    scope: GatewayInteractionScope,
+    kind: string,
+): asserts scope is {
+    kind: "session"
+    id: string
+} {
+    if (scope.kind !== "session") {
+        throw new Error(`stored pending ${kind} interaction must be session-scoped`)
+    }
+}
+
+function parsePendingInteractionScopeKind(value: string): GatewayInteractionScope["kind"] {
+    switch (value) {
+        case "session":
+        case "mailbox":
+            return value
+        default:
+            throw new Error(`stored pending interaction scope kind is invalid: ${value}`)
     }
 }
 
@@ -2753,6 +2987,10 @@ function encodePendingInteractionPayload(request: GatewayInteractionRequest): st
                 always: request.always,
                 tool: request.tool,
             })
+        case "inflight_policy":
+            return JSON.stringify({
+                mailboxKey: request.mailboxKey,
+            })
     }
 }
 
@@ -2768,9 +3006,30 @@ function parsePendingInteractionPayload(kind: string, value: string): PendingInt
                 kind,
                 ...parsePendingPermission(value),
             }
+        case "inflight_policy":
+            return {
+                kind,
+                mailboxKey: parsePendingInflightPolicy(value),
+            }
         default:
             throw new Error(`stored pending interaction kind is invalid: ${kind}`)
     }
+}
+
+function parsePendingInflightPolicy(value: string): string {
+    const parsed = JSON.parse(value) as unknown
+    if (typeof parsed === "string" && parsed.trim().length > 0) {
+        return parsed
+    }
+
+    if (typeof parsed === "object" && parsed !== null) {
+        const record = parsed as Record<string, unknown>
+        if (typeof record.mailboxKey === "string" && record.mailboxKey.trim().length > 0) {
+            return record.mailboxKey
+        }
+    }
+
+    throw new Error("stored pending inflight policy payload is invalid")
 }
 
 function parsePendingQuestions(value: string): GatewayQuestionInfo[] {

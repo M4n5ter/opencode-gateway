@@ -17,7 +17,9 @@ import { GatewayMemoryRuntime } from "./memory/runtime"
 import { OpencodeSdkAdapter } from "./opencode/adapter"
 import { OpencodeEventStream } from "./opencode/event-stream"
 import { OpencodeEventHub } from "./opencode/events"
+import { ActiveExecutionRegistry } from "./runtime/active-execution"
 import { GatewayExecutor } from "./runtime/executor"
+import { GatewayInflightPolicyRuntime } from "./runtime/inflight-policy"
 import { GatewayMailboxRuntime } from "./runtime/mailbox"
 import { getOrCreateRuntimeSingleton } from "./runtime/runtime-singleton"
 import { GatewayToolActivityRuntime } from "./runtime/tool-activity"
@@ -105,6 +107,7 @@ export async function createGatewayRuntime(
                 : null
         const mailboxRouter = new GatewayMailboxRouter(config.mailbox.routes)
         const opencodeEvents = new OpencodeEventHub()
+        const activeExecutions = new ActiveExecutionRegistry()
         const opencode = new OpencodeSdkAdapter(input.client, config.workspaceDirPath)
         const interactionClient = createInteractionClient(input.client, input.serverUrl, config.workspaceDirPath)
         const transport = new GatewayTransportHost(
@@ -120,15 +123,6 @@ export async function createGatewayRuntime(
             module,
             opencode,
             config.telegram.enabled,
-        )
-        const interactions = new GatewayInteractionRuntime(
-            interactionClient,
-            config.workspaceDirPath,
-            store,
-            sessionContext,
-            transport,
-            telegramClient,
-            logger,
         )
         const cleanup = new TelegramMessageCleanupRuntime(telegramClient, store, logger)
         const progressiveSupport = new TelegramProgressiveSupport(telegramClient, store, logger)
@@ -160,8 +154,35 @@ export async function createGatewayRuntime(
             config.execution,
             undefined,
             toolActivity,
+            activeExecutions,
         )
-        const mailbox = new GatewayMailboxRuntime(executor, transport, store, logger, config.mailbox, interactions)
+        let notifyMailboxStateChanged = (): void => {}
+        const inflightRuntime = new GatewayInflightPolicyRuntime(store, executor, logger, () => {
+            notifyMailboxStateChanged()
+        })
+        const interactions = new GatewayInteractionRuntime(
+            interactionClient,
+            config.workspaceDirPath,
+            store,
+            sessionContext,
+            transport,
+            telegramClient,
+            logger,
+            inflightRuntime,
+        )
+        const mailbox = new GatewayMailboxRuntime(
+            executor,
+            transport,
+            store,
+            logger,
+            config.mailbox,
+            interactions,
+            config.inflightMessages,
+            inflightRuntime,
+        )
+        notifyMailboxStateChanged = () => {
+            mailbox.scheduleDrainNow()
+        }
         const cron = new GatewayCronRuntime(
             executor,
             module,
@@ -175,7 +196,7 @@ export async function createGatewayRuntime(
             input.client,
             config.workspaceDirPath,
             opencodeEvents,
-            [interactions, toolActivity],
+            [activeExecutions, interactions, toolActivity],
             logger,
         )
         const telegramPolling =

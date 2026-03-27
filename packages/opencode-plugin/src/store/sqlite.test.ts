@@ -52,6 +52,7 @@ test("sqlite store persists session bindings, offsets, and cron catalog state", 
             {
                 id: 1,
                 mailboxKey: "telegram:42",
+                ingressState: "ready",
                 sourceKind: "telegram_update",
                 externalId: "100",
                 sender: "telegram:7",
@@ -179,6 +180,7 @@ test("sqlite store persists mailbox entry attachments alongside text", () => {
             {
                 id: 1,
                 mailboxKey: "telegram:42",
+                ingressState: "ready",
                 sourceKind: "telegram_update",
                 externalId: "200",
                 sender: "telegram:7",
@@ -609,6 +611,10 @@ test("sqlite store persists session reply targets and pending interactions", () 
         ).toEqual({
             kind: "question",
             requestId: "question-1",
+            scope: {
+                kind: "session",
+                id: "session-1",
+            },
             sessionId: "session-1",
             questions: [
                 {
@@ -644,6 +650,10 @@ test("sqlite store persists session reply targets and pending interactions", () 
         ).toEqual({
             kind: "permission",
             requestId: "permission-1",
+            scope: {
+                kind: "session",
+                id: "session-1",
+            },
             sessionId: "session-1",
             permission: "external_directory",
             patterns: ["/tmp/*"],
@@ -739,6 +749,10 @@ test("sqlite migration upgrades pending questions to pending interactions", () =
         ).toEqual({
             kind: "question",
             requestId: "question-1",
+            scope: {
+                kind: "session",
+                id: "session-1",
+            },
             sessionId: "session-1",
             questions: [
                 {

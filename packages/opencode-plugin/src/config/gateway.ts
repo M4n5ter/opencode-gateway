@@ -15,6 +15,7 @@ type RawGatewayConfig = {
         state_db?: unknown
         log_level?: unknown
         mailbox?: unknown
+        inflight_messages?: unknown
         execution?: unknown
         timezone?: unknown
     }
@@ -44,6 +45,10 @@ type RawExecutionConfig = {
     abort_settle_timeout_ms?: unknown
 }
 
+type RawInflightMessagesConfig = {
+    default_policy?: unknown
+}
+
 export type GatewayMailboxRouteConfig = {
     channel: string
     target: string
@@ -64,6 +69,12 @@ export type GatewayExecutionConfig = {
     abortSettleTimeoutMs: number
 }
 
+export type GatewayInflightMessagesPolicy = "ask" | "queue" | "interrupt"
+
+export type GatewayInflightMessagesConfig = {
+    defaultPolicy: GatewayInflightMessagesPolicy
+}
+
 export type GatewayConfig = {
     configPath: string
     stateDbPath: string
@@ -73,6 +84,7 @@ export type GatewayConfig = {
     hasLegacyGatewayTimezone: boolean
     legacyGatewayTimezone: string | null
     mailbox: GatewayMailboxConfig
+    inflightMessages: GatewayInflightMessagesConfig
     execution: GatewayExecutionConfig
     memory: GatewayMemoryConfig
     cron: CronConfig
@@ -102,6 +114,7 @@ export async function loadGatewayConfig(env: EnvSource = process.env): Promise<G
         hasLegacyGatewayTimezone: rawConfig?.gateway?.timezone !== undefined,
         legacyGatewayTimezone: readLegacyGatewayTimezone(rawConfig?.gateway?.timezone),
         mailbox: parseMailboxConfig(rawConfig?.gateway?.mailbox),
+        inflightMessages: parseInflightMessagesConfig(rawConfig?.gateway?.inflight_messages),
         execution: parseExecutionConfig(rawConfig?.gateway?.execution),
         memory: await parseMemoryConfig(rawConfig?.memory, workspaceDirPath),
         cron: parseCronConfig(rawConfig?.cron),
@@ -139,6 +152,14 @@ function parseExecutionConfig(value: unknown): GatewayExecutionConfig {
             "gateway.execution.abort_settle_timeout_ms",
             5_000,
         ),
+    }
+}
+
+function parseInflightMessagesConfig(value: unknown): GatewayInflightMessagesConfig {
+    const table = readInflightMessagesTable(value)
+
+    return {
+        defaultPolicy: readInflightMessagesPolicy(table.default_policy),
     }
 }
 
@@ -191,6 +212,18 @@ function readExecutionTable(value: unknown): RawExecutionConfig {
     }
 
     return value as RawExecutionConfig
+}
+
+function readInflightMessagesTable(value: unknown): RawInflightMessagesConfig {
+    if (value === undefined) {
+        return {}
+    }
+
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+        throw new Error("gateway.inflight_messages must be a table when present")
+    }
+
+    return value as RawInflightMessagesConfig
 }
 
 function readBoolean(value: unknown, field: string, fallback: boolean): boolean {
@@ -255,6 +288,18 @@ function readOptionalHardTimeoutMs(value: unknown): number | null {
     }
 
     return value
+}
+
+function readInflightMessagesPolicy(value: unknown): GatewayInflightMessagesPolicy {
+    if (value === undefined) {
+        return "ask"
+    }
+
+    if (value === "ask" || value === "queue" || value === "interrupt") {
+        return value
+    }
+
+    throw new Error('gateway.inflight_messages.default_policy must be "ask", "queue", or "interrupt"')
 }
 
 function readMailboxRoutes(value: unknown): GatewayMailboxRouteConfig[] {

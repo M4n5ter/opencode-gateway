@@ -23,6 +23,7 @@ import type {
     RuntimeJournalEntry,
     SqliteStore,
 } from "../store/sqlite"
+import { type ActiveExecutionHandle, ActiveExecutionRegistry } from "./active-execution"
 import { ConversationCoordinator } from "./conversation-coordinator"
 import { delay } from "./delay"
 import { ExecutionBudget, ExecutionHardTimeoutError } from "./execution-budget"
@@ -62,10 +63,21 @@ export class GatewayExecutor {
         private readonly executionConfig: GatewayExecutionConfig = DEFAULT_EXECUTION_CONFIG,
         private readonly coordinator: ConversationCoordinator = new ConversationCoordinator(),
         private readonly toolActivity: GatewayToolActivityRuntime | null = null,
+        private readonly activeExecutions: ActiveExecutionRegistry = new ActiveExecutionRegistry(),
     ) {}
 
     prepareInboundMessage(message: BindingInboundMessage): BindingPreparedExecution {
         return this.module.prepareInboundExecution(message)
+    }
+
+    isConversationActive(conversationKey: string): boolean {
+        return this.activeExecutions.isActiveConversation(conversationKey)
+    }
+
+    async requestConversationInterrupt(conversationKey: string): Promise<boolean> {
+        return await this.activeExecutions.requestInterrupt(conversationKey, async (sessionId) => {
+            await this.opencode.abortSession(sessionId)
+        })
     }
 
     async handleInboundMessage(message: BindingInboundMessage): Promise<BindingDispatchReport> {
@@ -73,6 +85,7 @@ export class GatewayExecutor {
         const syntheticEntry = {
             id: Date.now(),
             mailboxKey: prepared.conversationKey,
+            ingressState: "ready",
             sourceKind: "direct_runtime",
             externalId: `direct:${Date.now()}`,
             sender: normalizeRequiredField(message.sender, "message sender"),
@@ -311,6 +324,8 @@ export class GatewayExecutor {
         budget: ExecutionBudget,
     ): Promise<PreparedExecutionWithPreview> {
         const conversationKey = entries[0].prepared.conversationKey
+        const activeHandle = this.activeExecutions.begin(conversationKey)
+        let completedExecution: ReturnType<ActiveExecutionRegistry["finish"]> | null = null
         const persistedSessionId = this.store.getSessionBinding(conversationKey)
         const replyTargets = dedupeReplyTargets(
             entries.flatMap((entry) => (entry.prepared.replyTarget === null ? [] : [entry.prepared.replyTarget])),
@@ -343,7 +358,11 @@ export class GatewayExecutor {
                 replyTargets,
                 budget,
                 toolActivity,
+                activeHandle,
             )
+            if (this.activeExecutions.wasInterrupted(activeHandle)) {
+                throw new InterruptedExecutionError(conversationKey, promptResult.sessionId)
+            }
             await this.cleanupResidualBusySession(promptResult.sessionId, budget)
 
             this.store.putSessionBindingIfUnchanged(
@@ -361,7 +380,14 @@ export class GatewayExecutor {
                 targetSessions,
             }
         } catch (error) {
+            completedExecution = completedExecution ?? this.activeExecutions.finish(activeHandle)
             await finishTargetSessions(targetSessions, null)
+            if (completedExecution.interrupted) {
+                await this.cleanupInterruptedExecution(conversationKey, completedExecution)
+                throw error instanceof InterruptedExecutionError
+                    ? error
+                    : new InterruptedExecutionError(conversationKey, completedExecution.sessionId)
+            }
             if (error instanceof ExecutionHardTimeoutError) {
                 this.store.appendJournal(
                     createJournalEntry("execution_timeout", Date.now(), conversationKey, {
@@ -385,6 +411,7 @@ export class GatewayExecutor {
 
             throw error
         } finally {
+            completedExecution = completedExecution ?? this.activeExecutions.finish(activeHandle)
             await toolActivity?.finish(Date.now())
         }
     }
@@ -633,6 +660,7 @@ export class GatewayExecutor {
         replyTargets: NonNullable<BindingPreparedExecution["replyTarget"]>[],
         budget: ExecutionBudget,
         toolActivity: Pick<GatewayToolActivityHandle, "trackSession" | "finish"> | null,
+        activeHandle: ActiveExecutionHandle,
     ): Promise<PromptExecutionResult> {
         return await runOpencodeDriver({
             module: this.module,
@@ -646,6 +674,7 @@ export class GatewayExecutor {
                 parts: entry.prepared.promptParts,
             })),
             onSessionAvailable: async (sessionId) => {
+                this.activeExecutions.updateSession(activeHandle, sessionId)
                 this.store.replaceSessionReplyTargets({
                     sessionId,
                     conversationKey: entries[0].prepared.conversationKey,
@@ -654,8 +683,38 @@ export class GatewayExecutor {
                 })
                 toolActivity?.trackSession(sessionId)
             },
+            onCommand: async (command) => {
+                if (command.kind === "sendPromptAsync") {
+                    this.activeExecutions.setPromptMessageId(activeHandle, command.messageId)
+                }
+            },
+            shouldInterrupt: () => this.activeExecutions.wasInterrupted(activeHandle),
             budget,
         })
+    }
+
+    private async cleanupInterruptedExecution(
+        conversationKey: string,
+        execution: ReturnType<ActiveExecutionRegistry["finish"]>,
+    ): Promise<void> {
+        if (execution.sessionId === null) {
+            return
+        }
+
+        if (execution.assistantMessageId === null) {
+            this.evictSessionBinding(
+                conversationKey,
+                execution.sessionId,
+                "interrupt completed without an assistant message to revert",
+            )
+            return
+        }
+
+        try {
+            await this.opencode.revertSessionMessage(execution.sessionId, execution.assistantMessageId)
+        } catch (error) {
+            this.evictSessionBinding(conversationKey, execution.sessionId, error)
+        }
     }
 }
 
@@ -667,7 +726,9 @@ export type GatewayExecutorLike = Pick<
     | "appendContextToConversation"
     | "executeMailboxJob"
     | "executeMailboxEntries"
+    | "isConversationActive"
     | "prepareInboundMessage"
+    | "requestConversationInterrupt"
 >
 
 export type DispatchScheduledJobInput = {
@@ -706,7 +767,10 @@ type ImmediateDeliveryAttempt = {
 }
 
 type GatewayTextDeliveryLike = Pick<GatewayTextDelivery, "openMany" | "openTargetSessions">
-type GatewayOpencodeRuntimeLike = Pick<OpencodeSdkAdapter, "execute" | "isSessionBusy" | "abortSession">
+type GatewayOpencodeRuntimeLike = Pick<
+    OpencodeSdkAdapter,
+    "execute" | "isSessionBusy" | "abortSession" | "revertSessionMessage"
+>
 type TextDeliverySessionLike = Pick<TextDeliverySession, "mode" | "preview">
 type BindingOpencodeCommandPartLike = Extract<BindingOpencodeCommand, { kind: "appendPrompt" }>["parts"][number]
 
@@ -905,6 +969,16 @@ class MissingSessionCommandError extends Error {
     constructor(message: string) {
         super(message)
         this.name = "MissingSessionCommandError"
+    }
+}
+
+export class InterruptedExecutionError extends Error {
+    constructor(
+        readonly conversationKey: string,
+        readonly sessionId: string | null,
+    ) {
+        super(`execution interrupted for conversation ${conversationKey}`)
+        this.name = "InterruptedExecutionError"
     }
 }
 

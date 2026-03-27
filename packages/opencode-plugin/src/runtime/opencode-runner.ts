@@ -37,6 +37,8 @@ export async function runOpencodeDriver(options: {
     deliverySession: TextDeliverySessionLike | null
     prompts: OpencodeDriverPrompt[]
     onSessionAvailable?: (sessionId: string) => Promise<void> | void
+    onCommand?: (command: BindingOpencodeCommand) => Promise<void> | void
+    shouldInterrupt?: () => boolean
     budget: ExecutionBudget
 }): Promise<PromptExecutionResult> {
     const driver = new options.module.OpencodeExecutionDriver({
@@ -54,10 +56,17 @@ export async function runOpencodeDriver(options: {
         for (;;) {
             if (step.kind === "command") {
                 const command = step.command
+                if (options.shouldInterrupt?.() === true) {
+                    throw new OpencodeDriverInterruptedError()
+                }
                 options.budget.throwIfHardTimedOut(`executing ${step.command.kind}`)
+                await options.onCommand?.(command)
                 activeSessionId = await syncSessionContext(activeSessionId, command, options.onSessionAvailable)
                 registration = syncDriverRegistration(registration, command, driver, options)
                 const result = await options.opencode.execute(options.budget.applyToCommand(command))
+                if (options.shouldInterrupt?.() === true) {
+                    throw new OpencodeDriverInterruptedError()
+                }
                 activeSessionId = await syncSessionContext(activeSessionId, result, options.onSessionAvailable)
                 registration = syncDriverRegistration(registration, result, driver, options)
                 if (isTimeoutCommandResult(result)) {
@@ -84,6 +93,13 @@ export async function runOpencodeDriver(options: {
     } finally {
         registration?.dispose()
         driver.free?.()
+    }
+}
+
+class OpencodeDriverInterruptedError extends Error {
+    constructor() {
+        super("OpenCode driver interrupted")
+        this.name = "OpencodeDriverInterruptedError"
     }
 }
 

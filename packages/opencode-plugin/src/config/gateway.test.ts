@@ -119,11 +119,33 @@ test("loadGatewayConfig defaults mailbox batching to off", async () => {
             batchWindowMs: 1_500,
             routes: [],
         })
+        expect(config.inflightMessages).toEqual({
+            defaultPolicy: "ask",
+        })
         expect(config.execution).toEqual({
             sessionWaitTimeoutMs: 30 * 60_000,
             promptProgressTimeoutMs: 30 * 60_000,
             hardTimeoutMs: null,
             abortSettleTimeoutMs: 5_000,
+        })
+    } finally {
+        await rm(root, { recursive: true, force: true })
+    }
+})
+
+test("loadGatewayConfig parses inflight message policy", async () => {
+    const root = await mkdtemp(join(tmpdir(), "opencode-gateway-config-"))
+    const configPath = join(root, "config.toml")
+
+    try {
+        await writeFile(configPath, ["[gateway.inflight_messages]", 'default_policy = "interrupt"'].join("\n"))
+
+        const config = await loadGatewayConfig({
+            OPENCODE_GATEWAY_CONFIG: configPath,
+        })
+
+        expect(config.inflightMessages).toEqual({
+            defaultPolicy: "interrupt",
         })
     } finally {
         await rm(root, { recursive: true, force: true })

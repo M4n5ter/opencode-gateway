@@ -1,11 +1,12 @@
 import type { BindingInboundMessage, BindingLoggerHost } from "../binding"
-import type { GatewayMailboxConfig } from "../config/gateway"
+import type { GatewayInflightMessagesConfig, GatewayMailboxConfig } from "../config/gateway"
 import type { GatewayTransportHost } from "../host/transport"
 import type { GatewayInteractionRuntime } from "../interactions/runtime"
 import type { MailboxDeliveryRecord, MailboxJobRecord, RuntimeJournalEntry, SqliteStore } from "../store/sqlite"
 import { formatError } from "../utils/error"
 import { deleteInboundAttachmentFiles } from "./attachments"
-import type { GatewayExecutor } from "./executor"
+import { type GatewayExecutor, InterruptedExecutionError } from "./executor"
+import type { GatewayInflightPolicyRuntime } from "./inflight-policy"
 
 const EXECUTION_LEASE_MS = 60_000
 const EXECUTION_LEASE_HEARTBEAT_MS = 15_000
@@ -17,6 +18,15 @@ const DELIVERY_MAX_ATTEMPTS = 5
 const SWEEP_INTERVAL_MS = 1_000
 const MAX_ACTIVE_EXECUTIONS = 4
 const MAX_ACTIVE_DELIVERIES = 8
+
+const DEFAULT_INFLIGHT_CONFIG: GatewayInflightMessagesConfig = {
+    defaultPolicy: "ask",
+}
+
+const DEFAULT_INFLIGHT_POLICY_RUNTIME: GatewayInflightPolicyRuntimeLike = {
+    async interruptCurrent(): Promise<void> {},
+    async recoverOnStartup(): Promise<void> {},
+}
 
 export class GatewayMailboxRuntime {
     private drainScheduled = false
@@ -34,11 +44,14 @@ export class GatewayMailboxRuntime {
         private readonly logger: BindingLoggerHost,
         private readonly config: GatewayMailboxConfig,
         private readonly interactions: GatewayInteractionRuntimeLike,
+        private readonly inflightConfig: GatewayInflightMessagesConfig = DEFAULT_INFLIGHT_CONFIG,
+        private readonly inflightPolicy: GatewayInflightPolicyRuntimeLike = DEFAULT_INFLIGHT_POLICY_RUNTIME,
     ) {}
 
     start(): void {
         this.stopped = false
         this.store.requeueExpiredMailboxLeases(Date.now())
+        this.inflightPolicy.recoverOnStartup()
         this.ensureSweep()
         this.scheduleDrain(0)
     }
@@ -51,6 +64,10 @@ export class GatewayMailboxRuntime {
         }
     }
 
+    scheduleDrainNow(): void {
+        this.scheduleDrain(0)
+    }
+
     async enqueueInboundMessage(message: BindingInboundMessage, sourceKind: string, externalId: string): Promise<void> {
         if (await this.interactions.tryHandleInboundMessage(message)) {
             return
@@ -58,9 +75,16 @@ export class GatewayMailboxRuntime {
 
         const prepared = this.executor.prepareInboundMessage(message)
         const recordedAtMs = Date.now()
+        const activeConversation =
+            typeof this.executor.isConversationActive === "function"
+                ? this.executor.isConversationActive(prepared.conversationKey)
+                : false
+        const ingressState =
+            activeConversation && this.inflightConfig.defaultPolicy === "ask" ? "held_for_inflight_policy" : "ready"
 
         this.store.enqueueMailboxEntry({
             mailboxKey: prepared.conversationKey,
+            ingressState,
             sourceKind,
             externalId,
             sender: message.sender,
@@ -81,6 +105,10 @@ export class GatewayMailboxRuntime {
                 deliveryTarget: message.deliveryTarget,
             }),
         )
+
+        if (activeConversation) {
+            await this.handleActiveConversationIngress(prepared.conversationKey, ingressState)
+        }
 
         this.scheduleDrain(0)
     }
@@ -219,8 +247,18 @@ export class GatewayMailboxRuntime {
                     }),
                 )
             }
+            await this.maybeResolveCompletedInflightDecision(job.mailboxKey)
             await deleteInboundAttachmentFiles(finalized.cleanupEntries, this.logger)
         } catch (error) {
+            if (error instanceof InterruptedExecutionError) {
+                const recordedAtMs = Date.now()
+                const finalized = this.store.interruptMailboxJob(job.id, recordedAtMs)
+                await this.maybeResolveCompletedInflightDecision(job.mailboxKey)
+                await deleteInboundAttachmentFiles(finalized.cleanupEntries, this.logger)
+                this.logger.log("info", `interrupted mailbox job ${job.id}`)
+                return
+            }
+
             const recordedAtMs = Date.now()
             const quarantined = this.store.recordMailboxJobFailure(
                 job.id,
@@ -241,6 +279,7 @@ export class GatewayMailboxRuntime {
                 quarantined ? "error" : "warn",
                 `${quarantined ? "quarantined" : "retrying"} mailbox job ${job.id}: ${formatError(error)}`,
             )
+            await this.maybeResolveCompletedInflightDecision(job.mailboxKey)
         } finally {
             stopHeartbeat()
         }
@@ -336,11 +375,50 @@ export class GatewayMailboxRuntime {
             clearInterval(timer)
         }
     }
+
+    private async handleActiveConversationIngress(
+        mailboxKey: string,
+        ingressState: "ready" | "held_for_inflight_policy",
+    ): Promise<void> {
+        switch (this.inflightConfig.defaultPolicy) {
+            case "queue":
+                return
+            case "interrupt":
+                await this.inflightPolicy.interruptCurrent(mailboxKey)
+                return
+            case "ask":
+                if (ingressState !== "held_for_inflight_policy") {
+                    return
+                }
+
+                await this.interactions.ensureInflightPolicyRequest(
+                    mailboxKey,
+                    this.store.listHeldMailboxReplyTargets(mailboxKey),
+                )
+                return
+        }
+    }
+
+    private async maybeResolveCompletedInflightDecision(mailboxKey: string): Promise<void> {
+        const pending = this.store.listPendingInteractionsForMailbox(mailboxKey)
+        if (pending.length === 0) {
+            return
+        }
+
+        this.store.releaseHeldMailboxEntries(mailboxKey, Date.now())
+        for (const interaction of pending) {
+            this.interactions.resolveStaleInflightPolicyRequest(interaction)
+        }
+    }
 }
 
-type GatewayExecutorLike = Pick<GatewayExecutor, "executeMailboxJob" | "prepareInboundMessage">
+type GatewayExecutorLike = Pick<GatewayExecutor, "executeMailboxJob" | "prepareInboundMessage" | "isConversationActive">
 type GatewayTransportLike = Pick<GatewayTransportHost, "sendMessage" | "deliverMessage">
-type GatewayInteractionRuntimeLike = Pick<GatewayInteractionRuntime, "tryHandleInboundMessage">
+type GatewayInteractionRuntimeLike = Pick<
+    GatewayInteractionRuntime,
+    "tryHandleInboundMessage" | "ensureInflightPolicyRequest" | "resolveStaleInflightPolicyRequest"
+>
+type GatewayInflightPolicyRuntimeLike = Pick<GatewayInflightPolicyRuntime, "interruptCurrent" | "recoverOnStartup">
 
 function createJournalEntry(
     kind: RuntimeJournalEntry["kind"],

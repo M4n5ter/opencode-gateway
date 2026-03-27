@@ -108,7 +108,7 @@ test("GatewayMailboxRuntime batches unassigned mailbox entries into one job when
             new MemoryLogger(),
             {
                 batchReplies: true,
-                batchWindowMs: 30,
+                batchWindowMs: 200,
                 routes: [],
             },
             {

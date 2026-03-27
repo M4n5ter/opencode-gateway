@@ -36,9 +36,28 @@ export type GatewayPermissionRequest = {
     } | null
 }
 
-export type GatewayInteractionRequest = GatewayQuestionRequest | GatewayPermissionRequest
+export type GatewayInflightPolicyReply = "queue" | "interrupt"
+
+export type GatewayInflightPolicyRequest = {
+    kind: "inflight_policy"
+    requestId: string
+    mailboxKey: string
+}
+
+export type GatewayInteractionRequest = GatewayQuestionRequest | GatewayPermissionRequest | GatewayInflightPolicyRequest
+
+export type GatewayInteractionScope =
+    | {
+          kind: "session"
+          id: string
+      }
+    | {
+          kind: "mailbox"
+          id: string
+      }
 
 export type PendingInteractionRecord = GatewayInteractionRequest & {
+    scope: GatewayInteractionScope
     deliveryTarget: BindingDeliveryTarget
     telegramMessageId: number | null
     createdAtMs: number

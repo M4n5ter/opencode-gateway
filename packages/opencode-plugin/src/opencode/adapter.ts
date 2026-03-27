@@ -115,6 +115,27 @@ export class OpencodeSdkAdapter {
         }
     }
 
+    async revertSessionMessage(sessionId: string, messageId: string): Promise<void> {
+        try {
+            await this.client.session.revert({
+                path: { id: sessionId },
+                query: { directory: this.directory },
+                body: {
+                    messageID: messageId,
+                },
+                responseStyle: "data",
+                throwOnError: true,
+                signal: AbortSignal.timeout(DEFAULT_SDK_REQUEST_TIMEOUT_MS),
+            })
+        } catch (error) {
+            if (isMissingSessionError(error)) {
+                return
+            }
+
+            throw error
+        }
+    }
+
     async execute(command: BindingOpencodeCommand): Promise<BindingOpencodeCommandResult> {
         try {
             switch (command.kind) {

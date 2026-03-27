@@ -119,6 +119,7 @@ This package now:
 - delivers Telegram replies and private-chat editable stream previews
 - renders Telegram tool-call details through per-message Preview / Tools view state with paginated tool history
 - bridges OpenCode permission/question interactions into Telegram and cleans them up after successful replies
+- applies mailbox-scoped inflight policy (`ask`, `queue`, or `interrupt`) when new ingress arrives during an active run
 - exposes gateway, cron, and Telegram operational tools
 
 ## Runtime Model
@@ -132,6 +133,7 @@ opencode-gateway serve
   -> plugin loads the generated wasm package
   -> plugin builds host-side services
   -> Telegram updates are enqueued into durable mailboxes
+  -> new ingress that arrives during an active mailbox run is held or interrupt-routed by policy
   -> per-mailbox workers serialize ingress and optionally batch replies
   -> cron ticks enter the plugin-local executor directly
   -> Rust emits OpenCode host commands one step at a time
@@ -235,6 +237,7 @@ The SQLite layer currently revolves around:
 - `session_reply_targets`
 - `pending_interactions`
 - `telegram_message_cleanup_jobs`
+- `telegram_preview_messages`
 - `runtime_journal`
 - `cron_jobs`
 - `cron_runs`
@@ -258,6 +261,7 @@ The repository already contains:
 - plugin-local host orchestration for mailbox workers and cron dispatch
 - durable mailbox queueing for gateway-managed ingress
 - optional mailbox reply batching behind a config flag
+- mailbox-scoped inflight message policy with `ask` / `queue` / `interrupt`
 - explicit mailbox route overrides for shared-session ingress
 - SQLite-backed session bindings and runtime journaling
 - SQLite-backed pending interactions and delayed Telegram cleanup jobs
@@ -268,6 +272,7 @@ The repository already contains:
 - private-chat editable stream previews with split Preview / Tools tool-call details
 - paginated tool-call history inside the Telegram `Tools` view
 - permission/question bridging with post-reply cleanup
+- mailbox-scoped inflight interactions that can queue or interrupt an active run
 - a local OpenCode smoke script
 
 ## Next Implementation Steps
@@ -275,11 +280,12 @@ The repository already contains:
 The next implementation passes should happen in this order:
 
 1. Refine Telegram progressive-reply UX only where the current split Preview / Tools model still feels noisy.
-2. Add richer durable gateway tables only where the current catalog/journal split
+2. Revisit whether inflight queue/interrupt interactions need richer user-visible status after an interrupt or revert failure.
+3. Add richer durable gateway tables only where the current catalog/journal split
    becomes limiting.
-3. Revisit how much async execution logic should move back into Rust only if a stable,
+4. Revisit how much async execution logic should move back into Rust only if a stable,
    low-complexity boundary appears.
-4. Add richer operational inspection only when the current tool surface stops being
+5. Add richer operational inspection only when the current tool surface stops being
    sufficient.
 
 ## References

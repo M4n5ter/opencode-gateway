@@ -1,6 +1,6 @@
 import type { SqliteDatabaseLike } from "./database"
 
-const LATEST_SCHEMA_VERSION = 16
+const LATEST_SCHEMA_VERSION = 17
 
 export function migrateGatewayDatabase(db: SqliteDatabaseLike): void {
     db.exec("PRAGMA journal_mode = WAL;")
@@ -88,6 +88,11 @@ export function migrateGatewayDatabase(db: SqliteDatabaseLike): void {
 
     if (currentVersion === 15) {
         migrateToV16(db)
+        currentVersion = 16
+    }
+
+    if (currentVersion === 16) {
+        migrateToV17(db)
     }
 }
 
@@ -707,6 +712,66 @@ function migrateToV16(db: SqliteDatabaseLike): void {
             updated_at_ms INTEGER NOT NULL,
             PRIMARY KEY (chat_id, message_id)
         );
+    `)
+    db.exec("PRAGMA user_version = 16;")
+}
+
+function migrateToV17(db: SqliteDatabaseLike): void {
+    db.exec(`
+        ALTER TABLE mailbox_entries
+        ADD COLUMN ingress_state TEXT NOT NULL DEFAULT 'ready';
+
+        ALTER TABLE pending_interactions RENAME TO pending_interactions_v16;
+
+        CREATE TABLE pending_interactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            request_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            scope_kind TEXT NOT NULL,
+            scope_id TEXT NOT NULL,
+            delivery_channel TEXT NOT NULL,
+            delivery_target TEXT NOT NULL,
+            delivery_topic TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            telegram_message_id INTEGER,
+            created_at_ms INTEGER NOT NULL
+        );
+
+        INSERT INTO pending_interactions (
+            request_id,
+            kind,
+            scope_kind,
+            scope_id,
+            delivery_channel,
+            delivery_target,
+            delivery_topic,
+            payload_json,
+            telegram_message_id,
+            created_at_ms
+        )
+        SELECT
+            request_id,
+            kind,
+            'session',
+            session_id,
+            delivery_channel,
+            delivery_target,
+            delivery_topic,
+            payload_json,
+            telegram_message_id,
+            created_at_ms
+        FROM pending_interactions_v16;
+
+        DROP TABLE pending_interactions_v16;
+
+        CREATE UNIQUE INDEX pending_interactions_request_target_topic_idx
+            ON pending_interactions (request_id, delivery_channel, delivery_target, delivery_topic);
+
+        CREATE INDEX pending_interactions_target_topic_created_at_ms_idx
+            ON pending_interactions (delivery_channel, delivery_target, delivery_topic, created_at_ms);
+
+        CREATE INDEX pending_interactions_scope_created_at_ms_idx
+            ON pending_interactions (scope_kind, scope_id, created_at_ms);
     `)
     db.exec(`PRAGMA user_version = ${LATEST_SCHEMA_VERSION};`)
 }

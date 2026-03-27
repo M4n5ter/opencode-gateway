@@ -8,6 +8,14 @@ import type { TelegramNormalizedCallbackQuery } from "../telegram/normalize"
 import { recordTelegramSendFailure, recordTelegramSendSuccess } from "../telegram/state"
 import type { TelegramInlineKeyboardMarkup } from "../telegram/types"
 import { formatError } from "../utils/error"
+import {
+    buildTelegramInflightPolicyKeyboard,
+    formatInflightPolicyCallbackAck,
+    formatPlainTextInflightPolicy,
+    formatTelegramInflightPolicy,
+    parseInflightPolicyReply,
+    resolveInflightPolicyCallbackReply,
+} from "./inflight"
 import { type GatewayInteractionEvent, normalizeInteractionEvent } from "./normalize"
 import {
     buildTelegramPermissionKeyboard,
@@ -26,7 +34,12 @@ import {
     parseQuestionReply,
     resolveQuestionCallbackAnswer,
 } from "./question"
-import type { GatewayInteractionRequest, GatewayPermissionReply, PendingInteractionRecord } from "./types"
+import type {
+    GatewayInflightPolicyReply,
+    GatewayInteractionRequest,
+    GatewayPermissionReply,
+    PendingInteractionRecord,
+} from "./types"
 
 const INTERACTION_DELETE_DELAY_MS = 2_000
 
@@ -109,6 +122,7 @@ export class GatewayInteractionRuntime {
         private readonly transport: QuestionTransportLike,
         private readonly telegramClient: TelegramInteractionClientLike | null,
         private readonly logger: BindingLoggerHost,
+        private readonly inflightPolicy: GatewayInflightPolicyHandlerLike,
     ) {
         this.hierarchy = new GatewaySessionHierarchyResolver(client, directory, sessions, logger)
     }
@@ -125,6 +139,7 @@ export class GatewayInteractionRuntime {
     }
 
     async reconcilePendingRequests(): Promise<void> {
+        this.store.clearLocalInflightInteractions()
         const [questions, permissions] = await Promise.all([this.listPendingQuestions(), this.listPendingPermissions()])
 
         for (const request of [...questions, ...permissions]) {
@@ -147,6 +162,8 @@ export class GatewayInteractionRuntime {
                 return await this.tryHandleQuestionReply(pending, message)
             case "permission":
                 return await this.tryHandlePermissionReply(pending, message)
+            case "inflight_policy":
+                return await this.tryHandleInflightPolicyReply(pending, message)
         }
     }
 
@@ -170,6 +187,8 @@ export class GatewayInteractionRuntime {
                 return await this.handleQuestionCallbackQuery(pending, query)
             case "permission":
                 return await this.handlePermissionCallbackQuery(pending, query)
+            case "inflight_policy":
+                return await this.handleInflightPolicyCallbackQuery(pending, query)
         }
     }
 
@@ -187,6 +206,10 @@ export class GatewayInteractionRuntime {
 
     private async handleInteractionAsked(request: GatewayInteractionRequest): Promise<void> {
         if (this.store.hasPendingInteraction(request.requestId)) {
+            return
+        }
+
+        if (request.kind === "inflight_policy") {
             return
         }
 
@@ -280,6 +303,12 @@ export class GatewayInteractionRuntime {
                     replyMarkup: buildTelegramPermissionKeyboard(request),
                     parseMode: "HTML",
                 }
+            case "inflight_policy":
+                return {
+                    text: formatTelegramInflightPolicy(request),
+                    replyMarkup: buildTelegramInflightPolicyKeyboard(),
+                    parseMode: "HTML",
+                }
         }
     }
 
@@ -331,6 +360,19 @@ export class GatewayInteractionRuntime {
         return true
     }
 
+    private async tryHandleInflightPolicyReply(
+        pending: Extract<PendingInteractionRecord, { kind: "inflight_policy" }>,
+        message: BindingInboundMessage,
+    ): Promise<boolean> {
+        const parsed = parseInflightPolicyReply(message.text)
+        if (parsed.kind !== "reply") {
+            return false
+        }
+
+        await this.resolveInflightPolicy(pending, parsed.reply)
+        return true
+    }
+
     private async handleQuestionCallbackQuery(
         pending: Extract<PendingInteractionRecord, { kind: "question" }>,
         query: TelegramNormalizedCallbackQuery,
@@ -373,6 +415,83 @@ export class GatewayInteractionRuntime {
         return true
     }
 
+    private async handleInflightPolicyCallbackQuery(
+        pending: Extract<PendingInteractionRecord, { kind: "inflight_policy" }>,
+        query: TelegramNormalizedCallbackQuery,
+    ): Promise<boolean> {
+        if (this.telegramClient === null) {
+            return false
+        }
+
+        const reply = resolveInflightPolicyCallbackReply(query.data)
+        if (reply === null) {
+            await this.telegramClient.answerCallbackQuery(query.callbackQueryId, "This button is no longer valid.")
+            return true
+        }
+
+        await this.resolveInflightPolicy(pending, reply)
+        await this.telegramClient.answerCallbackQuery(query.callbackQueryId, formatInflightPolicyCallbackAck(reply))
+        return true
+    }
+
+    async ensureInflightPolicyRequest(mailboxKey: string, targets: BindingDeliveryTarget[]): Promise<void> {
+        const requestId = formatInflightPolicyRequestId(mailboxKey)
+        const request: Extract<GatewayInteractionRequest, { kind: "inflight_policy" }> = {
+            kind: "inflight_policy",
+            requestId,
+            mailboxKey,
+        }
+
+        const deliveredTargets: Array<{
+            deliveryTarget: BindingDeliveryTarget
+            telegramMessageId: number | null
+        }> = []
+        const existingByTarget = new Map(
+            this.store
+                .listPendingInteractionsForMailbox(mailboxKey)
+                .map((pending) => [formatDeliveryTargetKey(pending.deliveryTarget), pending]),
+        )
+
+        for (const target of dedupeDeliveryTargets(targets)) {
+            const existing = existingByTarget.get(formatDeliveryTargetKey(target))
+            if (existing !== undefined) {
+                deliveredTargets.push({
+                    deliveryTarget: existing.deliveryTarget,
+                    telegramMessageId: existing.telegramMessageId,
+                })
+                continue
+            }
+
+            try {
+                deliveredTargets.push(await this.sendInteraction(target, request))
+            } catch (error) {
+                this.logger.log(
+                    "warn",
+                    `inflight_policy ${requestId} delivery failed for ${target.channel}:${target.target}: ${formatError(error)}`,
+                )
+            }
+        }
+
+        if (deliveredTargets.length === 0) {
+            return
+        }
+
+        this.store.replacePendingInteraction({
+            request,
+            targets: deliveredTargets,
+            recordedAtMs: Date.now(),
+        })
+    }
+
+    resolveStaleInflightPolicyRequest(pending: PendingInteractionRecord): void {
+        if (pending.kind !== "inflight_policy") {
+            return
+        }
+
+        this.schedulePendingInteractionCleanup(pending.requestId, Date.now())
+        this.store.deletePendingInteraction(pending.requestId)
+    }
+
     private async replyQuestion(requestId: string, answers: string[][]): Promise<void> {
         await this.client.question.reply(
             {
@@ -412,6 +531,23 @@ export class GatewayInteractionRuntime {
                 throwOnError: true,
             },
         )
+    }
+
+    private async resolveInflightPolicy(
+        pending: Extract<PendingInteractionRecord, { kind: "inflight_policy" }>,
+        reply: GatewayInflightPolicyReply,
+    ): Promise<void> {
+        switch (reply) {
+            case "queue":
+                await this.inflightPolicy.queueNext(pending.mailboxKey)
+                break
+            case "interrupt":
+                await this.inflightPolicy.interruptCurrent(pending.mailboxKey)
+                break
+        }
+
+        this.schedulePendingInteractionCleanup(pending.requestId, Date.now())
+        this.store.deletePendingInteraction(pending.requestId)
     }
 
     private async listPendingQuestions(): Promise<GatewayInteractionRequest[]> {
@@ -493,7 +629,7 @@ export class GatewayInteractionRuntime {
 }
 
 function isInteractionCallbackQuery(data: string | null): boolean {
-    return data !== null && (data.startsWith("q:") || data.startsWith("p:"))
+    return data !== null && (data.startsWith("q:") || data.startsWith("p:") || data.startsWith("i:"))
 }
 
 function formatPlainTextInteraction(request: GatewayInteractionRequest): string {
@@ -502,7 +638,21 @@ function formatPlainTextInteraction(request: GatewayInteractionRequest): string 
             return formatPlainTextQuestion(request)
         case "permission":
             return formatPlainTextPermission(request)
+        case "inflight_policy":
+            return formatPlainTextInflightPolicy(request)
     }
+}
+
+function formatInflightPolicyRequestId(mailboxKey: string): string {
+    return `inflight:${mailboxKey}`
+}
+
+function formatDeliveryTargetKey(target: BindingDeliveryTarget): string {
+    return `${target.channel}:${target.target}:${target.topic ?? ""}`
+}
+
+function dedupeDeliveryTargets(targets: BindingDeliveryTarget[]): BindingDeliveryTarget[] {
+    return [...new Map(targets.map((target) => [formatDeliveryTargetKey(target), target])).values()]
 }
 
 type QuestionListRecord = {
@@ -539,4 +689,9 @@ function unwrapData<T>(value: unknown): T {
     }
 
     return value as T
+}
+
+type GatewayInflightPolicyHandlerLike = {
+    queueNext(mailboxKey: string): Promise<void>
+    interruptCurrent(mailboxKey: string): Promise<void>
 }

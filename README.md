@@ -94,6 +94,11 @@ state_db = "/home/you/.local/share/opencode-gateway/state.db"
 # prompt_progress_timeout_ms = 1800000
 # hard_timeout_ms = 7200000
 # abort_settle_timeout_ms = 5000
+#
+# Optional policy for new inbound messages that arrive while the current
+# mailbox run is still executing:
+# [gateway.inflight_messages]
+# default_policy = "ask" # "ask" | "queue" | "interrupt"
 
 [cron]
 enabled = true
@@ -154,6 +159,16 @@ OpenCode tasks and only times out stalled waits: `session_wait_timeout_ms` and
 `prompt_progress_timeout_ms` default to 30 minutes, `hard_timeout_ms` is
 disabled, and `abort_settle_timeout_ms` defaults to 5 seconds.
 
+`[gateway.inflight_messages]` is also optional. `default_policy` defaults to
+`"ask"`:
+
+- `ask` holds new inbound messages while the current mailbox run is still active
+  and sends a local `Queue Next` / `Interrupt Current` interaction
+- `queue` keeps the current run and automatically releases the held messages once
+  that run finishes
+- `interrupt` aborts the current run immediately and starts the held messages in
+  the next run
+
 Telegram UX defaults:
 
 - private Telegram chats use one editable stream message instead of draft transport
@@ -162,6 +177,7 @@ Telegram UX defaults:
 - the `Preview` view keeps `reasoning`, `process`, and the final answer visible; the `Tools` view paginates tool details newest-first
 - when the task finishes, the message returns to `Preview`, but `Tools` stays available for later inspection
 - the first tool event opens the preview stream immediately so pending/running tool input shows up early
+- when a new inbound message lands during an active mailbox run, Telegram can ask whether to queue it or interrupt the current run, depending on `gateway.inflight_messages.default_policy`
 
 When `cron.timezone` is omitted, recurring cron expressions are interpreted in
 the runtime's local time zone.
