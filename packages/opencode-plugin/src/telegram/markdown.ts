@@ -4,6 +4,7 @@ const TELEGRAM_HR = "----------"
 
 export type TelegramMarkdownBlock = {
     html: string
+    visibleText: string
     visibleLength: number
 }
 
@@ -39,6 +40,7 @@ export function renderTelegramMarkdownBlocks(markdown: string): TelegramMarkdown
         .filter((html) => html.length > 0)
         .map((html) => ({
             html,
+            visibleText: extractVisibleTelegramHtmlText(html),
             visibleLength: visibleTelegramHtmlLength(html),
         }))
 }

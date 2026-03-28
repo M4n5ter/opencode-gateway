@@ -1,10 +1,12 @@
 import { expect, test } from "bun:test"
 
+import { extractVisibleTelegramHtmlText } from "./markdown"
 import {
     buildTelegramStreamReplyMarkup,
     renderTelegramFinalMessage,
     renderTelegramStreamMessage,
     renderTelegramStreamMessageForView,
+    resolveTelegramPreviewViewState,
 } from "./stream-render"
 
 test("renderTelegramStreamMessage places reasoning into an expandable italic blockquote", () => {
@@ -250,4 +252,49 @@ test("toggle preview mode paginates long preview bodies and omits pagination whe
             },
         ),
     ).toBeNull()
+})
+
+test("toggle preview pagination keeps the tail of a long answer reachable on the last page", () => {
+    const answerText = [
+        "# Title",
+        "",
+        "Alpha paragraph",
+        "",
+        "```text",
+        "x".repeat(4_600),
+        "```",
+        "",
+        "- item a",
+        "- item b",
+        "",
+        "omega",
+    ].join("\n")
+    const preview = {
+        processText: "Working through the request",
+        reasoningText: "Need to keep the preview lossless while paginating",
+        answerText,
+        toolSections: [],
+    }
+
+    const initialState = resolveTelegramPreviewViewState(preview, {
+        toolCallView: "toggle",
+        viewState: {
+            viewMode: "preview",
+            previewPage: 0,
+            toolsPage: 0,
+        },
+    })
+    const lastPage = resolveTelegramPreviewViewState(preview, {
+        toolCallView: "toggle",
+        viewState: {
+            viewMode: "preview",
+            previewPage: initialState.previewPageCount - 1,
+            toolsPage: 0,
+        },
+    }).previewBody
+
+    expect(initialState.previewPageCount).toBeGreaterThan(1)
+    expect(extractVisibleTelegramHtmlText(lastPage)).toContain("omega")
+    expect(extractVisibleTelegramHtmlText(lastPage)).toContain("• item a")
+    expect(extractVisibleTelegramHtmlText(lastPage)).toContain("• item b")
 })

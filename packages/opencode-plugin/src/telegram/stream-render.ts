@@ -52,7 +52,13 @@ type TelegramResolvedPreviewViewState = TelegramPreviewViewState & {
 
 type RenderedPreviewBlock = {
     html: string
+    visibleText: string
     visibleLength: number
+}
+
+type RenderedPreviewPage = {
+    html: string
+    visibleText: string
 }
 
 export function renderTelegramFinalMessage(text: string): string {
@@ -210,7 +216,7 @@ export function resolveTelegramPreviewViewState(
             viewMode: "preview",
             previewPage,
             previewPageCount: previewPages.length,
-            previewBody: previewPages[previewPage] ?? "",
+            previewBody: previewPages[previewPage]?.html ?? "",
             toolsPage: 0,
             toolCount: allToolSections.length,
             toolsPageCount: allToolSections.length === 0 ? 0 : 1,
@@ -230,7 +236,7 @@ export function resolveTelegramPreviewViewState(
         viewMode,
         previewPage,
         previewPageCount: previewPages.length,
-        previewBody: previewPages[previewPage] ?? "",
+        previewBody: previewPages[previewPage]?.html ?? "",
         toolsPage,
         toolCount: allToolSections.length,
         toolsPageCount: pages.length,
@@ -407,7 +413,7 @@ function paginatePreviewBodyPages(input: {
     processText: string | null
     answerText: string | null
     fallbackToolSummary: string | null
-}): string[] {
+}): RenderedPreviewPage[] {
     const blocks = [
         ...renderTextPreviewBlocks(input.reasoningText, renderReasoningBlock),
         ...renderTextPreviewBlocks(input.processText, renderProcessBlock),
@@ -416,6 +422,7 @@ function paginatePreviewBodyPages(input: {
             : [
                   {
                       html: input.fallbackToolSummary,
+                      visibleText: extractVisibleTelegramHtmlText(input.fallbackToolSummary),
                       visibleLength: visibleTelegramHtmlLength(input.fallbackToolSummary),
                   } satisfies RenderedPreviewBlock,
               ]),
@@ -423,7 +430,7 @@ function paginatePreviewBodyPages(input: {
     ]
 
     if (blocks.length === 0) {
-        return [""]
+        return [{ html: "", visibleText: "" }]
     }
 
     return paginateRenderedPreviewBlocks(blocks)
@@ -439,7 +446,15 @@ function renderTextPreviewBlocks(
 
     return chunkVisibleText(text).flatMap((chunk) => {
         const html = renderBlock(chunk)
-        return html === null ? [] : [{ html, visibleLength: chunk.length }]
+        return html === null
+            ? []
+            : [
+                  {
+                      html,
+                      visibleText: chunk,
+                      visibleLength: chunk.length,
+                  },
+              ]
     })
 }
 
@@ -456,21 +471,22 @@ function splitOversizedPreviewBlock(block: RenderedPreviewBlock): RenderedPrevie
         return [block]
     }
 
-    return chunkVisibleText(extractVisibleTelegramHtmlText(block.html)).map((chunk) => ({
+    return chunkVisibleText(block.visibleText).map((chunk) => ({
         html: escapeTelegramHtml(chunk),
+        visibleText: chunk,
         visibleLength: chunk.length,
     }))
 }
 
-function paginateRenderedPreviewBlocks(blocks: RenderedPreviewBlock[]): string[] {
-    const pages: string[] = []
+function paginateRenderedPreviewBlocks(blocks: RenderedPreviewBlock[]): RenderedPreviewPage[] {
+    const pages: RenderedPreviewPage[] = []
     let currentPage: RenderedPreviewBlock[] = []
     let currentLength = 0
 
     for (const block of blocks) {
         const nextLength = currentPage.length === 0 ? block.visibleLength : currentLength + 2 + block.visibleLength
         if (currentPage.length > 0 && nextLength > TELEGRAM_VISIBLE_TEXT_LIMIT) {
-            pages.push(currentPage.map((entry) => entry.html).join("\n\n"))
+            pages.push(buildRenderedPreviewPage(currentPage))
             currentPage = [block]
             currentLength = block.visibleLength
             continue
@@ -481,10 +497,17 @@ function paginateRenderedPreviewBlocks(blocks: RenderedPreviewBlock[]): string[]
     }
 
     if (currentPage.length > 0) {
-        pages.push(currentPage.map((entry) => entry.html).join("\n\n"))
+        pages.push(buildRenderedPreviewPage(currentPage))
     }
 
-    return pages.length === 0 ? [""] : pages
+    return pages.length === 0 ? [{ html: "", visibleText: "" }] : pages
+}
+
+function buildRenderedPreviewPage(blocks: RenderedPreviewBlock[]): RenderedPreviewPage {
+    return {
+        html: blocks.map((entry) => entry.html).join("\n\n"),
+        visibleText: blocks.map((entry) => entry.visibleText).join("\n\n"),
+    }
 }
 
 function chunkVisibleText(text: string): string[] {

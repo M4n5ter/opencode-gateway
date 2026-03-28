@@ -3,6 +3,7 @@ import { expect, test } from "bun:test"
 import { GatewayTransportHost } from "../host/transport"
 import { migrateGatewayDatabase } from "../store/migrations"
 import { SqliteStore } from "../store/sqlite"
+import { buildTelegramStreamReplyMarkup, renderTelegramStreamMessageForView } from "../telegram/stream-render"
 import { createMemoryDatabase } from "../test/sqlite"
 import { TelegramProgressiveSupport } from "./telegram"
 import { GatewayTextDelivery } from "./text"
@@ -110,6 +111,73 @@ test("GatewayTextDelivery opens a single editable Telegram message for slow priv
                 parseMode: "HTML",
             },
         ])
+    } finally {
+        db.close()
+    }
+})
+
+test("GatewayTextDelivery keeps sending typing after the stream message is established", async () => {
+    const db = createMemoryDatabase()
+
+    try {
+        migrateGatewayDatabase(db)
+        const store = new SqliteStore(db)
+        store.putStateValue("telegram.chat_type:42", "private", Date.now())
+
+        const calls = {
+            typing: 0,
+        }
+        const client = {
+            async getChat() {
+                throw new Error("unused")
+            },
+            async sendChatAction(): Promise<void> {
+                calls.typing += 1
+            },
+            async sendMessage(): Promise<{ message_id: number }> {
+                return {
+                    message_id: 1,
+                }
+            },
+            async editMessageText(): Promise<void> {},
+        }
+
+        const delivery = new GatewayTextDelivery(
+            new GatewayTransportHost(client, store),
+            store,
+            new TelegramProgressiveSupport(client, store, createLogger()),
+            "toggle",
+            {
+                streamOpenDelayMs: 0,
+                streamEditIntervalMs: 10,
+                typingKeepaliveIntervalMs: 10,
+            },
+        )
+
+        const session = await delivery.open(
+            {
+                channel: "telegram",
+                target: "42",
+                topic: null,
+            },
+            "auto",
+        )
+
+        await session.preview({
+            processText: "Running tools",
+            reasoningText: null,
+            answerText: null,
+            forceStreamOpen: true,
+        })
+        await sleep(35)
+
+        expect(calls.typing).toBeGreaterThanOrEqual(2)
+
+        const typingCountBeforeFinish = calls.typing
+        await session.finish("done")
+        await sleep(25)
+
+        expect(calls.typing).toBe(typingCountBeforeFinish)
     } finally {
         db.close()
     }
@@ -688,6 +756,120 @@ test("GatewayTextDelivery forces the final edit back to preview mode after tools
             },
         })
         expect(store.getTelegramPreviewMessage("42", 12)).toMatchObject({
+            viewMode: "preview",
+            previewPage: 0,
+            toolsPage: 0,
+        })
+    } finally {
+        db.close()
+    }
+})
+
+test("GatewayTextDelivery resets long final previews back to the first preview page", async () => {
+    const db = createMemoryDatabase()
+
+    try {
+        migrateGatewayDatabase(db)
+        const store = new SqliteStore(db)
+        store.putStateValue("telegram.chat_type:42", "private", Date.now())
+
+        const calls = {
+            edits: [] as Array<{ text: string; replyMarkup: unknown }>,
+        }
+        const client = {
+            async getChat() {
+                throw new Error("unused")
+            },
+            async sendChatAction(): Promise<void> {},
+            async sendMessage(): Promise<{ message_id: number }> {
+                return {
+                    message_id: 21,
+                }
+            },
+            async editMessageText(
+                _chatId: string,
+                _messageId: number,
+                text: string,
+                options?: { parseMode?: string; replyMarkup?: unknown },
+            ): Promise<void> {
+                calls.edits.push({
+                    text,
+                    replyMarkup: options?.replyMarkup ?? null,
+                })
+            },
+        }
+
+        const delivery = new GatewayTextDelivery(
+            new GatewayTransportHost(client, store),
+            store,
+            new TelegramProgressiveSupport(client, store, createLogger()),
+            "toggle",
+            {
+                streamOpenDelayMs: 0,
+                streamEditIntervalMs: 10,
+                typingKeepaliveIntervalMs: 10,
+            },
+        )
+
+        const session = await delivery.open(
+            {
+                channel: "telegram",
+                target: "42",
+                topic: null,
+            },
+            "auto",
+        )
+
+        const previewAnswer = ["alpha", "x".repeat(3300), "omega", "y".repeat(1000)].join("\n\n")
+        const finalAnswer = ["alpha", "x".repeat(3500), "omega", "y".repeat(1200)].join("\n\n")
+
+        await session.preview({
+            processText: null,
+            reasoningText: null,
+            answerText: previewAnswer,
+            forceStreamOpen: true,
+        })
+        await sleep(10)
+
+        store.setTelegramPreviewViewState("42", 21, "preview", 1, 0, Date.now())
+
+        await session.finish(finalAnswer)
+
+        expect(calls.edits.at(-1)).toEqual({
+            text: renderTelegramStreamMessageForView(
+                {
+                    processText: null,
+                    reasoningText: null,
+                    answerText: finalAnswer,
+                    toolSections: [],
+                },
+                {
+                    toolCallView: "toggle",
+                    viewState: {
+                        viewMode: "preview",
+                        previewPage: 0,
+                        toolsPage: 0,
+                    },
+                },
+            ),
+            replyMarkup: buildTelegramStreamReplyMarkup(
+                {
+                    processText: null,
+                    reasoningText: null,
+                    answerText: finalAnswer,
+                    toolSections: [],
+                },
+                {
+                    toolCallView: "toggle",
+                    viewState: {
+                        viewMode: "preview",
+                        previewPage: 0,
+                        toolsPage: 0,
+                    },
+                },
+            ),
+        })
+        expect(store.getTelegramPreviewMessage("42", 21)).toMatchObject({
             viewMode: "preview",
             previewPage: 0,
             toolsPage: 0,

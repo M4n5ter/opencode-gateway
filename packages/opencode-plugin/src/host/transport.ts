@@ -109,7 +109,7 @@ export class GatewayTransportHost implements BindingTransportHost {
                 toolCallView: this.toolCallView,
                 viewState: {
                     viewMode: "preview",
-                    previewPage: storedViewState.previewPage,
+                    previewPage: 0,
                     toolsPage: storedViewState.toolsPage,
                 },
             },
@@ -175,7 +175,7 @@ export class GatewayTransportHost implements BindingTransportHost {
                 toolCallView: this.toolCallView,
                 viewState: {
                     viewMode: "preview",
-                    previewPage: storedViewState.previewPage,
+                    previewPage: 0,
                     toolsPage: storedViewState.toolsPage,
                 },
             },

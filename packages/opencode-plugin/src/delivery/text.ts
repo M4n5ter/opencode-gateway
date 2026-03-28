@@ -415,7 +415,6 @@ class ProgressiveTextDeliverySession implements TextDeliverySession {
                     rendered.text,
                     rendered.replyMarkup,
                 )
-                this.stopTypingKeepalive()
             } else {
                 await this.telegramSupport.editStreamMessage(
                     this.target,
@@ -440,7 +439,7 @@ class ProgressiveTextDeliverySession implements TextDeliverySession {
             return
         }
 
-        const rendered = this.renderPreview(preview, { viewMode: "preview" })
+        const rendered = this.renderPreview(preview, { viewMode: "preview", previewPage: 0 })
         if (
             this.lastRenderedBody === rendered.text &&
             this.lastRenderedReplyMarkupKey === serializeReplyMarkup(rendered.replyMarkup)
@@ -596,7 +595,7 @@ class ProgressiveTextDeliverySession implements TextDeliverySession {
     }
 
     private shouldKeepTyping(): boolean {
-        return this.acceptingPreviews && !this.finished && this.streamMessageId === null
+        return this.acceptingPreviews && !this.finished
     }
 
     private cancelOpenTimer(): void {
