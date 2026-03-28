@@ -7,6 +7,7 @@ import type {
     TelegramChat,
     TelegramFileRecord,
     TelegramInlineKeyboardMarkup,
+    TelegramReactionType,
     TelegramSentMessage,
     TelegramUpdate,
 } from "./types"
@@ -181,6 +182,25 @@ export class TelegramBotClient {
         })
     }
 
+    async setMessageReaction(chatId: string, messageId: number, emoji: string): Promise<void> {
+        if (!Number.isSafeInteger(messageId) || messageId <= 0) {
+            throw new Error(`invalid Telegram message id: ${messageId}`)
+        }
+
+        const reaction = normalizeReactionEmoji(emoji)
+        await this.call("setMessageReaction", {
+            chat_id: chatId,
+            message_id: messageId,
+            reaction: [
+                {
+                    type: "emoji",
+                    emoji: reaction,
+                } satisfies TelegramReactionType,
+            ],
+            is_big: false,
+        })
+    }
+
     async answerCallbackQuery(callbackQueryId: string, text?: string): Promise<void> {
         await this.call("answerCallbackQuery", {
             callback_query_id: callbackQueryId,
@@ -252,6 +272,7 @@ export type TelegramFileSendClientLike = Pick<TelegramBotClient, "sendPhoto" | "
 export type TelegramChatActionClientLike = Pick<TelegramBotClient, "sendChatAction">
 export type TelegramMessageEditClientLike = Pick<TelegramBotClient, "editMessageText">
 export type TelegramMessageDeleteClientLike = Pick<TelegramBotClient, "deleteMessage">
+export type TelegramReactionClientLike = Pick<TelegramBotClient, "setMessageReaction">
 
 function buildTelegramLinkPreviewOptions(options: TelegramTextOptions): { is_disabled: true } | undefined {
     if (options.disableLinkPreview === false) {
@@ -329,4 +350,13 @@ function isRetryableError(errorCode: number, httpStatus: number): boolean {
     }
 
     return errorCode !== 400
+}
+
+function normalizeReactionEmoji(value: string): string {
+    const normalized = value.trim()
+    if (normalized.length === 0) {
+        throw new Error("telegram reaction emoji must not be empty")
+    }
+
+    return normalized
 }

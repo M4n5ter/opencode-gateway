@@ -13,12 +13,16 @@ type RawTelegramConfig = {
 type RawTelegramUxConfig = {
     tool_call_view?: unknown
     show_tool_calls?: unknown
+    compaction_reaction?: unknown
+    compaction_reaction_emoji?: unknown
 }
 
 export type TelegramToolCallView = "toggle" | "inline" | "off"
 
 export type TelegramUxConfig = {
     toolCallView: TelegramToolCallView
+    compactionReaction: boolean
+    compactionReactionEmoji: string
 }
 
 export type TelegramConfig =
@@ -175,6 +179,8 @@ function parseTelegramUxConfig(value: unknown): TelegramUxConfig {
 
     return {
         toolCallView: readToolCallView(table),
+        compactionReaction: readBoolean(table.compaction_reaction, "channels.telegram.ux.compaction_reaction", true),
+        compactionReactionEmoji: readCompactionReactionEmoji(table),
     }
 }
 
@@ -219,4 +225,21 @@ function readToolCallView(table: RawTelegramUxConfig): TelegramToolCallView {
     }
 
     return "toggle"
+}
+
+function readCompactionReactionEmoji(table: RawTelegramUxConfig): string {
+    if (table.compaction_reaction_emoji === undefined) {
+        return "🗜️"
+    }
+
+    if (typeof table.compaction_reaction_emoji !== "string") {
+        throw new Error("channels.telegram.ux.compaction_reaction_emoji must be a string when present")
+    }
+
+    const normalized = table.compaction_reaction_emoji.trim()
+    if (normalized.length === 0) {
+        throw new Error("channels.telegram.ux.compaction_reaction_emoji must not be empty")
+    }
+
+    return normalized
 }

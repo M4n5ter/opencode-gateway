@@ -22,6 +22,7 @@ export type TextDeliveryPreview = {
 
 export type TextDeliverySession = {
     mode: "oneshot" | "progressive"
+    bindSession(sessionId: string): void
     preview(preview: TextDeliveryPreview): Promise<void>
     finish(finalText: string | null): Promise<boolean>
     handoffFinalDelivery(): Promise<TextDeliveryDeferredHandle>
@@ -53,6 +54,10 @@ const DEFAULT_STREAM_OPEN_DELAY_MS = 1_200
 const DEFAULT_STREAM_EDIT_INTERVAL_MS = 1_000
 const DEFAULT_TYPING_KEEPALIVE_INTERVAL_MS = 3_000
 
+type TelegramSurfaceRegistryLike = {
+    registerSurface(sessionId: string, target: BindingDeliveryTarget, messageId: number): Promise<void> | void
+}
+
 export class GatewayTextDelivery {
     constructor(
         private readonly transport: GatewayTransportHost,
@@ -60,6 +65,7 @@ export class GatewayTextDelivery {
         private readonly telegramSupport: TelegramProgressiveSupport,
         private readonly toolCallView: TelegramToolCallView = "toggle",
         private readonly options: TextDeliveryOptions = {},
+        private readonly surfaceRegistry: TelegramSurfaceRegistryLike | null = null,
     ) {}
 
     async open(target: BindingDeliveryTarget, preference: DeliveryModePreference): Promise<TextDeliverySession> {
@@ -103,6 +109,7 @@ export class GatewayTextDelivery {
                         this.telegramSupport,
                         this.store,
                         this.toolCallView,
+                        this.surfaceRegistry,
                         {
                             streamOpenDelayMs:
                                 preference === "stream"
@@ -152,6 +159,8 @@ export class GatewayTextDelivery {
 class NoopTextDeliverySession implements TextDeliverySession {
     readonly mode = "oneshot" as const
 
+    bindSession(_sessionId: string): void {}
+
     async preview(_preview: TextDeliveryPreview): Promise<void> {}
 
     async finish(_finalText: string | null): Promise<boolean> {
@@ -171,6 +180,12 @@ class FanoutTextDeliverySession implements TextDeliverySession {
 
     constructor(private readonly sessions: TextDeliverySession[]) {
         this.mode = sessions.some((session) => session.mode === "progressive") ? "progressive" : "oneshot"
+    }
+
+    bindSession(sessionId: string): void {
+        for (const session of this.sessions) {
+            session.bindSession(sessionId)
+        }
     }
 
     async preview(preview: TextDeliveryPreview): Promise<void> {
@@ -196,11 +211,16 @@ class FanoutTextDeliverySession implements TextDeliverySession {
 
 class OneshotTextDeliverySession implements TextDeliverySession {
     readonly mode = "oneshot" as const
+    private sessionId: string | null = null
 
     constructor(
         private readonly target: BindingDeliveryTarget,
         private readonly transport: GatewayTransportHost,
     ) {}
+
+    bindSession(sessionId: string): void {
+        this.sessionId = sessionId
+    }
 
     async preview(_preview: TextDeliveryPreview): Promise<void> {}
 
@@ -212,6 +232,7 @@ class OneshotTextDeliverySession implements TextDeliverySession {
         const ack = await this.transport.sendMessage({
             deliveryTarget: this.target,
             body: finalText,
+            sessionId: this.sessionId,
         })
 
         if (ack.kind !== "delivered") {
@@ -251,8 +272,16 @@ class ProgressiveTextDeliverySession implements TextDeliverySession {
         private readonly telegramSupport: TelegramProgressiveSupport,
         private readonly store: SqliteStore,
         private readonly toolCallView: TelegramToolCallView,
+        private readonly surfaceRegistry: TelegramSurfaceRegistryLike | null,
         private readonly options: ProgressiveTextDeliveryOptions,
     ) {}
+
+    private sessionId: string | null = null
+
+    bindSession(sessionId: string): void {
+        this.sessionId = sessionId
+        this.maybeRegisterSurface(this.streamMessageId)
+    }
 
     start(): void {
         this.telegramSupport.startTyping(this.target)
@@ -428,6 +457,7 @@ class ProgressiveTextDeliverySession implements TextDeliverySession {
             this.lastRenderedReplyMarkupKey = serializeReplyMarkup(rendered.replyMarkup)
             this.lastStreamUpdateAtMs = Date.now()
             this.syncPreviewMessageState(preview, rendered.viewState)
+            this.maybeRegisterSurface(this.streamMessageId)
         } catch {
             this.previewFailed = true
             this.stopTypingKeepalive()
@@ -457,6 +487,7 @@ class ProgressiveTextDeliverySession implements TextDeliverySession {
         this.lastRenderedReplyMarkupKey = serializeReplyMarkup(rendered.replyMarkup)
         this.lastStreamUpdateAtMs = Date.now()
         this.syncPreviewMessageState(preview, rendered.viewState)
+        this.maybeRegisterSurface(this.streamMessageId)
     }
 
     private renderPreview(
@@ -547,6 +578,7 @@ class ProgressiveTextDeliverySession implements TextDeliverySession {
         const ack = await this.transport.sendMessage({
             deliveryTarget: this.target,
             body: finalText,
+            sessionId: this.sessionId,
         })
 
         if (ack.kind !== "delivered") {
@@ -614,6 +646,14 @@ class ProgressiveTextDeliverySession implements TextDeliverySession {
 
         clearTimeout(this.flushTimer)
         this.flushTimer = null
+    }
+
+    private maybeRegisterSurface(messageId: number | null): void {
+        if (this.surfaceRegistry === null || this.sessionId === null || messageId === null) {
+            return
+        }
+
+        void this.surfaceRegistry.registerSurface(this.sessionId, this.target, messageId)
     }
 }
 

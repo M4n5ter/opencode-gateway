@@ -354,6 +354,7 @@ export class GatewayExecutor {
                 entries,
                 recordedAtMs,
                 preparedSessionId,
+                targetSessions,
                 previewSession,
                 replyTargets,
                 budget,
@@ -656,6 +657,7 @@ export class GatewayExecutor {
         entries: PreparedMailboxEntry[],
         recordedAtMs: number,
         persistedSessionId: string | null,
+        targetSessions: TargetTextDeliverySession[],
         deliverySession: TextDeliverySessionLike | null,
         replyTargets: NonNullable<BindingPreparedExecution["replyTarget"]>[],
         budget: ExecutionBudget,
@@ -681,6 +683,7 @@ export class GatewayExecutor {
                     targets: replyTargets,
                     recordedAtMs,
                 })
+                bindTargetSessions(targetSessions, sessionId)
                 toolActivity?.trackSession(sessionId)
             },
             onCommand: async (command) => {
@@ -907,6 +910,14 @@ async function finishTargetSessions(
             }
         }),
     )
+}
+
+function bindTargetSessions(targetSessions: TargetTextDeliverySession[], sessionId: string): void {
+    for (const { session } of targetSessions) {
+        if (typeof session.bindSession === "function") {
+            session.bindSession(sessionId)
+        }
+    }
 }
 
 async function handoffMailboxDeliveries(

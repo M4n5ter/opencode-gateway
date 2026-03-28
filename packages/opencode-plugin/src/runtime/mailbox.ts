@@ -310,6 +310,7 @@ export class GatewayMailboxRuntime {
                 {
                     deliveryTarget: delivery.deliveryTarget,
                     body: finalText,
+                    sessionId: job.sessionId,
                     previewContext: delivery.previewContext,
                 },
                 delivery.strategy,

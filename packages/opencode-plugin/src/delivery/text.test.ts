@@ -1244,6 +1244,72 @@ test("GatewayTextDelivery treats Telegram no-op final edits as successful delive
     }
 })
 
+test("GatewayTextDelivery registers an existing progressive preview surface when the session becomes known later", async () => {
+    const db = createMemoryDatabase()
+
+    try {
+        migrateGatewayDatabase(db)
+        const store = new SqliteStore(db)
+        store.putStateValue("telegram.chat_type:42", "private", Date.now())
+
+        const surfaces: Array<{ sessionId: string; messageId: number }> = []
+        const client = {
+            async getChat() {
+                throw new Error("unused")
+            },
+            async sendChatAction(): Promise<void> {},
+            async sendMessage(): Promise<{ message_id: number }> {
+                return {
+                    message_id: 77,
+                }
+            },
+            async editMessageText(): Promise<void> {},
+        }
+
+        const delivery = new GatewayTextDelivery(
+            new GatewayTransportHost(client, store),
+            store,
+            new TelegramProgressiveSupport(client, store, createLogger()),
+            "toggle",
+            {
+                streamOpenDelayMs: 0,
+            },
+            {
+                async registerSurface(sessionId, _target, messageId): Promise<void> {
+                    surfaces.push({ sessionId, messageId })
+                },
+            },
+        )
+
+        const session = await delivery.open(
+            {
+                channel: "telegram",
+                target: "42",
+                topic: null,
+            },
+            "stream",
+        )
+
+        await session.preview({
+            processText: null,
+            reasoningText: null,
+            answerText: "hello",
+        })
+        await sleep(10)
+        session.bindSession("ses_preview")
+        await sleep(10)
+
+        expect(surfaces).toEqual([
+            {
+                sessionId: "ses_preview",
+                messageId: 77,
+            },
+        ])
+    } finally {
+        db.close()
+    }
+})
+
 function createLogger() {
     return {
         log() {},

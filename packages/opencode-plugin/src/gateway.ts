@@ -30,6 +30,7 @@ import { GatewaySystemPromptBuilder } from "./session/system-prompt"
 import { openSqliteStore } from "./store/sqlite"
 import { TelegramMessageCleanupRuntime } from "./telegram/cleanup"
 import { TelegramBotClient } from "./telegram/client"
+import { GatewayTelegramCompactionRuntime } from "./telegram/compaction"
 import { TelegramInboundMediaStore } from "./telegram/media"
 import { TelegramPollingService } from "./telegram/poller"
 import { GatewayTelegramRuntime } from "./telegram/runtime"
@@ -110,10 +111,20 @@ export async function createGatewayRuntime(
         const activeExecutions = new ActiveExecutionRegistry()
         const opencode = new OpencodeSdkAdapter(input.client, config.workspaceDirPath)
         const interactionClient = createInteractionClient(input.client, input.serverUrl, config.workspaceDirPath)
+        const compactionReactions = new GatewayTelegramCompactionRuntime(
+            telegramClient,
+            interactionClient,
+            config.workspaceDirPath,
+            store,
+            sessionContext,
+            logger,
+            config.telegram,
+        )
         const transport = new GatewayTransportHost(
             telegramClient,
             store,
             config.telegram.enabled ? config.telegram.ux.toolCallView : "off",
+            compactionReactions,
         )
         const files = new ChannelFileSender(telegramClient)
         const channelSessions = new ChannelSessionSwitcher(
@@ -131,6 +142,8 @@ export async function createGatewayRuntime(
             store,
             progressiveSupport,
             config.telegram.enabled ? config.telegram.ux.toolCallView : "off",
+            undefined,
+            compactionReactions,
         )
         const toolActivity = new GatewayToolActivityRuntime(
             interactionClient,
@@ -196,7 +209,7 @@ export async function createGatewayRuntime(
             input.client,
             config.workspaceDirPath,
             opencodeEvents,
-            [activeExecutions, interactions, toolActivity],
+            [activeExecutions, interactions, toolActivity, compactionReactions],
             logger,
         )
         const telegramPolling =

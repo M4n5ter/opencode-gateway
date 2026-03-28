@@ -131,6 +131,9 @@ allowed_users = []
 # Control Telegram tool-call previews: "toggle", "inline", or "off".
 # "toggle" keeps one preview message with Preview / Tools buttons.
 tool_call_view = "toggle"
+# Add a reaction after OpenCode compacts the session context.
+compaction_reaction = true
+compaction_reaction_emoji = "🗜️"
 
 [[memory.entries]]
 path = "USER.md"
@@ -186,6 +189,7 @@ Telegram UX defaults:
 - the `Preview` view keeps `reasoning`, `process`, and the final answer visible; the `Tools` view paginates tool details newest-first
 - when the task finishes, the message returns to `Preview`, but `Tools` stays available for later inspection
 - the first tool event opens the preview stream immediately so pending/running tool input shows up early
+- after OpenCode emits `session.compacted`, the current Telegram message gets a `🗜️` reaction by default
 - when a new inbound message lands during an active mailbox run, Telegram can ask whether to queue it or interrupt the current run, depending on `gateway.inflight_messages.default_policy`
 
 When Telegram is enabled, either set `channels.telegram.bot_token` directly or

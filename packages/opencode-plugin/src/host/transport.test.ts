@@ -112,3 +112,50 @@ test("GatewayTransportHost resets deferred final preview edits back to the first
         db.close()
     }
 })
+
+test("GatewayTransportHost registers the delivered Telegram surface for a session-scoped oneshot message", async () => {
+    const db = createMemoryDatabase()
+
+    try {
+        migrateGatewayDatabase(db)
+        const store = new SqliteStore(db)
+        const surfaces: Array<{ sessionId: string; target: string; messageId: number }> = []
+        const client = {
+            async sendMessage(): Promise<{ message_id: number }> {
+                return { message_id: 123 }
+            },
+            async editMessageText(): Promise<void> {
+                throw new Error("unused")
+            },
+        }
+        const transport = new GatewayTransportHost(client, store, "toggle", {
+            async registerSurface(sessionId, target, messageId): Promise<void> {
+                surfaces.push({
+                    sessionId,
+                    target: target.target,
+                    messageId,
+                })
+            },
+        })
+
+        await transport.sendMessage({
+            deliveryTarget: {
+                channel: "telegram",
+                target: "42",
+                topic: null,
+            },
+            body: "final answer",
+            sessionId: "ses_surface",
+        })
+
+        expect(surfaces).toEqual([
+            {
+                sessionId: "ses_surface",
+                target: "42",
+                messageId: 123,
+            },
+        ])
+    } finally {
+        db.close()
+    }
+})

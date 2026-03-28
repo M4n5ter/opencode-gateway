@@ -240,6 +240,88 @@ test("sqlite store keeps an executing mailbox job leased after renewal", () => {
     }
 })
 
+test("sqlite store tracks telegram session compactions and resets reaction state when the surface changes", () => {
+    const db = createMemoryDatabase()
+
+    try {
+        migrateGatewayDatabase(db)
+        const store = new SqliteStore(db)
+
+        store.recordTelegramSessionCompaction("ses_compact", 100)
+        store.upsertTelegramSessionSurface({
+            sessionId: "ses_compact",
+            deliveryTarget: {
+                channel: "telegram",
+                target: "42",
+                topic: null,
+            },
+            messageId: 9,
+            recordedAtMs: 110,
+        })
+        store.recordTelegramSessionSurfaceReactionAttempt({
+            sessionId: "ses_compact",
+            deliveryTarget: {
+                channel: "telegram",
+                target: "42",
+                topic: null,
+            },
+            emoji: "🗜️",
+            appliedAtMs: 120,
+            recordedAtMs: 120,
+        })
+
+        expect(store.getTelegramSessionCompaction("ses_compact")).toEqual({
+            sessionId: "ses_compact",
+            compactedAtMs: 100,
+            updatedAtMs: 100,
+        })
+        expect(
+            store.getTelegramSessionSurface("ses_compact", { channel: "telegram", target: "42", topic: null }),
+        ).toEqual({
+            sessionId: "ses_compact",
+            deliveryTarget: {
+                channel: "telegram",
+                target: "42",
+                topic: null,
+            },
+            messageId: 9,
+            reactionEmoji: "🗜️",
+            reactionAppliedAtMs: 120,
+            createdAtMs: 110,
+            updatedAtMs: 120,
+        })
+
+        store.upsertTelegramSessionSurface({
+            sessionId: "ses_compact",
+            deliveryTarget: {
+                channel: "telegram",
+                target: "42",
+                topic: null,
+            },
+            messageId: 10,
+            recordedAtMs: 130,
+        })
+
+        expect(
+            store.getTelegramSessionSurface("ses_compact", { channel: "telegram", target: "42", topic: null }),
+        ).toEqual({
+            sessionId: "ses_compact",
+            deliveryTarget: {
+                channel: "telegram",
+                target: "42",
+                topic: null,
+            },
+            messageId: 10,
+            reactionEmoji: null,
+            reactionAppliedAtMs: null,
+            createdAtMs: 110,
+            updatedAtMs: 130,
+        })
+    } finally {
+        db.close()
+    }
+})
+
 test("sqlite store downgrades edit-mode mailbox deliveries back to send without consuming an attempt", () => {
     const db = createMemoryDatabase()
 

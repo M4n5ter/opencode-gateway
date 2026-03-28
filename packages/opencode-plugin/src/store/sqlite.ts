@@ -164,6 +164,22 @@ export type TelegramPreviewMessageRecord = {
     updatedAtMs: number
 }
 
+export type TelegramSessionCompactionRecord = {
+    sessionId: string
+    compactedAtMs: number
+    updatedAtMs: number
+}
+
+export type TelegramSessionSurfaceRecord = {
+    sessionId: string
+    deliveryTarget: BindingDeliveryTarget
+    messageId: number
+    reactionEmoji: string | null
+    reactionAppliedAtMs: number | null
+    createdAtMs: number
+    updatedAtMs: number
+}
+
 export type CompleteMailboxJobExecutionInput = {
     jobId: number
     sessionId: string
@@ -911,6 +927,191 @@ export class SqliteStore {
         this.db
             .query("DELETE FROM telegram_preview_messages WHERE chat_id = ?1 AND message_id = ?2;")
             .run(chatId, messageId)
+    }
+
+    recordTelegramSessionCompaction(sessionId: string, recordedAtMs: number): void {
+        assertSafeInteger(recordedAtMs, "telegram session compaction recordedAtMs")
+        this.db
+            .query(
+                `
+                    INSERT INTO telegram_session_compactions (
+                        session_id,
+                        compacted_at_ms,
+                        updated_at_ms
+                    )
+                    VALUES (?1, ?2, ?2)
+                    ON CONFLICT(session_id) DO UPDATE SET
+                        compacted_at_ms = excluded.compacted_at_ms,
+                        updated_at_ms = excluded.updated_at_ms;
+                `,
+            )
+            .run(sessionId, recordedAtMs)
+    }
+
+    getTelegramSessionCompaction(sessionId: string): TelegramSessionCompactionRecord | null {
+        const row = this.db
+            .query<TelegramSessionCompactionRow, [string]>(
+                `
+                    SELECT
+                        session_id,
+                        compacted_at_ms,
+                        updated_at_ms
+                    FROM telegram_session_compactions
+                    WHERE session_id = ?1
+                    LIMIT 1;
+                `,
+            )
+            .get(sessionId)
+
+        return row ? mapTelegramSessionCompactionRow(row) : null
+    }
+
+    hasTelegramSessionSurface(sessionId: string): boolean {
+        const row = this.db
+            .query<{ present: number }, [string]>(
+                `
+                    SELECT 1 AS present
+                    FROM telegram_session_surfaces
+                    WHERE session_id = ?1
+                    LIMIT 1;
+                `,
+            )
+            .get(sessionId)
+
+        return row?.present === 1
+    }
+
+    upsertTelegramSessionSurface(input: {
+        sessionId: string
+        deliveryTarget: BindingDeliveryTarget
+        messageId: number
+        recordedAtMs: number
+    }): void {
+        assertSafeInteger(input.messageId, "telegram session surface messageId")
+        assertSafeInteger(input.recordedAtMs, "telegram session surface recordedAtMs")
+
+        this.db
+            .query(
+                `
+                    INSERT INTO telegram_session_surfaces (
+                        session_id,
+                        chat_id,
+                        topic_key,
+                        message_id,
+                        reaction_emoji,
+                        reaction_applied_at_ms,
+                        created_at_ms,
+                        updated_at_ms
+                    )
+                    VALUES (?1, ?2, ?3, ?4, NULL, NULL, ?5, ?5)
+                    ON CONFLICT(session_id, chat_id, topic_key) DO UPDATE SET
+                        message_id = excluded.message_id,
+                        reaction_emoji = CASE
+                            WHEN telegram_session_surfaces.message_id = excluded.message_id
+                                THEN telegram_session_surfaces.reaction_emoji
+                            ELSE NULL
+                        END,
+                        reaction_applied_at_ms = CASE
+                            WHEN telegram_session_surfaces.message_id = excluded.message_id
+                                THEN telegram_session_surfaces.reaction_applied_at_ms
+                            ELSE NULL
+                        END,
+                        updated_at_ms = excluded.updated_at_ms;
+                `,
+            )
+            .run(
+                input.sessionId,
+                input.deliveryTarget.target,
+                normalizeKeyField(input.deliveryTarget.topic),
+                input.messageId,
+                input.recordedAtMs,
+            )
+    }
+
+    getTelegramSessionSurface(
+        sessionId: string,
+        deliveryTarget: BindingDeliveryTarget,
+    ): TelegramSessionSurfaceRecord | null {
+        const row = this.db
+            .query<TelegramSessionSurfaceRow, [string, string, string]>(
+                `
+                    SELECT
+                        session_id,
+                        chat_id,
+                        topic_key,
+                        message_id,
+                        reaction_emoji,
+                        reaction_applied_at_ms,
+                        created_at_ms,
+                        updated_at_ms
+                    FROM telegram_session_surfaces
+                    WHERE session_id = ?1
+                      AND chat_id = ?2
+                      AND topic_key = ?3
+                    LIMIT 1;
+                `,
+            )
+            .get(sessionId, deliveryTarget.target, normalizeKeyField(deliveryTarget.topic))
+
+        return row ? mapTelegramSessionSurfaceRow(row) : null
+    }
+
+    listTelegramSessionSurfaces(sessionId: string): TelegramSessionSurfaceRecord[] {
+        const rows = this.db
+            .query<TelegramSessionSurfaceRow, [string]>(
+                `
+                    SELECT
+                        session_id,
+                        chat_id,
+                        topic_key,
+                        message_id,
+                        reaction_emoji,
+                        reaction_applied_at_ms,
+                        created_at_ms,
+                        updated_at_ms
+                    FROM telegram_session_surfaces
+                    WHERE session_id = ?1
+                    ORDER BY updated_at_ms DESC, created_at_ms DESC;
+                `,
+            )
+            .all(sessionId)
+
+        return rows.map(mapTelegramSessionSurfaceRow)
+    }
+
+    recordTelegramSessionSurfaceReactionAttempt(input: {
+        sessionId: string
+        deliveryTarget: BindingDeliveryTarget
+        emoji: string
+        appliedAtMs: number | null
+        recordedAtMs: number
+    }): void {
+        assertSafeInteger(input.recordedAtMs, "telegram surface reaction recordedAtMs")
+        if (input.appliedAtMs !== null) {
+            assertSafeInteger(input.appliedAtMs, "telegram surface reaction appliedAtMs")
+        }
+
+        this.db
+            .query(
+                `
+                    UPDATE telegram_session_surfaces
+                    SET
+                        reaction_emoji = ?4,
+                        reaction_applied_at_ms = ?5,
+                        updated_at_ms = ?6
+                    WHERE session_id = ?1
+                      AND chat_id = ?2
+                      AND topic_key = ?3;
+                `,
+            )
+            .run(
+                input.sessionId,
+                input.deliveryTarget.target,
+                normalizeKeyField(input.deliveryTarget.topic),
+                input.emoji,
+                input.appliedAtMs,
+                input.recordedAtMs,
+            )
     }
 
     hasMailboxEntry(sourceKind: string, externalId: string): boolean {
@@ -2316,6 +2517,23 @@ type TelegramPreviewMessageRow = {
     updated_at_ms: number
 }
 
+type TelegramSessionCompactionRow = {
+    session_id: string
+    compacted_at_ms: number
+    updated_at_ms: number
+}
+
+type TelegramSessionSurfaceRow = {
+    session_id: string
+    chat_id: string
+    topic_key: string
+    message_id: number
+    reaction_emoji: string | null
+    reaction_applied_at_ms: number | null
+    created_at_ms: number
+    updated_at_ms: number
+}
+
 type PendingInteractionPayload =
     | Pick<GatewayQuestionRequest, "kind" | "questions">
     | Pick<GatewayPermissionRequest, "kind" | "permission" | "patterns" | "metadata" | "always" | "tool">
@@ -2960,6 +3178,30 @@ function mapTelegramPreviewMessageRow(row: TelegramPreviewMessageRow): TelegramP
         reasoningText: normalizeStoredMailboxText(row.reasoning_text ?? ""),
         answerText: normalizeStoredMailboxText(row.answer_text ?? ""),
         toolSections: parseMailboxToolSections(row.tool_sections_json),
+        createdAtMs: row.created_at_ms,
+        updatedAtMs: row.updated_at_ms,
+    }
+}
+
+function mapTelegramSessionCompactionRow(row: TelegramSessionCompactionRow): TelegramSessionCompactionRecord {
+    return {
+        sessionId: row.session_id,
+        compactedAtMs: row.compacted_at_ms,
+        updatedAtMs: row.updated_at_ms,
+    }
+}
+
+function mapTelegramSessionSurfaceRow(row: TelegramSessionSurfaceRow): TelegramSessionSurfaceRecord {
+    return {
+        sessionId: row.session_id,
+        deliveryTarget: {
+            channel: "telegram",
+            target: row.chat_id,
+            topic: normalizeStoredKeyField(row.topic_key),
+        },
+        messageId: row.message_id,
+        reactionEmoji: row.reaction_emoji,
+        reactionAppliedAtMs: row.reaction_applied_at_ms,
         createdAtMs: row.created_at_ms,
         updatedAtMs: row.updated_at_ms,
     }

@@ -17,11 +17,20 @@ import {
 } from "../telegram/stream-render"
 import { formatError } from "../utils/error"
 
+type TelegramSurfaceRegistryLike = {
+    registerSurface(
+        sessionId: string,
+        target: BindingOutboundMessage["deliveryTarget"],
+        messageId: number,
+    ): Promise<void> | void
+}
+
 export class GatewayTransportHost implements BindingTransportHost {
     constructor(
         private readonly telegramClient: TelegramDeliveryClientLike | null,
         private readonly store: SqliteStore,
         private readonly toolCallView: TelegramToolCallView = "toggle",
+        private readonly surfaceRegistry: TelegramSurfaceRegistryLike | null = null,
     ) {}
 
     async sendMessage(message: BindingOutboundMessage): Promise<BindingHostAck> {
@@ -47,8 +56,9 @@ export class GatewayTransportHost implements BindingTransportHost {
             }
 
             const rendered = this.renderOutboundMessage(message, strategy)
+            let deliveredMessageId: number
             if (strategy.mode === "send") {
-                await this.telegramClient.sendMessage(
+                const sent = await this.telegramClient.sendMessage(
                     message.deliveryTarget.target,
                     rendered.text,
                     message.deliveryTarget.topic,
@@ -57,6 +67,7 @@ export class GatewayTransportHost implements BindingTransportHost {
                         replyMarkup: rendered.replyMarkup,
                     },
                 )
+                deliveredMessageId = sent.message_id
             } else {
                 await this.telegramClient.editMessageText(
                     message.deliveryTarget.target,
@@ -67,8 +78,10 @@ export class GatewayTransportHost implements BindingTransportHost {
                         replyMarkup: rendered.replyMarkup,
                     },
                 )
+                deliveredMessageId = strategy.messageId
             }
             this.syncPreviewMessageState(message, strategy)
+            this.registerSurface(message, deliveredMessageId)
             recordTelegramSendSuccess(this.store, Date.now())
             return {
                 kind: "delivered",
@@ -197,6 +210,18 @@ export class GatewayTransportHost implements BindingTransportHost {
             toolSections,
             recordedAtMs: Date.now(),
         })
+    }
+
+    private registerSurface(message: BindingOutboundMessage, messageId: number): void {
+        if (
+            this.surfaceRegistry === null ||
+            message.sessionId == null ||
+            message.deliveryTarget.channel !== "telegram"
+        ) {
+            return
+        }
+
+        void this.surfaceRegistry.registerSurface(message.sessionId, message.deliveryTarget, messageId)
     }
 
     private resolveStoredViewState(

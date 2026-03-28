@@ -94,3 +94,8 @@ export type TelegramInlineKeyboardMarkup = {
 export type TelegramSentMessage = {
     message_id: number
 }
+
+export type TelegramReactionType = {
+    type: "emoji"
+    emoji: string
+}

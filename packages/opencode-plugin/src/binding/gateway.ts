@@ -115,6 +115,7 @@ export type BindingPreparedExecution = {
 export type BindingOutboundMessage = {
     deliveryTarget: BindingDeliveryTarget
     body: string
+    sessionId?: string | null
     previewContext?: BindingDeferredPreviewContext | null
 }
 

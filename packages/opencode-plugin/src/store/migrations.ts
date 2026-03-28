@@ -1,6 +1,6 @@
 import type { SqliteDatabaseLike } from "./database"
 
-const LATEST_SCHEMA_VERSION = 18
+const LATEST_SCHEMA_VERSION = 19
 
 export function migrateGatewayDatabase(db: SqliteDatabaseLike): void {
     db.exec("PRAGMA journal_mode = WAL;")
@@ -98,6 +98,11 @@ export function migrateGatewayDatabase(db: SqliteDatabaseLike): void {
 
     if (currentVersion === 17) {
         migrateToV18(db)
+        currentVersion = 18
+    }
+
+    if (currentVersion === 18) {
+        migrateToV19(db)
     }
 }
 
@@ -799,6 +804,32 @@ function migrateToV18(db: SqliteDatabaseLike): void {
             updated_at_ms INTEGER NOT NULL,
             PRIMARY KEY (chat_id, message_id)
         );
+    `)
+    db.exec("PRAGMA user_version = 18;")
+}
+
+function migrateToV19(db: SqliteDatabaseLike): void {
+    db.exec(`
+        CREATE TABLE telegram_session_compactions (
+            session_id TEXT NOT NULL PRIMARY KEY,
+            compacted_at_ms INTEGER NOT NULL,
+            updated_at_ms INTEGER NOT NULL
+        );
+
+        CREATE TABLE telegram_session_surfaces (
+            session_id TEXT NOT NULL,
+            chat_id TEXT NOT NULL,
+            topic_key TEXT NOT NULL,
+            message_id INTEGER NOT NULL,
+            reaction_emoji TEXT,
+            reaction_applied_at_ms INTEGER,
+            created_at_ms INTEGER NOT NULL,
+            updated_at_ms INTEGER NOT NULL,
+            PRIMARY KEY (session_id, chat_id, topic_key)
+        );
+
+        CREATE INDEX telegram_session_surfaces_session_updated_at_ms_idx
+            ON telegram_session_surfaces (session_id, updated_at_ms DESC);
     `)
     db.exec(`PRAGMA user_version = ${LATEST_SCHEMA_VERSION};`)
 }

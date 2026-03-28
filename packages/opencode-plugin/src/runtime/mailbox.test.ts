@@ -202,6 +202,7 @@ test("GatewayMailboxRuntime retries delivery without re-running execution", asyn
                     topic: null,
                 },
                 body: "hello back",
+                sessionId: "ses_retry",
                 previewContext: null,
             },
         ])
@@ -296,6 +297,7 @@ test("GatewayMailboxRuntime falls back from edit delivery to send when the strea
                     topic: null,
                 },
                 body: "hello back",
+                sessionId: "ses_fallback",
                 previewContext: null,
             },
             {
@@ -305,6 +307,7 @@ test("GatewayMailboxRuntime falls back from edit delivery to send when the strea
                     topic: null,
                 },
                 body: "hello back",
+                sessionId: "ses_fallback",
                 previewContext: null,
             },
         ])
@@ -389,6 +392,7 @@ test("GatewayMailboxRuntime preserves deferred preview context for final deliver
                     topic: null,
                 },
                 body: "final answer",
+                sessionId: "ses_preview",
                 previewContext: {
                     processText: "process block",
                     reasoningText: "reasoning block",

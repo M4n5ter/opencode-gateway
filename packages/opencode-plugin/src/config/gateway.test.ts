@@ -363,6 +363,8 @@ test("loadGatewayConfig accepts a direct Telegram bot token from config", async 
             allowedUsers: ["42"],
             ux: {
                 toolCallView: "toggle",
+                compactionReaction: true,
+                compactionReactionEmoji: "🗜️",
             },
         })
     } finally {
@@ -385,6 +387,8 @@ test("loadGatewayConfig enables Telegram tool-call UX by default and parses expl
                 "",
                 "[channels.telegram.ux]",
                 'tool_call_view = "off"',
+                "compaction_reaction = false",
+                'compaction_reaction_emoji = "🧠"',
             ].join("\n"),
         )
 
@@ -394,6 +398,8 @@ test("loadGatewayConfig enables Telegram tool-call UX by default and parses expl
         expect(overridden.telegram.enabled).toBe(true)
         if (overridden.telegram.enabled) {
             expect(overridden.telegram.ux.toolCallView).toBe("off")
+            expect(overridden.telegram.ux.compactionReaction).toBe(false)
+            expect(overridden.telegram.ux.compactionReactionEmoji).toBe("🧠")
         }
 
         await writeFile(
@@ -406,6 +412,8 @@ test("loadGatewayConfig enables Telegram tool-call UX by default and parses expl
         expect(defaulted.telegram.enabled).toBe(true)
         if (defaulted.telegram.enabled) {
             expect(defaulted.telegram.ux.toolCallView).toBe("toggle")
+            expect(defaulted.telegram.ux.compactionReaction).toBe(true)
+            expect(defaulted.telegram.ux.compactionReactionEmoji).toBe("🗜️")
         }
     } finally {
         await rm(root, { recursive: true, force: true })
@@ -468,6 +476,8 @@ test("loadGatewayConfig normalizes Telegram allowlist identifiers", async () => 
             allowedUsers: ["42", "77"],
             ux: {
                 toolCallView: "toggle",
+                compactionReaction: true,
+                compactionReactionEmoji: "🗜️",
             },
         })
         expect(config.mailbox).toEqual({

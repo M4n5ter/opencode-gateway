@@ -24,6 +24,7 @@ The current state of the repository is a working local gateway with:
 - recurring cron jobs with a persisted catalog and run history
 - Telegram operational tools
 - private-chat editable stream previews with split Preview / Tools tool-call views
+- Telegram compaction reactions on the current message after `session.compacted`
 - auto-cleaned Telegram permission/question interaction prompts
 - a launcher that bootstraps and warms a managed OpenCode instance
 
@@ -162,7 +163,7 @@ opencode-gateway serve
 - thin OpenCode SDK command execution
 - event subscription and raw event normalization
 - SQLite reads and writes
-- Telegram HTTP transport, editable streams, split preview/tool callbacks, and interaction cleanup
+- Telegram HTTP transport, editable streams, split preview/tool callbacks, compaction reactions, and interaction cleanup
 - polling loops and timers
 - local environment and config path resolution
 
@@ -238,6 +239,8 @@ The SQLite layer currently revolves around:
 - `pending_interactions`
 - `telegram_message_cleanup_jobs`
 - `telegram_preview_messages`
+- `telegram_session_compactions`
+- `telegram_session_surfaces`
 - `runtime_journal`
 - `cron_jobs`
 - `cron_runs`
@@ -271,6 +274,7 @@ The repository already contains:
 - Telegram operational tools
 - private-chat editable stream previews with split Preview / Tools tool-call details
 - paginated tool-call history inside the Telegram `Tools` view
+- compaction reactions that mark the current Telegram message after `session.compacted`
 - permission/question bridging with post-reply cleanup
 - mailbox-scoped inflight interactions that can queue or interrupt an active run
 - a local OpenCode smoke script

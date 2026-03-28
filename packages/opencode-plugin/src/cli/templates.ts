@@ -55,6 +55,8 @@ export function buildGatewayConfigTemplate(stateDbPath: string): string {
         "",
         "[channels.telegram.ux]",
         '# tool_call_view = "toggle" # "toggle" | "inline" | "off"',
+        "# compaction_reaction = true",
+        '# compaction_reaction_emoji = "🗜️"',
         "",
         "# Optional long-lived memory sources injected into gateway-managed sessions.",
         "# Relative paths are resolved from opencode-gateway-workspace.",
