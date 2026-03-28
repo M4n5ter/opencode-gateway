@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 
 import { defaultGatewayStateDbPath, GATEWAY_CONFIG_FILE, resolveGatewayWorkspacePath } from "../config/paths"
+import { ensureGatewayWorkspaceScaffold } from "../workspace/scaffold"
 import {
     createDefaultOpencodeConfig,
     ensureGatewayPlugin,
@@ -25,7 +26,7 @@ export async function runInit(options: InitOptions, env: Record<string, string |
     const opencodeConfigPath = opencodeConfig.path
 
     await mkdir(configDir, { recursive: true })
-    await mkdir(workspaceDirPath, { recursive: true })
+    await ensureGatewayWorkspaceScaffold(workspaceDirPath)
 
     let opencodeStatus = "already present"
     if (!opencodeConfig.exists) {

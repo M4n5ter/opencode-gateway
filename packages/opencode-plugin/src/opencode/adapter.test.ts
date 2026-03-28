@@ -34,12 +34,14 @@ test("OpencodeSdkAdapter reports missing sessions through lookupSession without 
 test("OpencodeSdkAdapter maps sendPromptAsync to session.promptAsync", async () => {
     const seenMessageIds: string[] = []
     const seenParts: unknown[] = []
+    const seenQueries: unknown[] = []
     const adapter = new OpencodeSdkAdapter(
         {
             session: {
-                async promptAsync(input: { body: { messageID: string; parts: unknown[] } }) {
+                async promptAsync(input: { body: { messageID: string; parts: unknown[] }; query?: unknown }) {
                     seenMessageIds.push(input.body.messageID)
                     seenParts.push(...input.body.parts)
+                    seenQueries.push(input.query ?? null)
                     return undefined
                 },
             },
@@ -84,6 +86,12 @@ test("OpencodeSdkAdapter maps sendPromptAsync to session.promptAsync", async () 
             mime: "image/png",
             url: "file:///tmp/photo.png",
             filename: "photo.png",
+        },
+    ])
+    expect(seenQueries).toEqual([
+        {
+            directory: "/workspace",
+            workspace: "/workspace",
         },
     ])
 })

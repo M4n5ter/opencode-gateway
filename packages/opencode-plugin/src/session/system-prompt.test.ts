@@ -49,13 +49,15 @@ test("GatewaySystemPromptBuilder combines gateway target context with memory con
             ],
         }).buildPrompts("ses_gateway")
 
-        expect(prompts).toHaveLength(2)
+        expect(prompts).toHaveLength(3)
         expect(prompts[0]).toContain("Current message source channel: telegram")
         expect(prompts[0]).toContain("Current reply target id: 42")
-        expect(prompts[1]).toContain("Gateway memory:")
-        expect(prompts[1]).toContain("Configured path: memory/project.md")
-        expect(prompts[1]).toContain("File: memory/project.md")
-        expect(prompts[1]).toContain("# Project")
+        expect(prompts[1]).toContain("Gateway skills:")
+        expect(prompts[1]).toContain("workspace-local skills directory at `.opencode/skills`")
+        expect(prompts[2]).toContain("Gateway memory:")
+        expect(prompts[2]).toContain("Configured path: memory/project.md")
+        expect(prompts[2]).toContain("File: memory/project.md")
+        expect(prompts[2]).toContain("# Project")
     } finally {
         db.close()
         await rm(root, { recursive: true, force: true })
@@ -87,10 +89,11 @@ test("GatewaySystemPromptBuilder injects memory for gateway-owned schedule sessi
             ],
         }).buildPrompts("ses_schedule")
 
-        expect(prompts).toHaveLength(1)
-        expect(prompts[0]).toContain("Gateway memory:")
-        expect(prompts[0]).toContain("Configured path: memory/project.md")
-        expect(prompts[0]).not.toContain("Gateway context:")
+        expect(prompts).toHaveLength(2)
+        expect(prompts[0]).toContain("Gateway skills:")
+        expect(prompts[1]).toContain("Gateway memory:")
+        expect(prompts[1]).toContain("Configured path: memory/project.md")
+        expect(prompts[1]).not.toContain("Gateway context:")
     } finally {
         db.close()
         await rm(root, { recursive: true, force: true })
@@ -109,6 +112,24 @@ test("GatewaySystemPromptBuilder skips unrelated sessions", async () => {
         }).buildPrompts("ses_plain")
 
         expect(prompts).toEqual([])
+    } finally {
+        db.close()
+    }
+})
+
+test("GatewaySystemPromptBuilder still injects skills guidance when a gateway session has no configured memory", async () => {
+    const db = createMemoryDatabase()
+
+    try {
+        migrateGatewayDatabase(db)
+        const store = new SqliteStore(db)
+        store.putSessionBinding("cron:daily", "ses_schedule", 1)
+
+        const prompts = await createBuilder(new GatewaySessionContext(store), {
+            entries: [],
+        }).buildPrompts("ses_schedule")
+
+        expect(prompts).toEqual([expect.stringContaining("Gateway skills:")])
     } finally {
         db.close()
     }

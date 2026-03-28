@@ -86,3 +86,72 @@ test("GatewayMemoryPromptProvider marks search-only entries without injecting th
         await rm(root, { recursive: true, force: true })
     }
 })
+
+test("GatewayMemoryPromptProvider only injects maintenance policy for configured default memory entries", async () => {
+    const root = await mkdtemp(join(tmpdir(), "opencode-gateway-memory-prompt-"))
+
+    try {
+        const prompt = await new GatewayMemoryPromptProvider(
+            {
+                entries: [
+                    {
+                        kind: "file",
+                        path: join(root, "USER.md"),
+                        displayPath: "USER.md",
+                        description: "User profile",
+                        injectContent: false,
+                        searchOnly: true,
+                    },
+                    {
+                        kind: "directory",
+                        path: join(root, "memory", "daily"),
+                        displayPath: "memory/daily",
+                        description: "Daily notes",
+                        globs: [],
+                        searchOnly: true,
+                    },
+                ],
+            },
+            { log() {} },
+        ).buildPrompt()
+
+        expect(prompt).not.toBeNull()
+        expect(prompt).toContain("Memory maintenance policy:")
+        expect(prompt).toContain("Update `USER.md` proactively")
+        expect(prompt).toContain("Update `memory/daily/YYYY-MM-DD.md` proactively")
+        expect(prompt).not.toContain("Update `RULES.md` proactively")
+    } finally {
+        await rm(root, { recursive: true, force: true })
+    }
+})
+
+test("GatewayMemoryPromptProvider skips default maintenance policy when no default memory entries are configured", async () => {
+    const root = await mkdtemp(join(tmpdir(), "opencode-gateway-memory-prompt-"))
+    const memoryFile = join(root, "memory", "project.md")
+
+    try {
+        await mkdir(join(root, "memory"), { recursive: true })
+        await writeFile(memoryFile, "# Project")
+
+        const prompt = await new GatewayMemoryPromptProvider(
+            {
+                entries: [
+                    {
+                        kind: "file",
+                        path: memoryFile,
+                        displayPath: "memory/project.md",
+                        description: "Project conventions",
+                        injectContent: true,
+                        searchOnly: false,
+                    },
+                ],
+            },
+            { log() {} },
+        ).buildPrompt()
+
+        expect(prompt).not.toBeNull()
+        expect(prompt).not.toContain("Memory maintenance policy:")
+    } finally {
+        await rm(root, { recursive: true, force: true })
+    }
+})

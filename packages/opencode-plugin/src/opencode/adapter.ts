@@ -77,7 +77,7 @@ export class OpencodeSdkAdapter {
     async createFreshSession(title: string): Promise<string> {
         const session = await this.client.session.create({
             body: { title },
-            query: { directory: this.directory },
+            query: this.requestContext(),
             responseStyle: "data",
             throwOnError: true,
             signal: AbortSignal.timeout(DEFAULT_SDK_REQUEST_TIMEOUT_MS),
@@ -88,7 +88,7 @@ export class OpencodeSdkAdapter {
 
     async isSessionBusy(sessionId: string): Promise<boolean> {
         const statuses = await this.client.session.status({
-            query: { directory: this.directory },
+            query: this.requestContext(),
             responseStyle: "data",
             throwOnError: true,
             signal: AbortSignal.timeout(DEFAULT_SDK_REQUEST_TIMEOUT_MS),
@@ -101,7 +101,7 @@ export class OpencodeSdkAdapter {
         try {
             await this.client.session.abort({
                 path: { id: sessionId },
-                query: { directory: this.directory },
+                query: this.requestContext(),
                 responseStyle: "data",
                 throwOnError: true,
                 signal: AbortSignal.timeout(DEFAULT_SDK_REQUEST_TIMEOUT_MS),
@@ -119,7 +119,7 @@ export class OpencodeSdkAdapter {
         try {
             await this.client.session.revert({
                 path: { id: sessionId },
-                query: { directory: this.directory },
+                query: this.requestContext(),
                 body: {
                     messageID: messageId,
                 },
@@ -165,7 +165,7 @@ export class OpencodeSdkAdapter {
         try {
             await this.client.session.get({
                 path: { id: sessionId },
-                query: { directory: this.directory },
+                query: this.requestContext(),
                 responseStyle: "data",
                 throwOnError: true,
                 signal: AbortSignal.timeout(DEFAULT_SDK_REQUEST_TIMEOUT_MS),
@@ -204,7 +204,7 @@ export class OpencodeSdkAdapter {
 
         for (;;) {
             const statuses = await this.client.session.status({
-                query: { directory: this.directory },
+                query: this.requestContext(),
                 responseStyle: "data",
                 throwOnError: true,
                 signal: createRequestSignal(deadlineMs),
@@ -230,7 +230,7 @@ export class OpencodeSdkAdapter {
     ): Promise<BindingOpencodeCommandResult> {
         await this.client.session.prompt({
             path: { id: command.sessionId },
-            query: { directory: this.directory },
+            query: this.requestContext(),
             body: {
                 messageID: command.messageId,
                 noReply: true,
@@ -252,7 +252,7 @@ export class OpencodeSdkAdapter {
     ): Promise<BindingOpencodeCommandResult> {
         await this.client.session.promptAsync({
             path: { id: command.sessionId },
-            query: { directory: this.directory },
+            query: this.requestContext(),
             body: {
                 messageID: command.messageId,
                 parts: command.parts.map(toSessionPromptPart),
@@ -290,7 +290,7 @@ export class OpencodeSdkAdapter {
             const messages = await this.client.session.messages({
                 path: { id: command.sessionId },
                 query: {
-                    directory: this.directory,
+                    ...this.requestContext(),
                     limit: 64,
                 },
                 responseStyle: "data",
@@ -347,7 +347,7 @@ export class OpencodeSdkAdapter {
                 id: command.sessionId,
                 messageID: command.messageId,
             },
-            query: { directory: this.directory },
+            query: this.requestContext(),
             responseStyle: "data",
             throwOnError: true,
             signal: AbortSignal.timeout(DEFAULT_SDK_REQUEST_TIMEOUT_MS),
@@ -367,7 +367,7 @@ export class OpencodeSdkAdapter {
         const messages = await this.client.session.messages({
             path: { id: command.sessionId },
             query: {
-                directory: this.directory,
+                ...this.requestContext(),
                 limit: 32,
             },
             responseStyle: "data",
@@ -379,6 +379,16 @@ export class OpencodeSdkAdapter {
             kind: "listMessages",
             sessionId: command.sessionId,
             messages: unwrapData<MessageResponse[]>(messages).flatMap(toBindingMessage),
+        }
+    }
+
+    private requestContext(): {
+        directory: string
+        workspace: string
+    } {
+        return {
+            directory: this.directory,
+            workspace: this.directory,
         }
     }
 }

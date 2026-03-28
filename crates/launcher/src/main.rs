@@ -83,6 +83,7 @@ fn run_init() -> Result<(), Box<dyn Error>> {
     let project_root = project_root()?;
 
     ensure_layout(&paths)?;
+    write_workspace_scaffold_if_missing(&paths)?;
     write_gateway_config_if_missing(&paths)?;
     write_managed_opencode_config_if_missing(&paths)?;
     write_plugin_loader(&paths, &project_root)?;
@@ -107,6 +108,7 @@ fn run_serve() -> Result<(), Box<dyn Error>> {
     let engine = GatewayEngine::new();
 
     ensure_layout(&paths)?;
+    write_workspace_scaffold_if_missing(&paths)?;
     write_gateway_config_if_missing(&paths)?;
     write_managed_opencode_config_if_missing(&paths)?;
     write_plugin_loader(&paths, &project_root)?;
@@ -274,17 +276,21 @@ fn write_gateway_config_if_missing(paths: &GatewayPaths) -> Result<(), Box<dyn E
                 "# Ask @userinfobot for your numeric Telegram user id for private-chat allowlists.\n",
                 "allowed_chats = []\n",
                 "allowed_users = []\n\n",
+                "# Optional long-lived memory sources injected into gateway-managed sessions.\n",
+                "# Relative paths are resolved from opencode-gateway-workspace.\n",
+                "# Missing files and directories are created automatically.\n",
+                "# The workspace also prepares `.opencode/skills/` for workspace-local OpenCode skills.\n\n",
                 "[[memory.entries]]\n",
                 "path = \"USER.md\"\n",
                 "description = \"Persistent user profile and preference memory. Keep this file accurate and concise. Record stable preferences, communication style, workflow habits, project conventions, tool constraints, review expectations, and other recurring facts that should shape future assistance. Update it proactively when you learn something durable about the user. Do not store one-off task details or transient context here.\"\n",
                 "inject_content = true\n\n",
                 "[[memory.entries]]\n",
                 "path = \"RULES.md\"\n",
-                "description = \"Behavior rules and standing operating constraints for the assistant. Keep this file concise, explicit, and current. Use it for durable expectations about behavior, review standards, output style, safety boundaries, and other rules that should consistently shape future responses.\"\n",
+                "description = \"Behavior rules and standing operating constraints for the assistant. Keep this file concise, explicit, and current. Use it for durable expectations about behavior, review standards, output style, safety boundaries, and other rules that should consistently shape future responses. Update it proactively when new long-lived rules or boundaries become clear.\"\n",
                 "inject_content = true\n\n",
                 "[[memory.entries]]\n",
                 "path = \"memory/daily\"\n",
-                "description = \"Daily notes stored as YYYY-MM-DD.md files. Use this directory for dated logs, short-lived findings, and day-specific working context that should remain searchable without being auto-injected.\"\n",
+                "description = \"Daily notes stored as YYYY-MM-DD.md files. Use this directory for dated logs, short-lived findings, and day-specific working context that should remain searchable without being auto-injected. Create or update the current day's file proactively when meaningful new day-specific context appears.\"\n",
                 "search_only = true\n"
             ),
             paths.state_db.display()
@@ -312,6 +318,62 @@ fn write_managed_opencode_config_if_missing(paths: &GatewayPaths) -> Result<(), 
         ),
     )?;
 
+    Ok(())
+}
+
+fn write_workspace_scaffold_if_missing(paths: &GatewayPaths) -> Result<(), Box<dyn Error>> {
+    write_file_if_missing(
+        &paths.workspace_dir.join("USER.md"),
+        concat!(
+            "# USER\n\n",
+            "Use this file for durable user profile and preference memory.\n\n",
+            "- Update it proactively when you learn a stable preference, workflow habit, review expectation, or recurring constraint.\n",
+            "- Keep it concise and deduplicated.\n",
+            "- Do not store one-off task details or day-specific notes here.\n",
+        ),
+    )?;
+    write_file_if_missing(
+        &paths.workspace_dir.join("RULES.md"),
+        concat!(
+            "# RULES\n\n",
+            "Use this file for durable assistant behavior rules and standing operating constraints.\n\n",
+            "- Update it proactively when a new long-lived rule, boundary, or style expectation becomes clear.\n",
+            "- Keep it explicit, concise, and deduplicated.\n",
+            "- Do not mix day-specific task notes into this file.\n",
+        ),
+    )?;
+    write_file_if_missing(
+        &paths.workspace_dir.join("memory/daily/README.md"),
+        concat!(
+            "# Daily Notes\n\n",
+            "Store day-specific notes here as `YYYY-MM-DD.md` files.\n\n",
+            "Use daily notes for dated progress logs, investigation breadcrumbs, temporary decisions, and other context that should remain searchable without becoming durable user or rules memory.\n\n",
+            "Create or update the current day's file proactively when there is meaningful new day-specific context to preserve.\n",
+        ),
+    )?;
+    write_file_if_missing(
+        &paths.workspace_dir.join(".opencode/skills/README.md"),
+        concat!(
+            "# Workspace Skills\n\n",
+            "Put gateway-local OpenCode skills in this directory.\n\n",
+            "Gateway-managed sessions default to this workspace-local `.opencode/skills` directory when creating, installing, or updating skills.\n\n",
+            "OpenCode may still read globally configured skills, but new or maintained gateway skills should live here unless the user explicitly asks for a global change.\n",
+        ),
+    )?;
+
+    Ok(())
+}
+
+fn write_file_if_missing(path: &Path, contents: &str) -> Result<(), Box<dyn Error>> {
+    if path.exists() {
+        return Ok(());
+    }
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    fs::write(path, contents)?;
     Ok(())
 }
 

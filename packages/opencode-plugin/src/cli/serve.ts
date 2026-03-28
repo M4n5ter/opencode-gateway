@@ -1,6 +1,5 @@
 import { spawn } from "node:child_process"
-import { mkdir } from "node:fs/promises"
-
+import { ensureGatewayWorkspaceScaffold } from "../workspace/scaffold"
 import { resolveServeTarget, warmGatewayProject } from "./opencode-server"
 
 type ServeOptions = {
@@ -10,7 +9,7 @@ type ServeOptions = {
 
 export async function runServe(options: ServeOptions, env: Record<string, string | undefined>): Promise<void> {
     const target = await resolveServeTarget(options, env)
-    await mkdir(target.workspaceDirPath, { recursive: true })
+    await ensureGatewayWorkspaceScaffold(target.workspaceDirPath)
     const child = spawn("opencode", ["serve"], {
         stdio: "inherit",
         env: {

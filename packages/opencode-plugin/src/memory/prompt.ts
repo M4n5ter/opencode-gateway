@@ -14,7 +14,14 @@ export class GatewayMemoryPromptProvider {
         }
 
         const sections = await Promise.all(this.config.entries.map((entry) => this.buildEntrySection(entry)))
-        return ["Gateway memory:", ...sections].join("\n\n")
+        const promptSections = ["Gateway memory:"]
+        const maintenancePolicy = buildMaintenancePolicy(this.config.entries)
+        if (maintenancePolicy !== null) {
+            promptSections.push(maintenancePolicy)
+        }
+
+        promptSections.push(...sections)
+        return promptSections.join("\n\n")
     }
 
     private async buildEntrySection(entry: GatewayMemoryEntryConfig): Promise<string> {
@@ -39,6 +46,51 @@ export class GatewayMemoryPromptProvider {
     }
 }
 
+function buildMaintenancePolicy(entries: GatewayMemoryEntryConfig[]): string | null {
+    const configuredPaths = new Set(entries.map((entry) => normalizeMemoryEntryPath(entry.displayPath)))
+    const hasUserMemory = configuredPaths.has("user.md")
+    const hasRulesMemory = configuredPaths.has("rules.md")
+    const hasDailyMemory = configuredPaths.has("memory/daily")
+
+    if (!hasUserMemory && !hasRulesMemory && !hasDailyMemory) {
+        return null
+    }
+
+    const lines = ["Memory maintenance policy:"]
+
+    if (hasUserMemory) {
+        lines.push(
+            "- Update `USER.md` proactively when you learn durable user preferences, workflow habits, review expectations, or recurring tool constraints.",
+        )
+    }
+
+    if (hasRulesMemory) {
+        lines.push(
+            "- Update `RULES.md` proactively when you confirm durable behavior rules, operating boundaries, or output expectations that should keep applying in future sessions.",
+        )
+    }
+
+    if (hasDailyMemory) {
+        lines.push(
+            "- Update `memory/daily/YYYY-MM-DD.md` proactively when meaningful day-specific progress, investigation breadcrumbs, temporary decisions, or short-lived working context should be preserved.",
+        )
+    }
+
+    if (hasUserMemory || hasRulesMemory) {
+        lines.push(
+            "- Keep durable memory concise and deduplicated. Do not rewrite it without meaningful new long-lived information.",
+        )
+    }
+
+    if (hasDailyMemory && (hasUserMemory || hasRulesMemory)) {
+        lines.push(
+            "- Put one-off task details and day-specific context in daily notes instead of `USER.md` or `RULES.md`.",
+        )
+    }
+
+    return lines.join("\n")
+}
+
 function describeMemoryAccess(entry: GatewayMemoryEntryConfig): string {
     if (entry.kind === "file") {
         if (entry.injectContent && !entry.searchOnly) {
@@ -57,4 +109,10 @@ function describeMemoryAccess(entry: GatewayMemoryEntryConfig): string {
     }
 
     return "search-only by default; use memory_search or memory_get when this directory is relevant"
+}
+
+function normalizeMemoryEntryPath(path: string): string {
+    const normalized = path.trim().replaceAll("\\", "/")
+    const withoutTrailingSlash = normalized.replace(/\/+$/u, "")
+    return withoutTrailingSlash.toLowerCase()
 }

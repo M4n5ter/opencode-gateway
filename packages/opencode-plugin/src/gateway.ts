@@ -1,8 +1,8 @@
-import { mkdir } from "node:fs/promises"
 import type { PluginInput } from "@opencode-ai/plugin"
 
 import type { GatewayBindingModule, GatewayContract } from "./binding"
 import { loadGatewayConfig } from "./config/gateway"
+import { resolveGatewayConfigPath, resolveGatewayWorkspacePath } from "./config/paths"
 import { GatewayCronRuntime } from "./cron/runtime"
 import { TelegramProgressiveSupport } from "./delivery/telegram"
 import { GatewayTextDelivery } from "./delivery/text"
@@ -35,6 +35,7 @@ import { TelegramInboundMediaStore } from "./telegram/media"
 import { TelegramPollingService } from "./telegram/poller"
 import { GatewayTelegramRuntime } from "./telegram/runtime"
 import { TelegramToolToggleRuntime } from "./telegram/tool-toggle"
+import { ensureGatewayWorkspaceScaffold } from "./workspace/scaffold"
 
 export type GatewayPluginStatus = {
     runtimeMode: string
@@ -86,9 +87,10 @@ export async function createGatewayRuntime(
     module: GatewayBindingModule,
     input: PluginInput,
 ): Promise<GatewayPluginRuntime> {
+    await ensureGatewayWorkspaceScaffold(resolveGatewayWorkspacePath(resolveGatewayConfigPath(process.env)))
     const config = await loadGatewayConfig()
     return await getOrCreateRuntimeSingleton(config.configPath, async () => {
-        await mkdir(config.workspaceDirPath, { recursive: true })
+        await ensureGatewayWorkspaceScaffold(config.workspaceDirPath)
         const logger = new ConsoleLoggerHost(config.logLevel)
         if (config.hasLegacyGatewayTimezone) {
             const suffix = config.legacyGatewayTimezone === null ? "" : ` (${config.legacyGatewayTimezone})`

@@ -19,6 +19,8 @@ export class GatewaySystemPromptBuilder {
             prompts.push(gatewayPrompt)
         }
 
+        prompts.push(buildGatewaySkillsPrompt())
+
         const memoryPrompt = await this.memory.buildPrompt()
         if (memoryPrompt !== null) {
             prompts.push(memoryPrompt)
@@ -26,6 +28,15 @@ export class GatewaySystemPromptBuilder {
 
         return prompts
     }
+}
+
+function buildGatewaySkillsPrompt(): string {
+    return [
+        "Gateway skills:",
+        "- This gateway session uses a managed workspace-local skills directory at `.opencode/skills`.",
+        "- You may read any skills already visible to OpenCode, including user-configured global skills.",
+        "- When creating, installing, or updating a skill, default to `.opencode/skills` in the current gateway workspace unless the user explicitly asks for a global change.",
+    ].join("\n")
 }
 
 function buildGatewayContextPrompt(targets: BindingDeliveryTarget[]): string | null {

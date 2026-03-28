@@ -133,12 +133,12 @@ inject_content = true
 
 [[memory.entries]]
 path = "RULES.md"
-description = "Behavior rules and standing operating constraints for the assistant. Keep this file concise, explicit, and current. Use it for durable expectations about behavior, review standards, output style, safety boundaries, and other rules that should consistently shape future responses."
+description = "Behavior rules and standing operating constraints for the assistant. Keep this file concise, explicit, and current. Use it for durable expectations about behavior, review standards, output style, safety boundaries, and other rules that should consistently shape future responses. Update it proactively when new long-lived rules or boundaries become clear."
 inject_content = true
 
 [[memory.entries]]
 path = "memory/daily"
-description = "Daily notes stored as YYYY-MM-DD.md files. Use this directory for dated logs, short-lived findings, and day-specific working context that should remain searchable without being auto-injected."
+description = "Daily notes stored as YYYY-MM-DD.md files. Use this directory for dated logs, short-lived findings, and day-specific working context that should remain searchable without being auto-injected. Create or update the current day's file proactively when meaningful new day-specific context appears."
 search_only = true
 
 [[memory.entries]]
@@ -199,6 +199,7 @@ Mailbox rules:
 Memory rules:
 
 - all entries inject their configured path and description
+- entry-specific maintenance guidance for `USER.md`, `RULES.md`, and `memory/daily` is injected only when those exact entries are configured
 - file contents are auto-injected only when `inject_content = true`
 - `search_only = true` keeps an entry available to `memory_search` and `memory_get`
   without auto-injecting its content
@@ -208,7 +209,10 @@ Memory rules:
 - relative paths are resolved from `opencode-gateway-workspace`
 - absolute paths are still allowed
 - missing files and directories are created automatically on load
+- the default workspace scaffold includes `USER.md`, `RULES.md`, `memory/daily/README.md`, and `.opencode/skills/README.md`
 - the default template includes `USER.md`, `RULES.md`, and `memory/daily`
+- gateway-managed sessions default to workspace-local skills under `opencode-gateway-workspace/.opencode/skills`
+- globally configured OpenCode skills remain readable, but new or updated gateway skills should default to the workspace-local skills directory unless the user explicitly asks otherwise
 - memory is injected only into gateway-managed sessions, including scheduled
   runs and channel-bound sessions
 - `memory_search` returns matching snippets and paths; `memory_get` reads a

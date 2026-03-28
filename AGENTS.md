@@ -108,6 +108,7 @@ This package now:
 
 - loads the generated `wasm-bindgen` package
 - parses gateway config and opens the managed SQLite database
+- scaffolds the managed gateway workspace with default `USER.md`, `RULES.md`, `memory/daily`, and `.opencode/skills` files
 - persists OpenCode session bindings, Telegram state, cron jobs, and cron runs
 - persists durable mailbox queue entries for gateway-managed ingress
 - runs Telegram long polling with explicit allowlists
@@ -165,7 +166,7 @@ opencode-gateway serve
 - SQLite reads and writes
 - Telegram HTTP transport, editable streams, split preview/tool callbacks, compaction reactions, and interaction cleanup
 - polling loops and timers
-- local environment and config path resolution
+- local environment, workspace scaffold, and config path resolution
 
 ### Launcher owns
 
@@ -217,6 +218,20 @@ Default paths:
 
 The launcher is responsible for creating and wiring these managed paths without
 touching the user's global OpenCode config.
+
+Gateway-managed sessions run against the managed workspace rooted at
+`opencode-gateway-workspace/`. The workspace scaffold includes:
+
+- `USER.md`
+- `RULES.md`
+- `memory/daily/README.md`
+- `.opencode/skills/README.md`
+
+The gateway injects stronger maintenance guidance for `USER.md`, `RULES.md`, and
+`memory/daily` only when those specific entries are present in `memory.entries`.
+Gateway-managed sessions may still read globally configured OpenCode skills, but
+new or updated gateway skills should default to the workspace-local
+`.opencode/skills/` directory unless the user explicitly asks for a global change.
 
 ## Session Model
 

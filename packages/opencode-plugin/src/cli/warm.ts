@@ -1,5 +1,4 @@
-import { mkdir } from "node:fs/promises"
-
+import { ensureGatewayWorkspaceScaffold } from "../workspace/scaffold"
 import { resolveServeTarget, warmGatewayProject } from "./opencode-server"
 
 type WarmOptions = {
@@ -9,7 +8,7 @@ type WarmOptions = {
 
 export async function runWarm(options: WarmOptions, env: Record<string, string | undefined>): Promise<void> {
     const target = await resolveServeTarget(options, env)
-    await mkdir(target.workspaceDirPath, { recursive: true })
+    await ensureGatewayWorkspaceScaffold(target.workspaceDirPath)
 
     await warmGatewayProject(target)
 

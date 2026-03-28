@@ -12,6 +12,7 @@ export type GatewaySessionHierarchyClientLike = {
             input: {
                 sessionID: string
                 directory?: string
+                workspace?: string
             },
             options?: {
                 responseStyle?: "data"
@@ -79,6 +80,7 @@ export class GatewaySessionHierarchyResolver {
                     {
                         sessionID: sessionId,
                         directory: this.directory,
+                        workspace: this.directory,
                     },
                     {
                         responseStyle: "data",
