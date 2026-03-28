@@ -186,6 +186,9 @@ opencode-gateway doctor
 
 ### OpenCode tools
 
+- `agent_status`
+- `agent_switch`
+- `channel_new_session`
 - `gateway_status`
 - `gateway_dispatch_cron`
 - `cron_list`

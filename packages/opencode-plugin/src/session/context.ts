@@ -26,6 +26,10 @@ export class GatewaySessionContext {
         return this.store.getDefaultSessionReplyTarget(sessionId)
     }
 
+    getConversationKey(sessionId: string): string | null {
+        return this.store.getConversationKeyForSession(sessionId)
+    }
+
     isGatewaySession(sessionId: string): boolean {
         return this.store.hasGatewaySession(sessionId)
     }

@@ -37,6 +37,7 @@ export async function runOpencodeDriver(options: {
     deliverySession: TextDeliverySessionLike | null
     prompts: OpencodeDriverPrompt[]
     onSessionAvailable?: (sessionId: string) => Promise<void> | void
+    prepareCommand?: (command: BindingOpencodeCommand) => Promise<BindingOpencodeCommand> | BindingOpencodeCommand
     onCommand?: (command: BindingOpencodeCommand) => Promise<void> | void
     shouldInterrupt?: () => boolean
     budget: ExecutionBudget
@@ -55,15 +56,16 @@ export async function runOpencodeDriver(options: {
         let step = driver.start()
         for (;;) {
             if (step.kind === "command") {
-                const command = step.command
+                const command = await options.prepareCommand?.(step.command)
+                const resolvedCommand = command ?? step.command
                 if (options.shouldInterrupt?.() === true) {
                     throw new OpencodeDriverInterruptedError()
                 }
-                options.budget.throwIfHardTimedOut(`executing ${step.command.kind}`)
-                await options.onCommand?.(command)
-                activeSessionId = await syncSessionContext(activeSessionId, command, options.onSessionAvailable)
-                registration = syncDriverRegistration(registration, command, driver, options)
-                const result = await options.opencode.execute(options.budget.applyToCommand(command))
+                options.budget.throwIfHardTimedOut(`executing ${resolvedCommand.kind}`)
+                await options.onCommand?.(resolvedCommand)
+                activeSessionId = await syncSessionContext(activeSessionId, resolvedCommand, options.onSessionAvailable)
+                registration = syncDriverRegistration(registration, resolvedCommand, driver, options)
+                const result = await options.opencode.execute(options.budget.applyToCommand(resolvedCommand))
                 if (options.shouldInterrupt?.() === true) {
                     throw new OpencodeDriverInterruptedError()
                 }
@@ -71,7 +73,7 @@ export async function runOpencodeDriver(options: {
                 registration = syncDriverRegistration(registration, result, driver, options)
                 if (isTimeoutCommandResult(result)) {
                     throw new OpencodeCommandTimeoutError(
-                        timeoutStageForCommand(command),
+                        timeoutStageForCommand(resolvedCommand),
                         result.message,
                         result.sessionId,
                     )

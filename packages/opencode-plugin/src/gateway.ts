@@ -23,6 +23,7 @@ import { GatewayInflightPolicyRuntime } from "./runtime/inflight-policy"
 import { GatewayMailboxRuntime } from "./runtime/mailbox"
 import { getOrCreateRuntimeSingleton } from "./runtime/runtime-singleton"
 import { GatewayToolActivityRuntime } from "./runtime/tool-activity"
+import { GatewaySessionAgentRuntime } from "./session/agent"
 import { GatewaySessionContext } from "./session/context"
 import { resolveConversationKeyForTarget } from "./session/conversation-key"
 import { ChannelSessionSwitcher } from "./session/switcher"
@@ -59,6 +60,7 @@ export class GatewayPluginRuntime {
         readonly telegram: GatewayTelegramRuntime,
         readonly files: ChannelFileSender,
         readonly channelSessions: ChannelSessionSwitcher,
+        readonly sessionAgents: GatewaySessionAgentRuntime,
         readonly sessionContext: GatewaySessionContext,
         readonly systemPrompts: GatewaySystemPromptBuilder,
         readonly memory: GatewayMemoryRuntime,
@@ -112,6 +114,7 @@ export async function createGatewayRuntime(
         const opencodeEvents = new OpencodeEventHub()
         const activeExecutions = new ActiveExecutionRegistry()
         const opencode = new OpencodeSdkAdapter(input.client, config.workspaceDirPath)
+        const sessionAgents = new GatewaySessionAgentRuntime(opencode, sessionContext, store)
         const interactionClient = createInteractionClient(input.client, input.serverUrl, config.workspaceDirPath)
         const compactionReactions = new GatewayTelegramCompactionRuntime(
             telegramClient,
@@ -170,6 +173,7 @@ export async function createGatewayRuntime(
             undefined,
             toolActivity,
             activeExecutions,
+            sessionAgents,
         )
         let notifyMailboxStateChanged = (): void => {}
         const inflightRuntime = new GatewayInflightPolicyRuntime(store, executor, logger, () => {
@@ -254,6 +258,7 @@ export async function createGatewayRuntime(
             telegram,
             files,
             channelSessions,
+            sessionAgents,
             sessionContext,
             systemPrompts,
             memory,

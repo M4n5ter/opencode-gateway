@@ -34,12 +34,17 @@ test("OpencodeSdkAdapter reports missing sessions through lookupSession without 
 test("OpencodeSdkAdapter maps sendPromptAsync to session.promptAsync", async () => {
     const seenMessageIds: string[] = []
     const seenParts: unknown[] = []
+    const seenAgents: unknown[] = []
     const seenQueries: unknown[] = []
     const adapter = new OpencodeSdkAdapter(
         {
             session: {
-                async promptAsync(input: { body: { messageID: string; parts: unknown[] }; query?: unknown }) {
+                async promptAsync(input: {
+                    body: { messageID: string; agent?: string; parts: unknown[] }
+                    query?: unknown
+                }) {
                     seenMessageIds.push(input.body.messageID)
+                    seenAgents.push(input.body.agent ?? null)
                     seenParts.push(...input.body.parts)
                     seenQueries.push(input.query ?? null)
                     return undefined
@@ -54,6 +59,7 @@ test("OpencodeSdkAdapter maps sendPromptAsync to session.promptAsync", async () 
             kind: "sendPromptAsync",
             sessionId: "ses_1",
             messageId: "msg_gateway_mailbox_1",
+            agent: "plan",
             parts: [
                 {
                     kind: "text",
@@ -74,6 +80,7 @@ test("OpencodeSdkAdapter maps sendPromptAsync to session.promptAsync", async () 
         sessionId: "ses_1",
     })
     expect(seenMessageIds).toEqual(["msg_gateway_mailbox_1"])
+    expect(seenAgents).toEqual(["plan"])
     expect(seenParts).toEqual([
         {
             id: "prt_gateway_mailbox_1_0",
@@ -92,6 +99,54 @@ test("OpencodeSdkAdapter maps sendPromptAsync to session.promptAsync", async () 
         {
             directory: "/workspace",
             workspace: "/workspace",
+        },
+    ])
+})
+
+test("OpencodeSdkAdapter maps appendPrompt to session.prompt with an optional agent override", async () => {
+    const seenBodies: unknown[] = []
+    const adapter = new OpencodeSdkAdapter(
+        {
+            session: {
+                async prompt(input: { body: unknown }) {
+                    seenBodies.push(input.body)
+                    return undefined
+                },
+            },
+        } as never,
+        "/workspace",
+    )
+
+    expect(
+        await adapter.execute({
+            kind: "appendPrompt",
+            sessionId: "ses_1",
+            messageId: "msg_gateway_context_1",
+            agent: "plan",
+            parts: [
+                {
+                    kind: "text",
+                    partId: "prt_gateway_context_1_0",
+                    text: "remember this",
+                },
+            ],
+        }),
+    ).toEqual({
+        kind: "appendPrompt",
+        sessionId: "ses_1",
+    })
+    expect(seenBodies).toEqual([
+        {
+            messageID: "msg_gateway_context_1",
+            agent: "plan",
+            noReply: true,
+            parts: [
+                {
+                    id: "prt_gateway_context_1_0",
+                    type: "text",
+                    text: "remember this",
+                },
+            ],
         },
     ])
 })

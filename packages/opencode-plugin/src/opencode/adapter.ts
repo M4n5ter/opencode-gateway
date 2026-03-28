@@ -25,6 +25,12 @@ type SessionRecord = {
     id: string
 }
 
+type AgentRecord = {
+    name: string
+    mode: string
+    hidden?: boolean
+}
+
 type SessionPromptPart = {
     id?: string
     messageID?: string
@@ -84,6 +90,19 @@ export class OpencodeSdkAdapter {
         })
 
         return unwrapData<SessionRecord>(session).id
+    }
+
+    async listAgents(): Promise<AgentRecord[]> {
+        const agents = await this.client.app.agents({
+            query: {
+                directory: this.directory,
+            },
+            responseStyle: "data",
+            throwOnError: true,
+            signal: AbortSignal.timeout(DEFAULT_SDK_REQUEST_TIMEOUT_MS),
+        })
+
+        return unwrapData<AgentRecord[]>(agents)
     }
 
     async isSessionBusy(sessionId: string): Promise<boolean> {
@@ -233,6 +252,7 @@ export class OpencodeSdkAdapter {
             query: this.requestContext(),
             body: {
                 messageID: command.messageId,
+                agent: command.agent,
                 noReply: true,
                 parts: command.parts.map(toSessionPromptPart),
             },
@@ -255,6 +275,7 @@ export class OpencodeSdkAdapter {
             query: this.requestContext(),
             body: {
                 messageID: command.messageId,
+                agent: command.agent,
                 parts: command.parts.map(toSessionPromptPart),
             },
             throwOnError: true,

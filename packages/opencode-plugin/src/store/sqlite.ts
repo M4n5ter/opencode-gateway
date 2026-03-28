@@ -393,6 +393,36 @@ export class SqliteStore {
         return row ? mapSessionReplyTargetRow(row) : null
     }
 
+    getConversationKeyForSession(sessionId: string): string | null {
+        const binding = this.db
+            .query<{ conversation_key: string }, [string]>(
+                `
+                    SELECT conversation_key
+                    FROM session_bindings
+                    WHERE session_id = ?1
+                    LIMIT 1;
+                `,
+            )
+            .get(sessionId)
+        if (binding?.conversation_key) {
+            return binding.conversation_key
+        }
+
+        const replyTarget = this.db
+            .query<{ conversation_key: string }, [string]>(
+                `
+                    SELECT conversation_key
+                    FROM session_reply_targets
+                    WHERE session_id = ?1
+                    ORDER BY ordinal ASC
+                    LIMIT 1;
+                `,
+            )
+            .get(sessionId)
+
+        return replyTarget?.conversation_key ?? null
+    }
+
     hasGatewaySession(sessionId: string): boolean {
         const binding = this.db
             .query<{ present: number }, [string]>(
@@ -420,6 +450,14 @@ export class SqliteStore {
             .get(sessionId)
 
         return replyTarget?.present === 1
+    }
+
+    getConversationAgentOverride(conversationKey: string): string | null {
+        return this.getStateValue(conversationAgentStateKey(conversationKey))
+    }
+
+    putConversationAgentOverride(conversationKey: string, agent: string, recordedAtMs: number): void {
+        this.putStateValue(conversationAgentStateKey(conversationKey), agent, recordedAtMs)
     }
 
     appendJournal(entry: RuntimeJournalEntry): void {
@@ -2382,6 +2420,10 @@ export class SqliteStore {
     close(): void {
         this.db.close()
     }
+}
+
+function conversationAgentStateKey(conversationKey: string): string {
+    return `conversation.agent:${conversationKey}`
 }
 
 type CronJobRow = {

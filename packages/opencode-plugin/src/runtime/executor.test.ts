@@ -245,6 +245,102 @@ test("GatewayExecutor appends earlier prompts and forwards progressive previews 
     }
 })
 
+test("GatewayExecutor injects the route-scoped primary agent into appended and async prompts", async () => {
+    const db = createMemoryDatabase()
+    const now = 1_735_689_600_000
+    const restoreNow = mockDateNow(now)
+
+    try {
+        migrateGatewayDatabase(db)
+        const store = new SqliteStore(db)
+        const events = new OpencodeEventHub()
+
+        const commands: BindingOpencodeCommand[] = []
+        const executor = new GatewayExecutor(
+            createModule(),
+            store,
+            {
+                async execute(command: BindingOpencodeCommand): Promise<BindingOpencodeCommandResult> {
+                    commands.push(command)
+
+                    switch (command.kind) {
+                        case "createSession":
+                            return { kind: "createSession", sessionId: "ses_fresh" }
+                        case "appendPrompt":
+                            return { kind: "appendPrompt", sessionId: command.sessionId }
+                        case "sendPromptAsync":
+                            return { kind: "sendPromptAsync", sessionId: command.sessionId }
+                        case "awaitPromptResponse":
+                            return createAwaitPromptResponseResult(
+                                command.sessionId,
+                                "msg_assistant_final",
+                                "hello back",
+                            )
+                        case "lookupSession":
+                            throw new Error("unused")
+                        case "waitUntilIdle":
+                            return { kind: "waitUntilIdle", sessionId: command.sessionId }
+                    }
+
+                    throw new Error(`unexpected command: ${command.kind}`)
+                },
+                async isSessionBusy() {
+                    return false
+                },
+                async abortSession(): Promise<void> {},
+            },
+            events,
+            {
+                async openMany() {
+                    return [
+                        {
+                            mode: "oneshot" as const,
+                            async preview(): Promise<void> {},
+                            async finish(): Promise<boolean> {
+                                return true
+                            },
+                            async handoffFinalDelivery() {
+                                return { strategy: { mode: "send" }, previewContext: null }
+                            },
+                        },
+                    ]
+                },
+            },
+            new MemoryLogger(),
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            {
+                async resolveEffectivePrimaryAgent(conversationKey) {
+                    expect(conversationKey).toBe("telegram:42")
+                    return "plan"
+                },
+            },
+        )
+
+        await executor.executeMailboxEntries([createMailboxEntry(1, "first"), createMailboxEntry(2, "second")])
+
+        expect(commands).toContainEqual({
+            kind: "appendPrompt",
+            sessionId: "ses_fresh",
+            messageId: `msg_gateway_mailbox_1_${now}`,
+            agent: "plan",
+            parts: createTextCommandParts(`mailbox:1:${now}`, "first"),
+        })
+        expect(commands).toContainEqual({
+            kind: "sendPromptAsync",
+            sessionId: "ses_fresh",
+            messageId: `msg_gateway_mailbox_2_${now}`,
+            agent: "plan",
+            parts: createTextCommandParts(`mailbox:2:${now}`, "second"),
+        })
+    } finally {
+        restoreNow()
+        db.close()
+    }
+})
+
 test("GatewayExecutor records session wait timeouts and evicts the persisted binding", async () => {
     const db = createMemoryDatabase()
 

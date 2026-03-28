@@ -16,6 +16,7 @@ import type { GatewayExecutionConfig } from "../config/gateway"
 import type { GatewayTextDelivery, TargetTextDeliverySession, TextDeliverySession } from "../delivery/text"
 import type { OpencodeSdkAdapter } from "../opencode/adapter"
 import type { OpencodeEventHub } from "../opencode/events"
+import type { GatewaySessionAgentRuntime } from "../session/agent"
 import type {
     MailboxEntryRecord,
     MailboxJobRecord,
@@ -64,6 +65,7 @@ export class GatewayExecutor {
         private readonly coordinator: ConversationCoordinator = new ConversationCoordinator(),
         private readonly toolActivity: GatewayToolActivityRuntime | null = null,
         private readonly activeExecutions: ActiveExecutionRegistry = new ActiveExecutionRegistry(),
+        private readonly sessionAgents: Pick<GatewaySessionAgentRuntime, "resolveEffectivePrimaryAgent"> | null = null,
     ) {}
 
     prepareInboundMessage(message: BindingInboundMessage): BindingPreparedExecution {
@@ -255,6 +257,7 @@ export class GatewayExecutor {
         const conversationKey = normalizeRequiredField(input.conversationKey, "conversation key")
         const body = normalizeRequiredField(input.body, "context body")
         const budget = new ExecutionBudget(this.executionConfig, input.recordedAtMs)
+        const agent = await this.resolveConversationAgent(conversationKey)
 
         await this.coordinator.runExclusive(conversationKey, async () => {
             const sessionId = await this.ensureConversationSession(
@@ -265,13 +268,18 @@ export class GatewayExecutor {
             )
             const promptIdentity = this.createInternalPromptIdentity("context", input.recordedAtMs)
             try {
-                await this.appendPrompt(sessionId, promptIdentity.messageId, [
-                    {
-                        kind: "text",
-                        partId: promptIdentity.partId,
-                        text: body,
-                    },
-                ])
+                await this.appendPrompt(
+                    sessionId,
+                    promptIdentity.messageId,
+                    [
+                        {
+                            kind: "text",
+                            partId: promptIdentity.partId,
+                            text: body,
+                        },
+                    ],
+                    agent,
+                )
             } catch (error) {
                 this.evictSessionBinding(conversationKey, sessionId, error)
                 throw error
@@ -544,11 +552,13 @@ export class GatewayExecutor {
         sessionId: string,
         messageId: string,
         parts: BindingOpencodeCommandPartLike[],
+        agent: string | null = null,
     ): Promise<void> {
         const result = await this.opencode.execute({
             kind: "appendPrompt",
             sessionId,
             messageId,
+            agent: agent ?? undefined,
             parts,
         })
         expectCommandResult(result, "appendPrompt")
@@ -664,22 +674,26 @@ export class GatewayExecutor {
         toolActivity: Pick<GatewayToolActivityHandle, "trackSession" | "finish"> | null,
         activeHandle: ActiveExecutionHandle,
     ): Promise<PromptExecutionResult> {
+        const conversationKey = entries[0].prepared.conversationKey
+        const agent = await this.resolveConversationAgent(conversationKey)
+
         return await runOpencodeDriver({
             module: this.module,
             opencode: this.opencode,
             events: this.events,
-            conversationKey: entries[0].prepared.conversationKey,
+            conversationKey,
             persistedSessionId,
             deliverySession,
             prompts: entries.map((entry, index) => ({
                 promptKey: createPromptKey(entry, recordedAtMs, index),
                 parts: entry.prepared.promptParts,
             })),
+            prepareCommand: async (command) => injectAgentIntoPromptCommand(command, agent),
             onSessionAvailable: async (sessionId) => {
                 this.activeExecutions.updateSession(activeHandle, sessionId)
                 this.store.replaceSessionReplyTargets({
                     sessionId,
-                    conversationKey: entries[0].prepared.conversationKey,
+                    conversationKey,
                     targets: replyTargets,
                     recordedAtMs,
                 })
@@ -694,6 +708,22 @@ export class GatewayExecutor {
             shouldInterrupt: () => this.activeExecutions.wasInterrupted(activeHandle),
             budget,
         })
+    }
+
+    private async resolveConversationAgent(conversationKey: string): Promise<string | null> {
+        if (this.sessionAgents === null) {
+            return null
+        }
+
+        try {
+            return await this.sessionAgents.resolveEffectivePrimaryAgent(conversationKey)
+        } catch (error) {
+            this.logger.log(
+                "warn",
+                `failed to resolve route-scoped agent for ${conversationKey}: ${extractErrorMessage(error)}`,
+            )
+            return null
+        }
     }
 
     private async cleanupInterruptedExecution(
@@ -847,6 +877,23 @@ function dedupeReplyTargets(
         seen.add(key)
         return true
     })
+}
+
+function injectAgentIntoPromptCommand(command: BindingOpencodeCommand, agent: string | null): BindingOpencodeCommand {
+    if (agent === null) {
+        return command
+    }
+
+    switch (command.kind) {
+        case "appendPrompt":
+        case "sendPromptAsync":
+            return {
+                ...command,
+                agent,
+            }
+        default:
+            return command
+    }
 }
 
 function createPreviewFanoutSession(

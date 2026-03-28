@@ -47,12 +47,14 @@ export type BindingOpencodeCommand =
           kind: "appendPrompt"
           sessionId: string
           messageId: string
+          agent?: string
           parts: BindingOpencodeCommandPart[]
       }
     | {
           kind: "sendPromptAsync"
           sessionId: string
           messageId: string
+          agent?: string
           parts: BindingOpencodeCommandPart[]
       }
     | {

@@ -2,6 +2,8 @@ import type { Plugin, ToolDefinition } from "@opencode-ai/plugin"
 
 import { loadGatewayBindingModule } from "./binding"
 import { createGatewayRuntime } from "./gateway"
+import { createAgentStatusTool } from "./tools/agent-status"
+import { createAgentSwitchTool } from "./tools/agent-switch"
 import { createChannelNewSessionTool } from "./tools/channel-new-session"
 import { createChannelSendFileTool } from "./tools/channel-send-file"
 import { createCronRunTool } from "./tools/cron-run"
@@ -25,6 +27,8 @@ export const OpencodeGatewayPlugin: Plugin = async (input) => {
     const gatewayModule = await loadGatewayBindingModule()
     const runtime = await createGatewayRuntime(gatewayModule, input)
     const tools: Record<string, ToolDefinition> = {
+        agent_status: createAgentStatusTool(runtime.sessionAgents),
+        agent_switch: createAgentSwitchTool(runtime.sessionAgents),
         cron_run: createCronRunTool(runtime.cron),
         cron_upsert: createCronUpsertTool(runtime.cron, runtime.sessionContext),
         gateway_status: createGatewayStatusTool(runtime),
