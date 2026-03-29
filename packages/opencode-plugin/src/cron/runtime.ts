@@ -2,6 +2,7 @@ import type { BindingDeliveryTarget, BindingDispatchReport, BindingLoggerHost, G
 import type { CronConfig } from "../config/cron"
 import type { GatewayExecutorLike } from "../runtime/executor"
 import type { CronJobRecord, CronRunRecord, PersistCronJobInput, SqliteStore } from "../store/sqlite"
+import { formatUnixMsAsUtc, formatUnixMsInTimeZone } from "../tools/time"
 import { formatError } from "../utils/error"
 
 export type UpsertCronJobInput = {
@@ -240,7 +241,7 @@ export class GatewayCronRuntime {
                 jobId: job.id,
                 jobKind: job.kind,
                 conversationKey: conversationKeyForJob(job),
-                prompt: job.prompt,
+                prompt: formatScheduledExecutionPrompt(job, scheduledForMs, startedAtMs, this.effectiveTimeZone),
                 replyTarget: toReplyTarget(job),
             })
             this.store.finishCronRun(runId, "succeeded", Date.now(), report.execution.responseText, null)
@@ -538,6 +539,34 @@ function toReplyTarget(
 
 function conversationKeyForJob(job: Pick<CronJobRecord, "id" | "kind">): string {
     return job.kind === "cron" ? `cron:${job.id}` : `once:${job.id}`
+}
+
+function formatScheduledExecutionPrompt(
+    job: Pick<CronJobRecord, "id" | "kind" | "prompt" | "schedule">,
+    scheduledForMs: number,
+    dispatchedAtMs: number,
+    timeZone: string,
+): string {
+    const header = [
+        "[Gateway schedule context]",
+        `job_id=${job.id}`,
+        `job_kind=${job.kind}`,
+        `timezone=${timeZone}`,
+        ...(job.schedule === null ? [] : [`schedule=${job.schedule}`]),
+        `scheduled_for_ms=${scheduledForMs}`,
+        `scheduled_for_local=${formatUnixMsInTimeZone(scheduledForMs, timeZone)}`,
+        `scheduled_for_utc=${formatUnixMsAsUtc(scheduledForMs)}`,
+        `dispatched_at_ms=${dispatchedAtMs}`,
+        `dispatched_at_local=${formatUnixMsInTimeZone(dispatchedAtMs, timeZone)}`,
+        `dispatched_at_utc=${formatUnixMsAsUtc(dispatchedAtMs)}`,
+        "",
+        "This task was triggered automatically by the gateway scheduler, not by a live user message.",
+        "Use the schedule context above when interpreting time-relative instructions.",
+        "",
+        "[Requested task]",
+    ]
+
+    return [...header, job.prompt].join("\n")
 }
 
 function formatScheduleContextNote(
