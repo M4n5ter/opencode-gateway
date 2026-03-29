@@ -405,11 +405,9 @@ export class OpencodeSdkAdapter {
 
     private requestContext(): {
         directory: string
-        workspace: string
     } {
         return {
             directory: this.directory,
-            workspace: this.directory,
         }
     }
 }

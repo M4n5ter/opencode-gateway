@@ -80,7 +80,6 @@ export class GatewaySessionHierarchyResolver {
                     {
                         sessionID: sessionId,
                         directory: this.directory,
-                        workspace: this.directory,
                     },
                     {
                         responseStyle: "data",

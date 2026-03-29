@@ -98,7 +98,6 @@ test("OpencodeSdkAdapter maps sendPromptAsync to session.promptAsync", async () 
     expect(seenQueries).toEqual([
         {
             directory: "/workspace",
-            workspace: "/workspace",
         },
     ])
 })
