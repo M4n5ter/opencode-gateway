@@ -1,6 +1,6 @@
 {
   "name": "opencode-gateway",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "Gateway plugin for OpenCode",
   "license": "MIT",
   "type": "module",
