@@ -1,7 +1,12 @@
 import { mkdir } from "node:fs/promises"
 import { dirname } from "node:path"
 
-import type { BindingDeferredDeliveryStrategy, BindingDeferredPreviewContext, BindingDeliveryTarget } from "../binding"
+import type {
+    BindingDeferredDeliveryStrategy,
+    BindingDeferredPreviewContext,
+    BindingDeliveryTarget,
+    BindingReplyContext,
+} from "../binding"
 import type {
     GatewayInflightPolicyRequest,
     GatewayInteractionRequest,
@@ -71,6 +76,7 @@ export type MailboxEntryRecord = {
     sender: string
     text: string | null
     attachments: MailboxEntryAttachmentRecord[]
+    replyContext: BindingReplyContext | null
     replyChannel: string | null
     replyTarget: string | null
     replyTopic: string | null
@@ -217,6 +223,7 @@ export type PersistMailboxEntryInput = {
     sender: string
     text: string | null
     attachments: PersistMailboxEntryAttachmentInput[]
+    replyContext?: BindingReplyContext | null
     replyChannel: string | null
     replyTarget: string | null
     replyTopic: string | null
@@ -1178,12 +1185,13 @@ export class SqliteStore {
                     external_id,
                     sender,
                     body,
+                    reply_context_json,
                     reply_channel,
                     reply_target,
                     reply_topic,
                     created_at_ms
                 )
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
                 ON CONFLICT(source_kind, external_id) DO NOTHING;
             `,
         )
@@ -1209,6 +1217,7 @@ export class SqliteStore {
                 payload.externalId,
                 payload.sender,
                 payload.text ?? "",
+                encodeMailboxReplyContext(payload.replyContext ?? null),
                 payload.replyChannel,
                 payload.replyTarget,
                 payload.replyTopic,
@@ -1328,6 +1337,7 @@ export class SqliteStore {
                     entry.external_id,
                     entry.sender,
                     entry.body,
+                    entry.reply_context_json,
                     entry.reply_channel,
                     entry.reply_target,
                     entry.reply_topic,
@@ -1444,6 +1454,7 @@ export class SqliteStore {
                         external_id,
                         sender,
                         body,
+                        reply_context_json,
                         reply_channel,
                         reply_target,
                         reply_topic,
@@ -2449,6 +2460,7 @@ type MailboxEntryRow = {
     external_id: string
     sender: string
     body: string
+    reply_context_json: string | null
     reply_channel: string | null
     reply_target: string | null
     reply_topic: string | null
@@ -2631,6 +2643,7 @@ function mapMailboxEntryRow(row: MailboxEntryRow, attachments: MailboxEntryAttac
         sender: row.sender,
         text: normalizeStoredMailboxText(row.body),
         attachments,
+        replyContext: parseMailboxReplyContext(row.reply_context_json),
         replyChannel: row.reply_channel,
         replyTarget: row.reply_target,
         replyTopic: row.reply_topic,
@@ -2780,6 +2793,7 @@ function listMailboxJobEntries(
                     entry.external_id,
                     entry.sender,
                     entry.body,
+                    entry.reply_context_json,
                     entry.reply_channel,
                     entry.reply_target,
                     entry.reply_topic,
@@ -2806,6 +2820,7 @@ function listMailboxJobEntries(
                     external_id: row.external_id,
                     sender: row.sender,
                     body: row.body,
+                    reply_context_json: row.reply_context_json,
                     reply_channel: row.reply_channel,
                     reply_target: row.reply_target,
                     reply_topic: row.reply_topic,
@@ -2919,6 +2934,67 @@ function encodeMailboxToolSections(
     return JSON.stringify(toolSections)
 }
 
+function encodeMailboxReplyContext(replyContext: BindingReplyContext | null): string | null {
+    if (replyContext === null) {
+        return null
+    }
+
+    return JSON.stringify(replyContext)
+}
+
+function parseMailboxReplyContext(value: string | null): BindingReplyContext | null {
+    if (value === null || value.trim().length === 0) {
+        return null
+    }
+
+    const parsed = JSON.parse(value)
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("mailbox reply context must be an object")
+    }
+
+    const messageId = readRequiredStoredObjectStringField(parsed, "messageId", "replyContext")
+    const sender = readOptionalStoredObjectStringField(parsed, "sender", "replyContext")
+    const rawSenderIsBot = (parsed as Record<string, unknown>).senderIsBot
+    const rawTextTruncated = (parsed as Record<string, unknown>).textTruncated
+    const rawAttachments = (parsed as Record<string, unknown>).attachments
+
+    if (rawSenderIsBot !== null && rawSenderIsBot !== undefined && typeof rawSenderIsBot !== "boolean") {
+        throw new Error("replyContext.senderIsBot must be null, undefined, or boolean")
+    }
+    if (typeof rawTextTruncated !== "boolean") {
+        throw new Error("replyContext.textTruncated must be boolean")
+    }
+    if (!Array.isArray(rawAttachments)) {
+        throw new Error("replyContext.attachments must be an array")
+    }
+
+    return {
+        messageId,
+        sender,
+        senderIsBot: rawSenderIsBot ?? null,
+        text: readOptionalStoredObjectStringField(parsed, "text", "replyContext"),
+        textTruncated: rawTextTruncated,
+        attachments: rawAttachments.map((attachment, index) => parseMailboxReplyContextAttachment(attachment, index)),
+    }
+}
+
+function parseMailboxReplyContextAttachment(value: unknown, index: number): BindingReplyContext["attachments"][number] {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+        throw new Error(`replyContext.attachments[${index}] must be an object`)
+    }
+
+    const kind = readRequiredStoredObjectStringField(value, "kind", `replyContext.attachments[${index}]`)
+    if (kind !== "image") {
+        throw new Error(`replyContext.attachments[${index}].kind must be image`)
+    }
+
+    return {
+        kind: "image",
+        mimeType: readOptionalStoredObjectStringField(value, "mimeType", `replyContext.attachments[${index}]`),
+        fileName: readOptionalStoredObjectStringField(value, "fileName", `replyContext.attachments[${index}]`),
+    }
+}
+
 function parseMailboxToolSections(value: string | null): NonNullable<BindingDeferredPreviewContext["toolSections"]> {
     if (value === null || value.trim().length === 0) {
         return []
@@ -2999,6 +3075,7 @@ function deleteMailboxJobEntries(db: SqliteDatabaseLike, jobId: number): Mailbox
                     entry.external_id,
                     entry.sender,
                     entry.body,
+                    entry.reply_context_json,
                     entry.reply_channel,
                     entry.reply_target,
                     entry.reply_topic,

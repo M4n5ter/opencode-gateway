@@ -19,6 +19,7 @@ pub use execution::{
 pub use message::{
     DeliveryTarget, InboundAttachment, InboundAttachmentKind, InboundMessage,
     MessageValidationError, OutboundMessage, PromptPart, PromptRequest, PromptSource,
+    ReplyAttachmentKind, ReplyAttachmentSummary, ReplyContext,
 };
 pub use progressive::{ProgressiveDirective, ProgressiveMode, ProgressivePreview, ProgressiveTextState};
 pub use status::GatewayStatus;

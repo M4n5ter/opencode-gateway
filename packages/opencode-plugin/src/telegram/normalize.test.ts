@@ -39,6 +39,7 @@ test("normalizeTelegramUpdate accepts allowlisted private text messages", () => 
             sender: "telegram:42",
             text: "hello",
             attachments: [],
+            replyContext: null,
         },
     })
 })
@@ -91,8 +92,101 @@ test("normalizeTelegramUpdate accepts allowlisted photo messages with caption", 
                     fileName: null,
                 },
             ],
+            replyContext: null,
         },
     })
+})
+
+test("normalizeTelegramUpdate captures direct reply context for the replied message", () => {
+    const result = normalizeTelegramUpdate(
+        {
+            update_id: 15,
+            message: {
+                message_id: 7,
+                text: "please revise it",
+                reply_to_message: {
+                    message_id: 6,
+                    text: "first draft",
+                    from: { id: 900, is_bot: true },
+                },
+                from: { id: 42 },
+                chat: { id: 42, type: "private" },
+            },
+        },
+        allowlist,
+    )
+
+    expect(result).toEqual({
+        kind: "message",
+        chatType: "private",
+        message: {
+            mailboxKey: null,
+            deliveryTarget: {
+                channel: "telegram",
+                target: "42",
+                topic: null,
+            },
+            sender: "telegram:42",
+            text: "please revise it",
+            attachments: [],
+            replyContext: {
+                messageId: "6",
+                sender: "telegram:900",
+                senderIsBot: true,
+                text: "first draft",
+                textTruncated: false,
+                attachments: [],
+            },
+        },
+    })
+})
+
+test("normalizeTelegramUpdate truncates long reply text and summarizes reply image attachments", () => {
+    const result = normalizeTelegramUpdate(
+        {
+            update_id: 16,
+            message: {
+                message_id: 8,
+                text: "follow up",
+                reply_to_message: {
+                    message_id: 7,
+                    caption: "x".repeat(1_600),
+                    document: {
+                        file_id: "doc-2",
+                        file_name: "photo.png",
+                        mime_type: "image/png",
+                    },
+                    from: { id: 77, is_bot: false },
+                },
+                from: { id: 42 },
+                chat: { id: 42, type: "private" },
+            },
+        },
+        allowlist,
+    )
+
+    expect(result).toMatchObject({
+        kind: "message",
+        message: {
+            replyContext: {
+                messageId: "7",
+                sender: "telegram:77",
+                senderIsBot: false,
+                textTruncated: true,
+                attachments: [
+                    {
+                        kind: "image",
+                        mimeType: "image/png",
+                        fileName: "photo.png",
+                    },
+                ],
+            },
+        },
+    })
+    expect(result.kind).toBe("message")
+    if (result.kind === "message") {
+        expect(result.message.replyContext?.text).toHaveLength(1_500)
+    }
 })
 
 test("normalizeTelegramUpdate preserves Telegram topics and mailbox overrides", () => {
@@ -146,6 +240,7 @@ test("normalizeTelegramUpdate preserves Telegram topics and mailbox overrides", 
                     fileName: "chart.png",
                 },
             ],
+            replyContext: null,
         },
     })
 })
@@ -189,7 +284,7 @@ test("normalizeTelegramUpdate ignores bot, unsupported, and non-allowlisted mess
     expect(
         normalizeTelegramUpdate(
             {
-                update_id: 15,
+                update_id: 17,
                 message: {
                     message_id: 6,
                     text: "hello",

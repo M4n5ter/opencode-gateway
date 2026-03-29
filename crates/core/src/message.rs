@@ -10,6 +10,7 @@ use crate::{ChannelKind, ConversationKey, CronJobId, TargetKey};
 pub enum MessageValidationError {
     EmptySender,
     EmptyContent,
+    EmptyReplyMessageId,
     EmptyAttachmentMimeType,
     EmptyAttachmentLocalPath,
 }
@@ -21,6 +22,7 @@ impl Display for MessageValidationError {
             Self::EmptyContent => {
                 f.write_str("message must include non-empty text or at least one attachment")
             }
+            Self::EmptyReplyMessageId => f.write_str("reply message id must not be empty"),
             Self::EmptyAttachmentMimeType => {
                 f.write_str("message attachment mime type must not be empty")
             }
@@ -94,12 +96,67 @@ impl InboundAttachment {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReplyAttachmentKind {
+    Image,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplyAttachmentSummary {
+    pub kind: ReplyAttachmentKind,
+    pub mime_type: Option<String>,
+    pub file_name: Option<String>,
+}
+
+impl ReplyAttachmentSummary {
+    pub fn image(mime_type: Option<String>, file_name: Option<String>) -> Self {
+        Self {
+            kind: ReplyAttachmentKind::Image,
+            mime_type: normalize_optional_text(mime_type),
+            file_name: normalize_optional_text(file_name),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplyContext {
+    pub message_id: String,
+    pub sender: Option<String>,
+    pub sender_is_bot: Option<bool>,
+    pub text: Option<String>,
+    pub text_truncated: bool,
+    pub attachments: Vec<ReplyAttachmentSummary>,
+}
+
+impl ReplyContext {
+    pub fn new(
+        message_id: impl Into<String>,
+        sender: Option<String>,
+        sender_is_bot: Option<bool>,
+        text: Option<String>,
+        text_truncated: bool,
+        attachments: Vec<ReplyAttachmentSummary>,
+    ) -> Result<Self, MessageValidationError> {
+        let message_id = normalize_reply_message_id(&message_id.into())?;
+
+        Ok(Self {
+            message_id,
+            sender: normalize_optional_text(sender),
+            sender_is_bot,
+            text: normalize_optional_text(text),
+            text_truncated,
+            attachments,
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InboundMessage {
     pub delivery_target: DeliveryTarget,
     pub sender: String,
     pub text: Option<String>,
     pub attachments: Vec<InboundAttachment>,
+    pub reply_context: Option<ReplyContext>,
     conversation_key_override: Option<ConversationKey>,
 }
 
@@ -131,6 +188,7 @@ impl InboundMessage {
             sender,
             text,
             attachments,
+            reply_context: None,
             conversation_key_override: None,
         })
     }
@@ -150,6 +208,10 @@ impl InboundMessage {
         let conversation_key = normalize_body(&conversation_key.into())?;
         self.conversation_key_override = Some(ConversationKey::for_override(conversation_key));
         Ok(())
+    }
+
+    pub fn set_reply_context(&mut self, reply_context: ReplyContext) {
+        self.reply_context = Some(reply_context);
     }
 }
 
@@ -251,6 +313,15 @@ fn normalize_sender(value: &str) -> Result<String, MessageValidationError> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return Err(MessageValidationError::EmptySender);
+    }
+
+    Ok(trimmed.to_owned())
+}
+
+fn normalize_reply_message_id(value: &str) -> Result<String, MessageValidationError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(MessageValidationError::EmptyReplyMessageId);
     }
 
     Ok(trimmed.to_owned())

@@ -86,12 +86,28 @@ export type BindingInboundAttachment = {
     localPath: string
 }
 
+export type BindingReplyContextAttachment = {
+    kind: "image"
+    mimeType: string | null
+    fileName: string | null
+}
+
+export type BindingReplyContext = {
+    messageId: string
+    sender: string | null
+    senderIsBot: boolean | null
+    text: string | null
+    textTruncated: boolean
+    attachments: BindingReplyContextAttachment[]
+}
+
 export type BindingInboundMessage = {
     deliveryTarget: BindingDeliveryTarget
     sender: string
     text: string | null
     attachments: BindingInboundAttachment[]
     mailboxKey?: string | null
+    replyContext?: BindingReplyContext | null
 }
 
 export type BindingPromptPart =

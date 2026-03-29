@@ -58,6 +58,7 @@ test("sqlite store persists session bindings, offsets, and cron catalog state", 
                 sender: "telegram:7",
                 text: "hello",
                 attachments: [],
+                replyContext: null,
                 replyChannel: "telegram",
                 replyTarget: "42",
                 replyTopic: null,
@@ -194,6 +195,76 @@ test("sqlite store persists mailbox entry attachments alongside text", () => {
                         localPath: "/tmp/photo.png",
                     },
                 ],
+                replyContext: null,
+                replyChannel: "telegram",
+                replyTarget: "42",
+                replyTopic: null,
+                createdAtMs: 1,
+            },
+        ])
+    } finally {
+        db.close()
+    }
+})
+
+test("sqlite store persists mailbox entry reply context", () => {
+    const db = createMemoryDatabase()
+
+    try {
+        migrateGatewayDatabase(db)
+        const store = new SqliteStore(db)
+
+        store.enqueueMailboxEntry({
+            mailboxKey: "telegram:42",
+            sourceKind: "telegram_update",
+            externalId: "201",
+            sender: "telegram:7",
+            text: "follow up",
+            attachments: [],
+            replyContext: {
+                messageId: "99",
+                sender: "telegram:42",
+                senderIsBot: true,
+                text: "first answer",
+                textTruncated: false,
+                attachments: [
+                    {
+                        kind: "image",
+                        mimeType: "image/png",
+                        fileName: "chart.png",
+                    },
+                ],
+            },
+            replyChannel: "telegram",
+            replyTarget: "42",
+            replyTopic: null,
+            recordedAtMs: 1,
+        })
+
+        expect(store.listMailboxEntries("telegram:42")).toEqual([
+            {
+                id: 1,
+                mailboxKey: "telegram:42",
+                ingressState: "ready",
+                sourceKind: "telegram_update",
+                externalId: "201",
+                sender: "telegram:7",
+                text: "follow up",
+                attachments: [],
+                replyContext: {
+                    messageId: "99",
+                    sender: "telegram:42",
+                    senderIsBot: true,
+                    text: "first answer",
+                    textTruncated: false,
+                    attachments: [
+                        {
+                            kind: "image",
+                            mimeType: "image/png",
+                            fileName: "chart.png",
+                        },
+                    ],
+                },
                 replyChannel: "telegram",
                 replyTarget: "42",
                 replyTopic: null,

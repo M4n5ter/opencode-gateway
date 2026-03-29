@@ -27,6 +27,7 @@ export class TelegramInboundMediaStore {
                 ),
             ),
             mailboxKey: message.mailboxKey,
+            ...(message.replyContext == null ? {} : { replyContext: message.replyContext }),
         }
     }
 

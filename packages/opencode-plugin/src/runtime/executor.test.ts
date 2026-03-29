@@ -245,6 +245,109 @@ test("GatewayExecutor appends earlier prompts and forwards progressive previews 
     }
 })
 
+test("GatewayExecutor preserves reply context when replaying mailbox entries", async () => {
+    const db = createMemoryDatabase()
+    const now = 1_735_689_600_000
+    const restoreNow = mockDateNow(now)
+
+    try {
+        migrateGatewayDatabase(db)
+        const store = new SqliteStore(db)
+        const events = new OpencodeEventHub()
+        const capturedReplyContexts: Array<BindingInboundMessage["replyContext"]> = []
+
+        const executor = new GatewayExecutor(
+            {
+                ...createModule(),
+                prepareInboundExecution(message: BindingInboundMessage): BindingPreparedExecution {
+                    capturedReplyContexts.push(message.replyContext ?? null)
+                    return {
+                        conversationKey: `telegram:${message.deliveryTarget.target}`,
+                        promptParts: createTextPromptParts(`mailbox:${now}`, message.text ?? ""),
+                        replyTarget: message.deliveryTarget,
+                    }
+                },
+            },
+            store,
+            {
+                async execute(command: BindingOpencodeCommand): Promise<BindingOpencodeCommandResult> {
+                    switch (command.kind) {
+                        case "createSession":
+                            return { kind: "createSession", sessionId: "ses_reply" }
+                        case "waitUntilIdle":
+                            return { kind: "waitUntilIdle", sessionId: command.sessionId }
+                        case "sendPromptAsync":
+                            events.handleEvent(
+                                createAssistantMessageUpdatedEvent(
+                                    command.sessionId,
+                                    "msg_assistant_reply",
+                                    command.messageId,
+                                ),
+                            )
+                            return { kind: "sendPromptAsync", sessionId: command.sessionId }
+                        case "awaitPromptResponse":
+                            return createAwaitPromptResponseResult(command.sessionId, "msg_assistant_reply", "done")
+                        case "appendPrompt":
+                            throw new Error("unused")
+                        case "lookupSession":
+                            throw new Error("unused")
+                    }
+                },
+                async isSessionBusy() {
+                    return false
+                },
+                async abortSession(): Promise<void> {},
+            },
+            events,
+            {
+                async openMany() {
+                    return [
+                        {
+                            mode: "oneshot" as const,
+                            async preview(): Promise<void> {},
+                            async finish(): Promise<boolean> {
+                                return true
+                            },
+                            async handoffFinalDelivery() {
+                                return { strategy: { mode: "send" }, previewContext: null }
+                            },
+                        },
+                    ]
+                },
+            },
+            new MemoryLogger(),
+        )
+
+        await executor.executeMailboxEntries([
+            {
+                ...createMailboxEntry(1, "follow up"),
+                replyContext: {
+                    messageId: "77",
+                    sender: "telegram:42",
+                    senderIsBot: true,
+                    text: "prior answer",
+                    textTruncated: false,
+                    attachments: [],
+                },
+            },
+        ])
+
+        expect(capturedReplyContexts).toEqual([
+            {
+                messageId: "77",
+                sender: "telegram:42",
+                senderIsBot: true,
+                text: "prior answer",
+                textTruncated: false,
+                attachments: [],
+            },
+        ])
+    } finally {
+        restoreNow()
+        db.close()
+    }
+})
+
 test("GatewayExecutor injects the route-scoped primary agent into appended and async prompts", async () => {
     const db = createMemoryDatabase()
     const now = 1_735_689_600_000
@@ -870,6 +973,7 @@ function createMailboxEntry(id: number, text: string): MailboxEntryRecord {
         sender: "telegram:7",
         text,
         attachments: [],
+        replyContext: null,
         replyChannel: "telegram",
         replyTarget: "42",
         replyTopic: null,

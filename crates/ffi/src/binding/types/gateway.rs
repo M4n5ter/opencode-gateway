@@ -1,6 +1,6 @@
 use opencode_gateway_core::{
     CronJobSpec, DeliveryTarget, GatewayStatus, InboundAttachment, InboundMessage,
-    PreparedExecution, PromptPart, TargetKey,
+    PreparedExecution, PromptPart, ReplyAttachmentSummary, ReplyContext, TargetKey,
 };
 use serde::{Deserialize, Serialize};
 
@@ -171,6 +171,7 @@ pub struct BindingInboundMessage {
     pub text: Option<String>,
     pub attachments: Vec<BindingInboundAttachment>,
     pub mailbox_key: Option<String>,
+    pub reply_context: Option<BindingReplyContext>,
 }
 
 impl TryFrom<BindingInboundMessage> for InboundMessage {
@@ -200,8 +201,70 @@ impl TryFrom<BindingInboundMessage> for InboundMessage {
                 .set_conversation_key_override(mailbox_key)
                 .map_err(|error| error.to_string())?;
         }
+        if let Some(reply_context) = value.reply_context {
+            message.set_reply_context(reply_context.try_into()?);
+        }
 
         Ok(message)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BindingReplyContext {
+    pub message_id: String,
+    pub sender: Option<String>,
+    pub sender_is_bot: Option<bool>,
+    pub text: Option<String>,
+    pub text_truncated: bool,
+    pub attachments: Vec<BindingReplyContextAttachment>,
+}
+
+impl TryFrom<BindingReplyContext> for ReplyContext {
+    type Error = String;
+
+    fn try_from(value: BindingReplyContext) -> Result<Self, Self::Error> {
+        let attachments = value
+            .attachments
+            .into_iter()
+            .map(ReplyAttachmentSummary::try_from)
+            .collect::<Result<Vec<_>, _>>()?;
+
+        ReplyContext::new(
+            value.message_id,
+            normalize_optional_identifier(value.sender),
+            value.sender_is_bot,
+            normalize_optional_identifier(value.text),
+            value.text_truncated,
+            attachments,
+        )
+        .map_err(|error| error.to_string())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum BindingReplyContextAttachment {
+    Image {
+        mime_type: Option<String>,
+        file_name: Option<String>,
+    },
+}
+
+impl TryFrom<BindingReplyContextAttachment> for ReplyAttachmentSummary {
+    type Error = String;
+
+    fn try_from(value: BindingReplyContextAttachment) -> Result<Self, Self::Error> {
+        match value {
+            BindingReplyContextAttachment::Image {
+                mime_type,
+                file_name,
+            } => Ok(ReplyAttachmentSummary::image(mime_type, file_name)),
+        }
     }
 }
 

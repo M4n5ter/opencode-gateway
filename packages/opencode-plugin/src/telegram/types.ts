@@ -24,6 +24,16 @@ export type TelegramMessage = {
     document?: TelegramDocument
     from?: TelegramUser
     chat: TelegramChat
+    reply_to_message?: TelegramReplyMessage
+}
+
+export type TelegramReplyMessage = {
+    message_id: number
+    text?: string
+    caption?: string
+    photo?: TelegramPhotoSize[]
+    document?: TelegramDocument
+    from?: TelegramUser
 }
 
 export type TelegramCallbackQuery = {

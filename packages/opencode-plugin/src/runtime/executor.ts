@@ -93,6 +93,7 @@ export class GatewayExecutor {
             sender: normalizeRequiredField(message.sender, "message sender"),
             text: message.text,
             attachments: withAttachmentOrdinals(message.attachments),
+            replyContext: message.replyContext ?? null,
             replyChannel: message.deliveryTarget.channel,
             replyTarget: message.deliveryTarget.target,
             replyTopic: message.deliveryTarget.topic,
@@ -138,6 +139,7 @@ export class GatewayExecutor {
                         sender: entry.message.sender,
                         text: entry.message.text,
                         attachments: entry.message.attachments,
+                        replyContext: entry.message.replyContext ?? null,
                     }),
                 )
             }
@@ -183,6 +185,7 @@ export class GatewayExecutor {
                         sender: entry.message.sender,
                         text: entry.message.text,
                         attachments: entry.message.attachments,
+                        replyContext: entry.message.replyContext ?? null,
                     }),
                 )
             }
@@ -861,6 +864,7 @@ function mailboxEntryToInboundMessage(entry: MailboxEntryRecord): BindingInbound
         text: entry.text,
         attachments: entry.attachments,
         mailboxKey: entry.mailboxKey,
+        ...(entry.replyContext === null ? {} : { replyContext: entry.replyContext }),
     }
 }
 

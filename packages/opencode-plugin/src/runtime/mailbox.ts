@@ -90,6 +90,7 @@ export class GatewayMailboxRuntime {
             sender: message.sender,
             text: message.text,
             attachments: message.attachments,
+            replyContext: message.replyContext ?? null,
             replyChannel: message.deliveryTarget.channel,
             replyTarget: message.deliveryTarget.target,
             replyTopic: message.deliveryTarget.topic,
@@ -102,6 +103,7 @@ export class GatewayMailboxRuntime {
                 sender: message.sender,
                 text: message.text,
                 attachments: message.attachments,
+                replyContext: message.replyContext ?? null,
                 deliveryTarget: message.deliveryTarget,
             }),
         )

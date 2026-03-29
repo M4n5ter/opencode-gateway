@@ -5,8 +5,11 @@ import type {
     TelegramChatType,
     TelegramDocument,
     TelegramPhotoSize,
+    TelegramReplyMessage,
     TelegramUpdate,
 } from "./types"
+
+const REPLY_CONTEXT_MAX_TEXT_CHARS = 1_500
 
 export type TelegramPendingAttachment = {
     kind: "image"
@@ -22,6 +25,7 @@ export type TelegramNormalizedInboundMessage = {
     sender: string
     text: string | null
     attachments: TelegramPendingAttachment[]
+    replyContext: BindingInboundMessage["replyContext"]
 }
 
 export type TelegramNormalizedUpdate =
@@ -99,6 +103,7 @@ export function normalizeTelegramUpdate(
 
     const attachments = extractAttachments(message.photo, message.document)
     const text = normalizeOptionalText(message.text ?? message.caption ?? null)
+    const replyContext = normalizeReplyContext(message.reply_to_message)
     if (text === null && attachments.length === 0) {
         return ignored("message has no supported content")
     }
@@ -112,6 +117,7 @@ export function normalizeTelegramUpdate(
             sender: `telegram:${userId}`,
             text,
             attachments,
+            replyContext,
         },
     }
 }
@@ -171,6 +177,49 @@ function extractAttachments(
     return []
 }
 
+function normalizeReplyContext(reply: TelegramReplyMessage | undefined): BindingInboundMessage["replyContext"] {
+    if (!reply) {
+        return null
+    }
+
+    const normalizedText = normalizeReplyText(reply.text ?? reply.caption ?? null)
+    return {
+        messageId: String(reply.message_id),
+        sender: reply.from ? `telegram:${reply.from.id}` : null,
+        senderIsBot: reply.from?.is_bot ?? null,
+        text: normalizedText.text,
+        textTruncated: normalizedText.truncated,
+        attachments: extractReplyAttachments(reply.photo, reply.document),
+    }
+}
+
+function extractReplyAttachments(
+    photo: TelegramPhotoSize[] | undefined,
+    document: TelegramDocument | undefined,
+): NonNullable<BindingInboundMessage["replyContext"]>["attachments"] {
+    if (Array.isArray(photo) && photo.length > 0) {
+        return [
+            {
+                kind: "image",
+                mimeType: null,
+                fileName: null,
+            },
+        ]
+    }
+
+    if (document?.mime_type?.startsWith("image/") === true) {
+        return [
+            {
+                kind: "image",
+                mimeType: document.mime_type,
+                fileName: normalizeOptionalText(document.file_name ?? null),
+            },
+        ]
+    }
+
+    return []
+}
+
 function selectLargestPhoto(photo: TelegramPhotoSize[] | undefined): TelegramPendingAttachment | null {
     if (!Array.isArray(photo) || photo.length === 0) {
         return null
@@ -204,4 +253,26 @@ function normalizeOptionalText(value: string | null): string | null {
 
     const trimmed = value.trim()
     return trimmed.length === 0 ? null : trimmed
+}
+
+function normalizeReplyText(value: string | null): { text: string | null; truncated: boolean } {
+    const normalized = normalizeOptionalText(value)
+    if (normalized === null) {
+        return {
+            text: null,
+            truncated: false,
+        }
+    }
+
+    if (normalized.length <= REPLY_CONTEXT_MAX_TEXT_CHARS) {
+        return {
+            text: normalized,
+            truncated: false,
+        }
+    }
+
+    return {
+        text: normalized.slice(0, REPLY_CONTEXT_MAX_TEXT_CHARS).trimEnd(),
+        truncated: true,
+    }
 }

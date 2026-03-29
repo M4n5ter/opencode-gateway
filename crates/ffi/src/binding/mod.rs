@@ -17,5 +17,5 @@ pub use types::{
     BindingOpencodeCommandPart, BindingOpencodeCommandResult, BindingOpencodeDriverStep,
     BindingOpencodeExecutionInput, BindingOpencodeMessage, BindingOpencodeMessagePart,
     BindingOpencodePrompt, BindingPreparedExecution, BindingProgressiveDirective,
-    BindingPromptPart,
+    BindingPromptPart, BindingReplyContext, BindingReplyContextAttachment,
 };

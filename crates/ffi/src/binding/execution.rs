@@ -55,7 +55,10 @@ fn js_error(message: impl Into<String>) -> JsValue {
 
 #[cfg(test)]
 mod tests {
-    use crate::binding::{BindingDeliveryTarget, BindingInboundMessage, BindingPromptPart};
+    use crate::binding::{
+        BindingDeliveryTarget, BindingInboundMessage, BindingPromptPart, BindingReplyContext,
+        BindingReplyContextAttachment,
+    };
 
     use super::{BindingCronJobSpec, BindingPreparedExecution};
     use super::{prepare_cron_execution_value, prepare_inbound_execution_value};
@@ -72,6 +75,7 @@ mod tests {
             text: Some("hello".to_owned()),
             attachments: vec![],
             mailbox_key: None,
+            reply_context: None,
         })
         .expect("prepared");
 
@@ -125,9 +129,56 @@ mod tests {
             text: Some("hello".to_owned()),
             attachments: vec![],
             mailbox_key: Some("shared:mailbox".to_owned()),
+            reply_context: None,
         })
         .expect("prepared");
 
         assert_eq!(prepared.conversation_key, "shared:mailbox");
+    }
+
+    #[test]
+    fn prepare_inbound_execution_prepends_reply_context() {
+        let prepared = prepare_inbound_execution_value(BindingInboundMessage {
+            delivery_target: BindingDeliveryTarget {
+                channel: "telegram".to_owned(),
+                target: "42".to_owned(),
+                topic: None,
+            },
+            sender: "telegram:7".to_owned(),
+            text: Some("follow up".to_owned()),
+            attachments: vec![],
+            mailbox_key: None,
+            reply_context: Some(BindingReplyContext {
+                message_id: "77".to_owned(),
+                sender: Some("telegram:42".to_owned()),
+                sender_is_bot: Some(true),
+                text: Some("prior answer".to_owned()),
+                text_truncated: false,
+                attachments: vec![BindingReplyContextAttachment::Image {
+                    mime_type: Some("image/png".to_owned()),
+                    file_name: Some("chart.png".to_owned()),
+                }],
+            }),
+        })
+        .expect("prepared");
+
+        assert_eq!(prepared.prompt_parts.len(), 2);
+        match &prepared.prompt_parts[0] {
+            BindingPromptPart::Text { text } => {
+                assert!(text.contains("[Gateway reply context]"));
+                assert!(text.contains("reply_message_id=77"));
+                assert!(text.contains("reply_sender=telegram:42"));
+                assert!(text.contains("reply_sender_is_bot=true"));
+                assert!(text.contains("reply_attachment_1=image mime_type=image/png file_name=chart.png"));
+                assert!(text.contains("[Quoted message]\nprior answer"));
+            }
+            other => panic!("expected text prompt part, got {other:?}"),
+        }
+        assert_eq!(
+            prepared.prompt_parts[1],
+            BindingPromptPart::Text {
+                text: "follow up".to_owned(),
+            }
+        );
     }
 }

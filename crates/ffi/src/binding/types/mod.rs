@@ -10,7 +10,8 @@ use opencode_gateway_runtime::OpencodeCommandErrorCode;
 pub use execution::{BindingExecutionObservation, BindingProgressiveDirective};
 pub use gateway::{
     BindingCronJobSpec, BindingDeliveryTarget, BindingGatewayStatus, BindingInboundAttachment,
-    BindingInboundMessage, BindingPreparedExecution, BindingPromptPart,
+    BindingInboundMessage, BindingPreparedExecution, BindingPromptPart, BindingReplyContext,
+    BindingReplyContextAttachment,
 };
 pub use opencode::{
     BindingOpencodeCommand, BindingOpencodeCommandPart, BindingOpencodeCommandResult,

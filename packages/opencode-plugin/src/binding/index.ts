@@ -26,6 +26,8 @@ export type {
     BindingOutboundMessage,
     BindingPreparedExecution,
     BindingPromptPart,
+    BindingReplyContext,
+    BindingReplyContextAttachment,
     BindingTransportHost,
     GatewayContract,
     GatewayStatusSnapshot,
