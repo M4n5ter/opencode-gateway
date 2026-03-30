@@ -1,17 +1,19 @@
 use std::error::Error;
 use std::fs;
+use std::net::SocketAddr;
 use std::path::Path;
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::Duration;
 
 use jsonc_parser::parse_to_serde_value;
-use listeners::{Listener, Protocol};
 use serde::Deserialize;
 
 use crate::http::{http_get, percent_encode};
 use crate::options::LauncherOptions;
 use crate::paths::GatewayPaths;
+use crate::port_probe::find_tcp_listeners_for_pid;
 
 pub(crate) const DEFAULT_SERVER_HOST: &str = "127.0.0.1";
 pub(crate) const DEFAULT_SERVER_PORT: u16 = 4096;
@@ -40,7 +42,9 @@ struct OpencodeServerConfig {
 }
 
 pub(crate) fn spawn_managed_opencode(paths: &GatewayPaths) -> Result<Child, Box<dyn Error>> {
-    Ok(Command::new("opencode")
+    let executable = resolve_opencode_executable()?;
+
+    Ok(Command::new(executable)
         .arg("serve")
         .env("OPENCODE_CONFIG", &paths.opencode_config_file)
         .env("OPENCODE_CONFIG_DIR", &paths.opencode_dir)
@@ -50,6 +54,55 @@ pub(crate) fn spawn_managed_opencode(paths: &GatewayPaths) -> Result<Child, Box<
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .spawn()?)
+}
+
+fn resolve_opencode_executable() -> Result<PathBuf, Box<dyn Error>> {
+    if let Some(explicit) = std::env::var_os("OPENCODE_BIN_PATH") {
+        return Ok(PathBuf::from(explicit));
+    }
+
+    let resolved = resolve_path_executable("opencode").unwrap_or_else(|| PathBuf::from("opencode"));
+    if let Some(native) = resolve_native_opencode_sibling(&resolved) {
+        return Ok(native);
+    }
+
+    Ok(resolved)
+}
+
+fn resolve_path_executable(name: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+
+    std::env::split_paths(&path).find_map(|entry| {
+        let candidate = entry.join(name);
+        if candidate.is_file() {
+            return Some(fs::canonicalize(&candidate).unwrap_or(candidate));
+        }
+
+        #[cfg(windows)]
+        {
+            let exe_candidate = entry.join(format!("{name}.exe"));
+            if exe_candidate.is_file() {
+                return Some(fs::canonicalize(&exe_candidate).unwrap_or(exe_candidate));
+            }
+        }
+
+        None
+    })
+}
+
+fn resolve_native_opencode_sibling(path: &Path) -> Option<PathBuf> {
+    let file_name = path.file_name()?.to_str()?;
+    if file_name != "opencode" && file_name != "opencode.exe" {
+        return None;
+    }
+
+    let parent = path.parent()?;
+    let cached = parent.join(".opencode");
+    if cached.is_file() {
+        return Some(cached);
+    }
+
+    None
 }
 
 pub(crate) fn wait_for_child_server_endpoint(
@@ -184,16 +237,10 @@ fn server_has_busy_sessions(endpoint: &ServerEndpoint) -> Result<bool, Box<dyn E
 }
 
 fn inspect_listening_endpoint_for_pid(pid: u32) -> Result<Option<ServerEndpoint>, Box<dyn Error>> {
-    let listeners = listeners::get_all()?;
-    let mut matches = listeners
-        .into_iter()
-        .filter(|listener| listener.process.pid == pid)
-        .filter(|listener| listener.protocol == Protocol::TCP)
-        .filter(|listener| listener.socket.port() != 0)
-        .collect::<Vec<_>>();
+    let mut matches = find_tcp_listeners_for_pid(pid)?;
 
-    matches.sort_by_key(listener_priority);
-    Ok(matches.into_iter().next().map(listener_to_endpoint))
+    matches.sort_by_key(socket_priority);
+    Ok(matches.into_iter().next().map(socket_to_endpoint))
 }
 
 fn is_busy_session_status(value: &serde_json::Value) -> bool {
@@ -203,9 +250,9 @@ fn is_busy_session_status(value: &serde_json::Value) -> bool {
         .is_some_and(|status| status == "busy")
 }
 
-fn listener_priority(listener: &Listener) -> (u8, u16) {
-    let host = listener.socket.ip().to_string();
-    let rank = if listener.socket.ip().is_loopback() {
+fn socket_priority(socket: &SocketAddr) -> (u8, u16) {
+    let host = socket.ip().to_string();
+    let rank = if socket.ip().is_loopback() {
         0
     } else if host == "0.0.0.0" || host == "::" || host == "::0" {
         1
@@ -213,23 +260,26 @@ fn listener_priority(listener: &Listener) -> (u8, u16) {
         2
     };
 
-    (rank, listener.socket.port())
+    (rank, socket.port())
 }
 
-fn listener_to_endpoint(listener: Listener) -> ServerEndpoint {
-    let host = listener.socket.ip().to_string();
+fn socket_to_endpoint(socket: SocketAddr) -> ServerEndpoint {
+    let host = socket.ip().to_string();
     ServerEndpoint {
         connect_host: normalize_connect_host(&host),
         host,
-        port: listener.socket.port(),
+        port: socket.port(),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use listeners::{Listener, Process, Protocol};
+    use std::net::SocketAddr;
+    use std::path::Path;
 
-    use super::{ServerEndpoint, listener_to_endpoint, normalize_connect_host};
+    use super::{
+        ServerEndpoint, normalize_connect_host, resolve_native_opencode_sibling, socket_to_endpoint,
+    };
 
     #[test]
     fn normalize_connect_host_maps_wildcard_hosts_to_loopback() {
@@ -240,24 +290,33 @@ mod tests {
     }
 
     #[test]
-    fn listener_to_endpoint_normalizes_unspecified_addresses() {
-        let listener = Listener {
-            process: Process {
-                pid: 1,
-                name: "opencode".to_owned(),
-                path: "/bin/opencode".to_owned(),
-            },
-            socket: "0.0.0.0:43123".parse().expect("socket should parse"),
-            protocol: Protocol::TCP,
-        };
+    fn socket_to_endpoint_normalizes_unspecified_addresses() {
+        let socket: SocketAddr = "0.0.0.0:43123".parse().expect("socket should parse");
 
         assert_eq!(
-            listener_to_endpoint(listener),
+            socket_to_endpoint(socket),
             ServerEndpoint {
                 host: "0.0.0.0".to_owned(),
                 connect_host: "127.0.0.1".to_owned(),
                 port: 43123,
             }
         );
+    }
+
+    #[test]
+    fn resolve_native_opencode_sibling_prefers_cached_binary_next_to_wrapper() {
+        let temp =
+            std::env::temp_dir().join(format!("opencode-launcher-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).expect("temp dir should be created");
+        std::fs::write(temp.join(".opencode"), "").expect("cached binary marker should be created");
+
+        let wrapper = temp.join("opencode");
+        assert_eq!(
+            resolve_native_opencode_sibling(Path::new(&wrapper)),
+            Some(temp.join(".opencode"))
+        );
+
+        let _ = std::fs::remove_dir_all(&temp);
     }
 }

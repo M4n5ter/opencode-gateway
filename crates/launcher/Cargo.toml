@@ -8,7 +8,9 @@ rust-version.workspace = true
 
 [dependencies]
 jsonc-parser = { version = "0.32", features = ["serde"] }
-listeners = "0.5"
 opencode-gateway-core = { path = "../core" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+
+[target."cfg(windows)".dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_NetworkManagement_IpHelper"] }

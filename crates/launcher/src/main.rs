@@ -2,6 +2,7 @@ mod commands;
 mod http;
 mod options;
 mod paths;
+mod port_probe;
 mod restart;
 mod server;
 mod workspace;
