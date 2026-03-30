@@ -8,7 +8,7 @@ export function createGatewayStatusTool(runtime: GatewayPluginRuntime): ToolDefi
         description: "Return the current Rust gateway contract status",
         args: {},
         async execute() {
-            return formatGatewayStatus(runtime.status())
+            return formatGatewayStatus(await runtime.status())
         },
     })
 }
@@ -26,5 +26,12 @@ function formatGatewayStatus(status: GatewayPluginStatus): string {
         `telegram_enabled=${status.telegramEnabled}`,
         `telegram_polling=${status.telegramPolling}`,
         `telegram_allowlist_mode=${status.telegramAllowlistMode}`,
+        `restart_supported=${status.restartSupported}`,
+        `restart_managed=${status.restartManaged}`,
+        `restart_state=${status.restartState}`,
+        `restart_pending=${status.restartPending}`,
+        `restart_requested_at_ms=${status.restartRequestedAtMs ?? "none"}`,
+        `restart_completed_at_ms=${status.restartCompletedAtMs ?? "none"}`,
+        `restart_last_error=${status.restartLastError ?? "none"}`,
     ].join("\n")
 }

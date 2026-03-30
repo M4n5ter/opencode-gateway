@@ -24,6 +24,8 @@
   ],
   "scripts": {
     "build": "node ./scripts/build.mjs",
+    "build:launcher": "node ./scripts/build-launcher.mjs",
+    "build:launcher:all": "node ./scripts/build-launcher.mjs --all",
     "build:wasm": "node ../../scripts/build-binding.mjs",
     "check": "tsc --noEmit --project tsconfig.json && bun test src && node ./scripts/build.mjs && node ./scripts/smoke-node-import.mjs && bun ./scripts/smoke-bun-import.mjs",
     "prepack": "npm run build:wasm && npm run build",

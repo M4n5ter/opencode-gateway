@@ -1,12 +1,12 @@
 use opencode_gateway_core::{
-    ExecutionObservation, ExecutionPartKind, ExecutionRole, ProgressiveDirective,
-    ProgressiveMode, ProgressivePreview,
+    ExecutionObservation, ExecutionPartKind, ExecutionRole, ProgressiveDirective, ProgressiveMode,
+    ProgressivePreview,
 };
 
 use crate::{
     OpencodeCommand, OpencodeCommandErrorCode, OpencodeCommandPart, OpencodeCommandResult,
-    OpencodeDriverStep, OpencodeExecutionDriver, OpencodeExecutionInput, OpencodeMessagePart, OpencodePrompt,
-    OpencodePromptPart,
+    OpencodeDriverStep, OpencodeExecutionDriver, OpencodeExecutionInput, OpencodeMessagePart,
+    OpencodePrompt, OpencodePromptPart,
 };
 
 #[test]
@@ -100,7 +100,10 @@ fn missing_session_error_retries_once_from_persisted_binding() {
 
 #[test]
 fn timeout_error_fails_driver_without_retrying() {
-    let mut driver = create_driver(Some("ses_stale"), vec![create_text_prompt("mailbox:1", "hello")]);
+    let mut driver = create_driver(
+        Some("ses_stale"),
+        vec![create_text_prompt("mailbox:1", "hello")],
+    );
 
     let _ = driver.start();
     let _ = driver.resume(OpencodeCommandResult::LookupSession {

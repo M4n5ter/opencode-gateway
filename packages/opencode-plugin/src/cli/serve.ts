@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process"
 import { ensureGatewayWorkspaceScaffold } from "../workspace/scaffold"
-import { resolveServeTarget, warmGatewayProject } from "./opencode-server"
+import { resolveServerEndpointForPid, resolveServeTarget, warmGatewayProject } from "./opencode-server"
 
 type ServeOptions = {
     managed: boolean
@@ -15,14 +15,22 @@ export async function runServe(options: ServeOptions, env: Record<string, string
         env: {
             ...process.env,
             ...target.env,
+            OPENCODE_GATEWAY_MANAGED: "1",
+            OPENCODE_GATEWAY_CONTROL_DIR: target.controlDirPath,
         },
     })
 
-    void warmGatewayProject(target).catch((error) => {
-        const message = error instanceof Error ? error.message : String(error)
-        console.warn(`warning: ${message}`)
-        console.warn("warning: the gateway plugin may stay idle until the first project-scoped request")
-    })
+    if (typeof child.pid === "number") {
+        void resolveServerEndpointForPid(child.pid)
+            .then((endpoint) => warmGatewayProject(target, { endpoint }))
+            .catch((error) => {
+                const message = error instanceof Error ? error.message : String(error)
+                console.warn(`warning: ${message}`)
+                console.warn("warning: the gateway plugin may stay idle until the first project-scoped request")
+            })
+    } else {
+        console.warn("warning: failed to determine the spawned OpenCode pid; automatic warm-up is disabled")
+    }
 
     const exitCode = await waitForChild(child)
     if (exitCode !== 0) {

@@ -9,6 +9,7 @@ import { createChannelSendFileTool } from "./tools/channel-send-file"
 import { createCronRunTool } from "./tools/cron-run"
 import { createCronUpsertTool } from "./tools/cron-upsert"
 import { createGatewayDispatchCronTool } from "./tools/gateway-dispatch-cron"
+import { createGatewayRestartTool } from "./tools/gateway-restart"
 import { createGatewayStatusTool } from "./tools/gateway-status"
 import { createMemoryGetTool } from "./tools/memory-get"
 import { createMemorySearchTool } from "./tools/memory-search"
@@ -31,6 +32,7 @@ export const OpencodeGatewayPlugin: Plugin = async (input) => {
         agent_switch: createAgentSwitchTool(runtime.sessionAgents),
         cron_run: createCronRunTool(runtime.cron),
         cron_upsert: createCronUpsertTool(runtime.cron, runtime.sessionContext),
+        gateway_restart: createGatewayRestartTool(runtime.restart),
         gateway_status: createGatewayStatusTool(runtime),
         gateway_dispatch_cron: createGatewayDispatchCronTool(runtime.executor),
         schedule_cancel: createScheduleCancelTool(runtime.cron),

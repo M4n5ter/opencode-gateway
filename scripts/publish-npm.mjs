@@ -11,7 +11,10 @@ runStep("check:binding", "bun", ["run", "check:binding"], repoRoot)
 runStep("check:plugin", "bun", ["run", "check:plugin"], repoRoot)
 runStep("cargo test", "cargo", ["test"], repoRoot)
 runStep("cargo clippy", "cargo", ["clippy", "--all-targets", "--all-features"], repoRoot)
-runStep("npm pack --dry-run", "npm", ["pack", "--dry-run"], packageRoot)
+runStep("npm pack --dry-run", "npm", ["pack", "--dry-run"], packageRoot, {
+    ...process.env,
+    OPENCODE_GATEWAY_BUILD_LAUNCHER_ALL: "1",
+})
 
 if (!options.publish) {
     console.log("dry-run complete; rerun with --publish to publish opencode-gateway")
@@ -26,7 +29,10 @@ if (options.otp !== null) {
     publishArgs.push("--otp", options.otp)
 }
 
-runStep("npm publish", "npm", publishArgs, packageRoot)
+runStep("npm publish", "npm", publishArgs, packageRoot, {
+    ...process.env,
+    OPENCODE_GATEWAY_BUILD_LAUNCHER_ALL: "1",
+})
 
 function parseArgs(argv) {
     let publish = false
@@ -65,9 +71,10 @@ function parseArgs(argv) {
     return { publish, tag, otp }
 }
 
-function run(command, args, cwd) {
+function run(command, args, cwd, env = process.env) {
     const result = spawnSync(command, args, {
         cwd,
+        env,
         stdio: "inherit",
     })
 
@@ -76,7 +83,7 @@ function run(command, args, cwd) {
     }
 }
 
-function runStep(label, command, args, cwd) {
+function runStep(label, command, args, cwd, env) {
     console.log(`[publish:npm] ${label}`)
-    run(command, args, cwd)
+    run(command, args, cwd, env)
 }

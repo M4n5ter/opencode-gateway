@@ -9,6 +9,8 @@ import { pathExists, resolveCliConfigDir } from "./paths"
 type DoctorOptions = {
     managed: boolean
     configDir: string | null
+    serverHost: string | null
+    serverPort: number | null
 }
 
 export async function runDoctor(options: DoctorOptions, env: Record<string, string | undefined>): Promise<void> {
@@ -24,6 +26,8 @@ export async function runDoctor(options: DoctorOptions, env: Record<string, stri
     console.log(`  gateway config: ${await describePath(serveTarget.gatewayConfigPath)}`)
     console.log(`  gateway workspace: ${await describePath(serveTarget.workspaceDirPath)}`)
     console.log(`  warm server: ${serveTarget.serverOrigin}`)
+    console.log(`  warm host: ${serveTarget.serverEndpoint.connectHost}`)
+    console.log(`  warm port: ${serveTarget.serverEndpoint.port}`)
     console.log(`  warm directory: ${serveTarget.workspaceDirPath}`)
     console.log(`  gateway config override: ${gatewayOverride ?? "not set"}`)
     console.log(`  plugin configured: ${opencodeStatus.pluginConfigured}`)

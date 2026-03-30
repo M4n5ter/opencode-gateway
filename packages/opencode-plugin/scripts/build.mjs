@@ -9,6 +9,10 @@ const pluginOutputPath = `${packageRoot}/dist/index.js`
 
 await rm(`${packageRoot}/dist`, { recursive: true, force: true })
 
+run("node", [
+    "./scripts/build-launcher.mjs",
+    ...(process.env.OPENCODE_GATEWAY_BUILD_LAUNCHER_ALL === "1" ? ["--all"] : []),
+])
 run("tsc", ["--project", "tsconfig.build.json", "--emitDeclarationOnly"])
 run("bun", [
     "build",

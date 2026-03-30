@@ -21,6 +21,7 @@ import { ActiveExecutionRegistry } from "./runtime/active-execution"
 import { GatewayExecutor } from "./runtime/executor"
 import { GatewayInflightPolicyRuntime } from "./runtime/inflight-policy"
 import { GatewayMailboxRuntime } from "./runtime/mailbox"
+import { GatewayRestartRuntime, type GatewayRestartStatus } from "./runtime/restart"
 import { getOrCreateRuntimeSingleton } from "./runtime/runtime-singleton"
 import { GatewayToolActivityRuntime } from "./runtime/tool-activity"
 import { GatewaySessionAgentRuntime } from "./session/agent"
@@ -50,6 +51,13 @@ export type GatewayPluginStatus = {
     telegramEnabled: boolean
     telegramPolling: boolean
     telegramAllowlistMode: "disabled" | "explicit"
+    restartSupported: boolean
+    restartManaged: boolean
+    restartState: GatewayRestartStatus["state"]
+    restartPending: boolean
+    restartRequestedAtMs: number | null
+    restartCompletedAtMs: number | null
+    restartLastError: string | null
 }
 
 export class GatewayPluginRuntime {
@@ -62,12 +70,14 @@ export class GatewayPluginRuntime {
         readonly channelSessions: ChannelSessionSwitcher,
         readonly sessionAgents: GatewaySessionAgentRuntime,
         readonly sessionContext: GatewaySessionContext,
+        readonly restart: GatewayRestartRuntime,
         readonly systemPrompts: GatewaySystemPromptBuilder,
         readonly memory: GatewayMemoryRuntime,
     ) {}
 
-    status(): GatewayPluginStatus {
+    async status(): Promise<GatewayPluginStatus> {
         const rustStatus = this.contract.gatewayStatus()
+        const restartStatus = await this.restart.status()
 
         return {
             runtimeMode: rustStatus.runtimeMode,
@@ -81,6 +91,13 @@ export class GatewayPluginRuntime {
             telegramEnabled: this.telegram.isEnabled(),
             telegramPolling: this.telegram.isPolling(),
             telegramAllowlistMode: this.telegram.allowlistMode(),
+            restartSupported: restartStatus.supported,
+            restartManaged: restartStatus.managed,
+            restartState: restartStatus.state,
+            restartPending: restartStatus.pending,
+            restartRequestedAtMs: restartStatus.requestedAtMs,
+            restartCompletedAtMs: restartStatus.completedAtMs,
+            restartLastError: restartStatus.lastError,
         }
     }
 }
@@ -94,6 +111,7 @@ export async function createGatewayRuntime(
     return await getOrCreateRuntimeSingleton(config.configPath, async () => {
         await ensureGatewayWorkspaceScaffold(config.workspaceDirPath)
         const logger = new ConsoleLoggerHost(config.logLevel)
+        const restart = GatewayRestartRuntime.fromEnvironment(process.env)
         if (config.hasLegacyGatewayTimezone) {
             const suffix = config.legacyGatewayTimezone === null ? "" : ` (${config.legacyGatewayTimezone})`
             logger.log("warn", `gateway.timezone${suffix} is ignored; use cron.timezone instead`)
@@ -260,6 +278,7 @@ export async function createGatewayRuntime(
             channelSessions,
             sessionAgents,
             sessionContext,
+            restart,
             systemPrompts,
             memory,
         )

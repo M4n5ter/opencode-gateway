@@ -106,7 +106,10 @@ fn render_reply_context_prompt(reply_context: &ReplyContext) -> String {
             "reply_sender_is_bot={}",
             render_optional_bool(reply_context.sender_is_bot)
         ),
-        format!("reply_text_truncated={}", render_bool(reply_context.text_truncated)),
+        format!(
+            "reply_text_truncated={}",
+            render_bool(reply_context.text_truncated)
+        ),
         format!("reply_attachment_count={}", reply_context.attachments.len()),
     ];
 

@@ -6,6 +6,9 @@ export const OPENCODE_CONFIG_FILE = "opencode.json"
 export const OPENCODE_CONFIG_FILE_JSONC = "opencode.jsonc"
 export const OPENCODE_CONFIG_FILE_CANDIDATES = [OPENCODE_CONFIG_FILE_JSONC, OPENCODE_CONFIG_FILE] as const
 export const GATEWAY_WORKSPACE_DIR = "opencode-gateway-workspace"
+export const GATEWAY_CONTROL_DIR = "control"
+export const GATEWAY_RESTART_REQUEST_FILE = "restart-request.json"
+export const GATEWAY_RESTART_STATUS_FILE = "restart-status.json"
 
 type EnvSource = Record<string, string | undefined>
 
@@ -29,6 +32,15 @@ export function resolveOpencodeConfigDir(env: EnvSource): string {
 
 export function resolveManagedOpencodeConfigDir(env: EnvSource): string {
     return join(resolveConfigHome(env), "opencode-gateway", "opencode")
+}
+
+export function resolveGatewayControlDir(env: EnvSource): string {
+    const explicit = env.OPENCODE_GATEWAY_CONTROL_DIR
+    if (explicit && explicit.trim().length > 0) {
+        return resolve(explicit)
+    }
+
+    return join(resolveOpencodeConfigDir(env), GATEWAY_CONTROL_DIR)
 }
 
 export function resolveGatewayWorkspacePath(configPath: string): string {

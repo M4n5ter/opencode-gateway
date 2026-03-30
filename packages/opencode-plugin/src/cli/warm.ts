@@ -4,6 +4,8 @@ import { resolveServeTarget, warmGatewayProject } from "./opencode-server"
 type WarmOptions = {
     managed: boolean
     configDir: string | null
+    serverHost: string | null
+    serverPort: number | null
 }
 
 export async function runWarm(options: WarmOptions, env: Record<string, string | undefined>): Promise<void> {

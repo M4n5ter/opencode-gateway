@@ -31,9 +31,7 @@ impl ProgressivePreview {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.process_text.is_none()
-            && self.reasoning_text.is_none()
-            && self.answer_text.is_none()
+        self.process_text.is_none() && self.reasoning_text.is_none() && self.answer_text.is_none()
     }
 }
 
@@ -66,7 +64,11 @@ impl ProgressiveTextState {
         }
     }
 
-    pub fn observe_snapshot(&mut self, preview: ProgressivePreview, now_ms: u64) -> ProgressiveDirective {
+    pub fn observe_snapshot(
+        &mut self,
+        preview: ProgressivePreview,
+        now_ms: u64,
+    ) -> ProgressiveDirective {
         if self.finished {
             return ProgressiveDirective::Noop;
         }

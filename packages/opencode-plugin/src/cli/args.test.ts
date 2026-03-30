@@ -12,6 +12,15 @@ test("parseCliCommand accepts serve and warm commands", () => {
         kind: "warm",
         managed: true,
         configDir: null,
+        serverHost: null,
+        serverPort: null,
+    })
+    expect(parseCliCommand(["warm", "--port", "7777"])).toEqual({
+        kind: "warm",
+        managed: false,
+        configDir: null,
+        serverHost: null,
+        serverPort: 7777,
     })
 })
 
@@ -20,4 +29,5 @@ test("formatCliHelp lists serve and warm commands", () => {
 
     expect(help).toContain("opencode-gateway warm")
     expect(help).toContain("opencode-gateway serve")
+    expect(help).toContain("--port <port>")
 })

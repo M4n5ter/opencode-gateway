@@ -21,5 +21,7 @@ pub use message::{
     MessageValidationError, OutboundMessage, PromptPart, PromptRequest, PromptSource,
     ReplyAttachmentKind, ReplyAttachmentSummary, ReplyContext,
 };
-pub use progressive::{ProgressiveDirective, ProgressiveMode, ProgressivePreview, ProgressiveTextState};
+pub use progressive::{
+    ProgressiveDirective, ProgressiveMode, ProgressivePreview, ProgressiveTextState,
+};
 pub use status::GatewayStatus;

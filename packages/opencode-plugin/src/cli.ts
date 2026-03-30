@@ -1,30 +1,80 @@
 #!/usr/bin/env node
 
+import { spawn } from "node:child_process"
+import { access } from "node:fs/promises"
+import { dirname, join, resolve } from "node:path"
+import { fileURLToPath } from "node:url"
+
 import { formatCliHelp, parseCliCommand } from "./cli/args"
-import { runDoctor } from "./cli/doctor"
-import { runInit } from "./cli/init"
-import { runServe } from "./cli/serve"
-import { runWarm } from "./cli/warm"
+
+const launcherName = process.platform === "win32" ? "opencode-gateway-launcher.exe" : "opencode-gateway-launcher"
 
 async function main(): Promise<void> {
     const command = parseCliCommand(process.argv.slice(2))
+    if (command.kind === "help") {
+        console.log(formatCliHelp())
+        return
+    }
 
-    switch (command.kind) {
-        case "help":
-            console.log(formatCliHelp())
-            return
-        case "doctor":
-            await runDoctor(command, process.env)
-            return
-        case "init":
-            await runInit(command, process.env)
-            return
-        case "serve":
-            await runServe(command, process.env)
-            return
-        case "warm":
-            await runWarm(command, process.env)
-            return
+    const binaryPath = resolveNativeLauncherPath()
+    await ensurePathExists(binaryPath)
+
+    const child = spawn(binaryPath, [command.kind], {
+        stdio: "inherit",
+        env: {
+            ...process.env,
+            OPENCODE_GATEWAY_PACKAGE_ROOT: dirname(dirname(fileURLToPath(import.meta.url))),
+            ...launcherEnv(command),
+        },
+    })
+
+    await new Promise<void>((resolvePromise, reject) => {
+        child.once("error", reject)
+        child.once("exit", (code, signal) => {
+            if (signal !== null) {
+                process.exitCode = 1
+            } else {
+                process.exitCode = code ?? 0
+            }
+            resolvePromise()
+        })
+    })
+}
+
+function resolveNativeLauncherPath(): string {
+    const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)))
+    return join(packageRoot, "dist", "native", `${process.platform}-${process.arch}`, launcherName)
+}
+
+function launcherEnv(command: Exclude<ReturnType<typeof parseCliCommand>, { kind: "help" }>): Record<string, string> {
+    const env: Record<string, string> = {}
+
+    if (command.managed) {
+        env.OPENCODE_GATEWAY_LAUNCHER_MANAGED = "1"
+    }
+
+    if (command.configDir !== null) {
+        env.OPENCODE_GATEWAY_LAUNCHER_CONFIG_DIR = resolve(command.configDir)
+    }
+
+    if ("serverHost" in command && command.serverHost !== null) {
+        env.OPENCODE_GATEWAY_LAUNCHER_SERVER_HOST = command.serverHost
+    }
+
+    if ("serverPort" in command && command.serverPort !== null) {
+        env.OPENCODE_GATEWAY_LAUNCHER_SERVER_PORT = String(command.serverPort)
+    }
+
+    return env
+}
+
+async function ensurePathExists(path: string): Promise<void> {
+    try {
+        await access(path)
+    } catch {
+        throw new Error(
+            `native launcher is missing for ${process.platform}-${process.arch}: ${path}. Rebuild the package or run the launcher build step before invoking the CLI`,
+        )
     }
 }
 

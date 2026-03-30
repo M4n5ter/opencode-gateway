@@ -169,7 +169,11 @@ mod tests {
                 assert!(text.contains("reply_message_id=77"));
                 assert!(text.contains("reply_sender=telegram:42"));
                 assert!(text.contains("reply_sender_is_bot=true"));
-                assert!(text.contains("reply_attachment_1=image mime_type=image/png file_name=chart.png"));
+                assert!(
+                    text.contains(
+                        "reply_attachment_1=image mime_type=image/png file_name=chart.png"
+                    )
+                );
                 assert!(text.contains("[Quoted message]\nprior answer"));
             }
             other => panic!("expected text prompt part, got {other:?}"),
