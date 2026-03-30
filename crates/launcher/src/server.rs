@@ -1,9 +1,10 @@
 use std::error::Error;
 use std::fs;
+use std::io::ErrorKind;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::thread;
 use std::time::Duration;
 
@@ -111,7 +112,7 @@ pub(crate) fn wait_for_child_server_endpoint(
     let pid = child.id();
 
     for _ in 0..WARM_ATTEMPTS {
-        if let Some(exit_status) = child.try_wait()? {
+        if let Some(exit_status) = try_wait_running_child(child)? {
             return Err(format!(
                 "opencode serve exited before its listening port was discovered: {exit_status}"
             )
@@ -133,7 +134,7 @@ pub(crate) fn wait_until_server_idle(
     endpoint: &ServerEndpoint,
 ) -> Result<(), Box<dyn Error>> {
     loop {
-        if let Some(exit_status) = child.try_wait()? {
+        if let Some(exit_status) = try_wait_running_child(child)? {
             return Err(
                 format!("opencode serve exited while waiting to restart: {exit_status}").into(),
             );
@@ -144,6 +145,16 @@ pub(crate) fn wait_until_server_idle(
         }
 
         thread::sleep(SUPERVISOR_POLL_INTERVAL);
+    }
+}
+
+pub(crate) fn try_wait_running_child(
+    child: &mut Child,
+) -> Result<Option<ExitStatus>, Box<dyn Error>> {
+    match child.try_wait() {
+        Ok(status) => Ok(status),
+        Err(error) if error.kind() == ErrorKind::WouldBlock => Ok(None),
+        Err(error) => Err(Box::new(error)),
     }
 }
 

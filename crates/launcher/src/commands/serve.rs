@@ -9,8 +9,8 @@ use crate::restart::{
     reset_restart_control_files, write_restart_failure, write_restart_status,
 };
 use crate::server::{
-    SUPERVISOR_POLL_INTERVAL, spawn_managed_opencode, wait_for_child_server_endpoint,
-    wait_until_server_idle, warm_project_instance,
+    SUPERVISOR_POLL_INTERVAL, spawn_managed_opencode, try_wait_running_child,
+    wait_for_child_server_endpoint, wait_until_server_idle, warm_project_instance,
 };
 use crate::workspace::build_binding_if_needed;
 
@@ -26,18 +26,18 @@ pub(crate) fn run_serve(options: &LauncherOptions) -> Result<(), Box<dyn Error>>
     let status = engine.status();
     println!("starting opencode gateway");
     println!("runtime mode: {}", status.runtime_mode);
-    println!("managed config root: {}", paths.opencode_dir.display());
+    println!("opencode config root: {}", paths.opencode_dir.display());
 
     let mut child = spawn_managed_opencode(&paths)?;
     let mut endpoint = wait_for_child_server_endpoint(&mut child)?;
     println!(
-        "managed opencode server: {}:{} (connect via {}:{})",
+        "opencode server: {}:{} (connect via {}:{})",
         endpoint.host, endpoint.port, endpoint.connect_host, endpoint.port
     );
     warm_project_instance(&paths.workspace_dir, &endpoint);
 
     loop {
-        if let Some(exit_status) = child.try_wait()? {
+        if let Some(exit_status) = try_wait_running_child(&mut child)? {
             if !exit_status.success() {
                 return Err(format!("opencode serve exited with status {exit_status}").into());
             }
