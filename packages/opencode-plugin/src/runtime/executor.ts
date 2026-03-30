@@ -24,12 +24,14 @@ import type {
     RuntimeJournalEntry,
     SqliteStore,
 } from "../store/sqlite"
+import { formatError } from "../utils/error"
 import { type ActiveExecutionHandle, ActiveExecutionRegistry } from "./active-execution"
 import { ConversationCoordinator } from "./conversation-coordinator"
 import { delay } from "./delay"
 import { ExecutionBudget, ExecutionHardTimeoutError } from "./execution-budget"
 import { type PromptExecutionResult, runOpencodeDriver } from "./opencode-runner"
 import { OpencodeCommandTimeoutError } from "./opencode-timeout"
+import type { GatewayRestartRuntime } from "./restart"
 import type { GatewayToolActivityHandle, GatewayToolActivityRuntime } from "./tool-activity"
 import { GatewayToolOverlayPreviewSession } from "./tool-preview"
 
@@ -66,6 +68,7 @@ export class GatewayExecutor {
         private readonly toolActivity: GatewayToolActivityRuntime | null = null,
         private readonly activeExecutions: ActiveExecutionRegistry = new ActiveExecutionRegistry(),
         private readonly sessionAgents: Pick<GatewaySessionAgentRuntime, "resolveEffectivePrimaryAgent"> | null = null,
+        private readonly restart: GatewayRestartRuntimeLike | null = null,
     ) {}
 
     prepareInboundMessage(message: BindingInboundMessage): BindingPreparedExecution {
@@ -213,16 +216,20 @@ export class GatewayExecutor {
         )
 
         return await this.coordinator.runExclusive(prepared.conversationKey, async () => {
-            return await this.executePreparedBatch(
-                [
-                    {
-                        entry: null,
-                        message: null,
-                        prepared,
-                    },
-                ],
-                recordedAtMs,
-            )
+            try {
+                return await this.executePreparedBatch(
+                    [
+                        {
+                            entry: null,
+                            message: null,
+                            prepared,
+                        },
+                    ],
+                    recordedAtMs,
+                )
+            } finally {
+                await this.flushPendingRestartRequest()
+            }
         })
     }
 
@@ -243,16 +250,20 @@ export class GatewayExecutor {
                 }),
             )
 
-            return await this.executePreparedBatch(
-                [
-                    {
-                        entry: null,
-                        message: null,
-                        prepared,
-                    },
-                ],
-                recordedAtMs,
-            )
+            try {
+                return await this.executePreparedBatch(
+                    [
+                        {
+                            entry: null,
+                            message: null,
+                            prepared,
+                        },
+                    ],
+                    recordedAtMs,
+                )
+            } finally {
+                await this.flushPendingRestartRequest()
+            }
         })
     }
 
@@ -627,6 +638,18 @@ export class GatewayExecutor {
         }
     }
 
+    private async flushPendingRestartRequest(): Promise<void> {
+        if (this.restart === null) {
+            return
+        }
+
+        try {
+            await this.restart.flushPendingRestartRequest()
+        } catch (error) {
+            this.logger.log("warn", `failed to flush deferred gateway restart request: ${formatError(error)}`)
+        }
+    }
+
     private createInternalPromptIdentity(
         prefix: string,
         recordedAtMs: number,
@@ -807,6 +830,7 @@ type GatewayOpencodeRuntimeLike = Pick<
     OpencodeSdkAdapter,
     "execute" | "isSessionBusy" | "abortSession" | "revertSessionMessage"
 >
+type GatewayRestartRuntimeLike = Pick<GatewayRestartRuntime, "flushPendingRestartRequest">
 type TextDeliverySessionLike = Pick<TextDeliverySession, "mode" | "preview">
 type BindingOpencodeCommandPartLike = Extract<BindingOpencodeCommand, { kind: "appendPrompt" }>["parts"][number]
 

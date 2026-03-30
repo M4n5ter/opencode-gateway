@@ -38,6 +38,8 @@ export type GatewayRestartRequestResult = {
 }
 
 export class GatewayRestartRuntime {
+    private deferredRequestedAtMs: number | null = null
+
     private constructor(
         private readonly managed: boolean,
         private readonly controlDirPath: string | null,
@@ -56,8 +58,40 @@ export class GatewayRestartRuntime {
 
         const existingRequest = await readJson<RestartRequestDocument>(requestPath(controlDirPath))
         const now = Date.now()
-        const requestedAtMs = existingRequest?.requestedAtMs ?? now
+        const requestedAtMs = existingRequest?.requestedAtMs ?? this.deferredRequestedAtMs ?? now
+        const alreadyScheduled = existingRequest !== null || this.deferredRequestedAtMs !== null
 
+        if (!alreadyScheduled) {
+            this.deferredRequestedAtMs = requestedAtMs
+        }
+
+        const previousStatus = await readJson<RestartStatusDocument>(statusPath(controlDirPath))
+        await writeJson(statusPath(controlDirPath), {
+            state: "pending",
+            requestedAtMs,
+            completedAtMs: previousStatus?.completedAtMs,
+            lastError: previousStatus?.lastError,
+        } satisfies RestartStatusDocument)
+
+        return {
+            status: alreadyScheduled ? "already_scheduled" : "scheduled",
+            behavior: "wait_until_idle",
+            scope: "managed_opencode_server",
+            effectiveOn: "after_current_request_and_when_idle",
+            requestedAtMs,
+        }
+    }
+
+    async flushPendingRestartRequest(): Promise<void> {
+        const controlDirPath = this.ensureManaged()
+        if (this.deferredRequestedAtMs === null) {
+            return
+        }
+
+        await mkdir(controlDirPath, { recursive: true })
+
+        const existingRequest = await readJson<RestartRequestDocument>(requestPath(controlDirPath))
+        const requestedAtMs = existingRequest?.requestedAtMs ?? this.deferredRequestedAtMs
         if (existingRequest === null) {
             await writeJson(requestPath(controlDirPath), {
                 requestedAtMs,
@@ -73,13 +107,7 @@ export class GatewayRestartRuntime {
             lastError: previousStatus?.lastError,
         } satisfies RestartStatusDocument)
 
-        return {
-            status: existingRequest === null ? "scheduled" : "already_scheduled",
-            behavior: "wait_until_idle",
-            scope: "managed_opencode_server",
-            effectiveOn: "after_current_request_and_when_idle",
-            requestedAtMs,
-        }
+        this.deferredRequestedAtMs = null
     }
 
     async status(): Promise<GatewayRestartStatus> {
@@ -101,7 +129,7 @@ export class GatewayRestartRuntime {
             readJson<RestartStatusDocument>(statusPath(this.controlDirPath)),
         ])
 
-        const pending = request !== null
+        const pending = request !== null || this.deferredRequestedAtMs !== null
         const state = pending ? (status?.state ?? "pending") : (status?.state ?? "idle")
 
         return {
@@ -109,7 +137,7 @@ export class GatewayRestartRuntime {
             supported: true,
             state,
             pending,
-            requestedAtMs: request?.requestedAtMs ?? status?.requestedAtMs ?? null,
+            requestedAtMs: request?.requestedAtMs ?? this.deferredRequestedAtMs ?? status?.requestedAtMs ?? null,
             startedAtMs: status?.startedAtMs ?? null,
             completedAtMs: status?.completedAtMs ?? null,
             lastError: status?.lastError ?? null,

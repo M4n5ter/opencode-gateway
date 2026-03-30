@@ -7,6 +7,7 @@ import { formatError } from "../utils/error"
 import { deleteInboundAttachmentFiles } from "./attachments"
 import { type GatewayExecutor, InterruptedExecutionError } from "./executor"
 import type { GatewayInflightPolicyRuntime } from "./inflight-policy"
+import type { GatewayRestartRuntime } from "./restart"
 
 const EXECUTION_LEASE_MS = 60_000
 const EXECUTION_LEASE_HEARTBEAT_MS = 15_000
@@ -46,6 +47,7 @@ export class GatewayMailboxRuntime {
         private readonly interactions: GatewayInteractionRuntimeLike,
         private readonly inflightConfig: GatewayInflightMessagesConfig = DEFAULT_INFLIGHT_CONFIG,
         private readonly inflightPolicy: GatewayInflightPolicyRuntimeLike = DEFAULT_INFLIGHT_POLICY_RUNTIME,
+        private readonly restart: GatewayRestartRuntimeLike | null = null,
     ) {}
 
     start(): void {
@@ -284,6 +286,7 @@ export class GatewayMailboxRuntime {
             await this.maybeResolveCompletedInflightDecision(job.mailboxKey)
         } finally {
             stopHeartbeat()
+            await this.flushPendingRestartRequest()
         }
     }
 
@@ -413,6 +416,18 @@ export class GatewayMailboxRuntime {
             this.interactions.resolveStaleInflightPolicyRequest(interaction)
         }
     }
+
+    private async flushPendingRestartRequest(): Promise<void> {
+        if (this.restart === null) {
+            return
+        }
+
+        try {
+            await this.restart.flushPendingRestartRequest()
+        } catch (error) {
+            this.logger.log("warn", `failed to flush deferred gateway restart request: ${formatError(error)}`)
+        }
+    }
 }
 
 type GatewayExecutorLike = Pick<GatewayExecutor, "executeMailboxJob" | "prepareInboundMessage" | "isConversationActive">
@@ -422,6 +437,7 @@ type GatewayInteractionRuntimeLike = Pick<
     "tryHandleInboundMessage" | "ensureInflightPolicyRequest" | "resolveStaleInflightPolicyRequest"
 >
 type GatewayInflightPolicyRuntimeLike = Pick<GatewayInflightPolicyRuntime, "interruptCurrent" | "recoverOnStartup">
+type GatewayRestartRuntimeLike = Pick<GatewayRestartRuntime, "flushPendingRestartRequest">
 
 function createJournalEntry(
     kind: RuntimeJournalEntry["kind"],

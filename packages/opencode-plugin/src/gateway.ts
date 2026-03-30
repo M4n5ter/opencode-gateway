@@ -192,6 +192,7 @@ export async function createGatewayRuntime(
             toolActivity,
             activeExecutions,
             sessionAgents,
+            restart,
         )
         let notifyMailboxStateChanged = (): void => {}
         const inflightRuntime = new GatewayInflightPolicyRuntime(store, executor, logger, () => {
@@ -216,6 +217,7 @@ export async function createGatewayRuntime(
             interactions,
             config.inflightMessages,
             inflightRuntime,
+            restart,
         )
         notifyMailboxStateChanged = () => {
             mailbox.scheduleDrainNow()

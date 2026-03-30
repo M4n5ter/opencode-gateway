@@ -406,6 +406,72 @@ test("GatewayMailboxRuntime preserves deferred preview context for final deliver
     }
 })
 
+test("GatewayMailboxRuntime flushes deferred restart only after job completion", async () => {
+    const db = createMemoryDatabase()
+    let runtime: GatewayMailboxRuntime | null = null
+
+    try {
+        migrateGatewayDatabase(db)
+        const store = new SqliteStore(db)
+        const observedStatuses: Array<string | null> = []
+
+        runtime = new GatewayMailboxRuntime(
+            {
+                prepareInboundMessage(message: BindingInboundMessage): BindingPreparedExecution {
+                    return {
+                        conversationKey: message.mailboxKey ?? `telegram:${message.deliveryTarget.target}`,
+                        promptParts: createTextPromptParts(message.text ?? ""),
+                        replyTarget: message.deliveryTarget,
+                    }
+                },
+                async executeMailboxJob(job): Promise<MailboxExecutionOutcome> {
+                    return {
+                        conversationKey: job.mailboxKey,
+                        responseText: "ok",
+                        finalText: null,
+                        deliveries: [],
+                        sessionId: "ses_restart_flush",
+                        recordedAtMs: Date.now(),
+                    }
+                },
+                isConversationActive() {
+                    return false
+                },
+            },
+            new MemoryTransport(),
+            store,
+            new MemoryLogger(),
+            {
+                batchReplies: false,
+                batchWindowMs: 0,
+                routes: [],
+            },
+            {
+                async tryHandleInboundMessage() {
+                    return false
+                },
+            },
+            undefined,
+            undefined,
+            {
+                async flushPendingRestartRequest(): Promise<void> {
+                    observedStatuses.push(store.getMailboxJob(1)?.status ?? null)
+                },
+            },
+        )
+
+        runtime.start()
+        await runtime.enqueueInboundMessage(createMessage("restart after completion"), "telegram_update", "100")
+
+        await waitFor(() => observedStatuses.length === 1)
+
+        expect(observedStatuses).toEqual(["completed"])
+    } finally {
+        runtime?.stop()
+        db.close()
+    }
+})
+
 function createMessage(text: string): BindingInboundMessage {
     return {
         sender: "telegram:7",

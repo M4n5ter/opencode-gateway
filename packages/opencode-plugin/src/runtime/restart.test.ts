@@ -21,15 +21,21 @@ test("GatewayRestartRuntime schedules a managed restart request and reports pend
     expect(status.pending).toBe(true)
     expect(status.state).toBe("pending")
 
-    const request = JSON.parse(await readFile(join(controlDir, GATEWAY_RESTART_REQUEST_FILE), "utf8")) as {
-        requestedAtMs: number
-    }
     const persistedStatus = JSON.parse(await readFile(join(controlDir, GATEWAY_RESTART_STATUS_FILE), "utf8")) as {
         state: string
     }
 
-    expect(request.requestedAtMs).toBe(result.requestedAtMs)
     expect(persistedStatus.state).toBe("pending")
+    await expect(readFile(join(controlDir, GATEWAY_RESTART_REQUEST_FILE), "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+    })
+
+    await runtime.flushPendingRestartRequest()
+
+    const request = JSON.parse(await readFile(join(controlDir, GATEWAY_RESTART_REQUEST_FILE), "utf8")) as {
+        requestedAtMs: number
+    }
+    expect(request.requestedAtMs).toBe(result.requestedAtMs)
 })
 
 test("GatewayRestartRuntime deduplicates duplicate managed restart requests", async () => {
