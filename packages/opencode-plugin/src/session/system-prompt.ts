@@ -36,6 +36,7 @@ function buildGatewaySkillsPrompt(): string {
         "- This gateway session uses a managed workspace-local skills directory at `.opencode/skills`.",
         "- You may read any skills already visible to OpenCode, including user-configured global skills.",
         "- When creating, installing, or updating a skill, default to `.opencode/skills` in the current gateway workspace unless the user explicitly asks for a global change.",
+        "- If a user says new skills, agents, or config changes need a reload or restart to take effect, do not stop at telling them to restart manually. In this managed gateway, tell them you can request the restart for them and use gateway_restart unless they explicitly want to handle it themselves.",
     ].join("\n")
 }
 
@@ -54,7 +55,7 @@ function buildGatewayContextPrompt(targets: BindingDeliveryTarget[]): string | n
             "- Unless the user explicitly asks otherwise, channel-aware actions should default to this target.",
             "- If the user asks which OpenCode primary agent is active for this route, use agent_status.",
             "- If the user asks to switch the OpenCode primary agent for this route, use agent_switch once they name the target agent.",
-            "- If the user asks to reload or restart OpenCode so new skills, agents, or config changes take effect, use gateway_restart.",
+            "- If the user asks to reload or restart OpenCode so new skills, agents, or config changes take effect, tell them this gateway can request that restart for them and use gateway_restart instead of asking them to restart manually.",
             "- If the user asks to start a fresh channel session, use channel_new_session.",
             "- If the user asks for a one-shot reminder or relative-time follow-up, prefer schedule_once.",
             "- If the user asks for a recurring schedule, prefer cron_upsert.",
@@ -73,7 +74,7 @@ function buildGatewayContextPrompt(targets: BindingDeliveryTarget[]): string | n
         "- If a tool needs a single explicit target, do not guess; ask the user or use explicit tool arguments.",
         "- If the user asks which OpenCode primary agent is active for this route, use agent_status.",
         "- If the user asks to switch the OpenCode primary agent for this route, inspect agent_status first unless they already named the target agent, then use agent_switch.",
-        "- If the user asks to reload or restart OpenCode so new skills, agents, or config changes take effect, use gateway_restart.",
+        "- If the user asks to reload or restart OpenCode so new skills, agents, or config changes take effect, tell them this gateway can request that restart for them and use gateway_restart instead of asking them to restart manually.",
         "- If the user asks to start a fresh channel session for this route, use channel_new_session.",
         "- Prefer schedule_once for one-shot reminders and cron_upsert for recurring schedules.",
         "- Use schedule_list and schedule_status to inspect scheduled jobs and recent run results.",

@@ -6,7 +6,7 @@ import type { GatewayRestartRequestResult, GatewayRestartRuntime } from "../runt
 export function createGatewayRestartTool(runtime: Pick<GatewayRestartRuntime, "scheduleRestart">): ToolDefinition {
     return tool({
         description:
-            "Schedule a managed OpenCode server restart after the current work goes idle so new skills, agents, or config changes take effect.",
+            "Schedule a managed OpenCode server restart after the current work goes idle so new skills, agents, or config changes take effect. Use this instead of telling the user to restart manually when the gateway is managing OpenCode.",
         args: {},
         async execute() {
             return formatGatewayRestartResult(await runtime.scheduleRestart())
@@ -21,5 +21,6 @@ function formatGatewayRestartResult(result: GatewayRestartRequestResult): string
         `scope=${result.scope}`,
         `effective_on=${result.effectiveOn}`,
         `requested_at_ms=${result.requestedAtMs}`,
+        "note=managed restart requested; the gateway will restart OpenCode on the user's behalf once current work goes idle",
     ].join("\n")
 }

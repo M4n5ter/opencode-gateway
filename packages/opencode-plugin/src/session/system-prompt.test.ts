@@ -52,8 +52,10 @@ test("GatewaySystemPromptBuilder combines gateway target context with memory con
         expect(prompts).toHaveLength(3)
         expect(prompts[0]).toContain("Current message source channel: telegram")
         expect(prompts[0]).toContain("Current reply target id: 42")
+        expect(prompts[0]).toContain("can request that restart for them")
         expect(prompts[1]).toContain("Gateway skills:")
         expect(prompts[1]).toContain("workspace-local skills directory at `.opencode/skills`")
+        expect(prompts[1]).toContain("do not stop at telling them to restart manually")
         expect(prompts[2]).toContain("Gateway memory:")
         expect(prompts[2]).toContain("Configured path: memory/project.md")
         expect(prompts[2]).toContain("File: memory/project.md")
@@ -91,6 +93,7 @@ test("GatewaySystemPromptBuilder injects memory for gateway-owned schedule sessi
 
         expect(prompts).toHaveLength(2)
         expect(prompts[0]).toContain("Gateway skills:")
+        expect(prompts[0]).toContain("tell them you can request the restart for them")
         expect(prompts[1]).toContain("Gateway memory:")
         expect(prompts[1]).toContain("Configured path: memory/project.md")
         expect(prompts[1]).not.toContain("Gateway context:")
@@ -130,6 +133,7 @@ test("GatewaySystemPromptBuilder still injects skills guidance when a gateway se
         }).buildPrompts("ses_schedule")
 
         expect(prompts).toEqual([expect.stringContaining("Gateway skills:")])
+        expect(prompts[0]).toContain("gateway_restart")
     } finally {
         db.close()
     }

@@ -32,4 +32,5 @@ test("gateway_restart formats a scheduled restart request", async () => {
     expect(result).toContain("status=scheduled")
     expect(result).toContain("behavior=wait_until_idle")
     expect(result).toContain("scope=managed_opencode_server")
+    expect(result).toContain("restart OpenCode on the user's behalf")
 })
