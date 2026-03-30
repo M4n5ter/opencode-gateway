@@ -7,13 +7,47 @@ This repository is the Rust/Bun workspace behind `opencode-gateway`.
 The recommended user path is the packaged CLI. The repository path is for local
 development and debugging.
 
-## Stability Note
+## Highlights
 
-The gateway is still under fast iteration. Expect occasional regressions,
-startup failures, or state/cache mismatches after upgrades.
+`opencode-gateway` is a local OpenCode automation gateway with a native
+launcher, a managed plugin runtime, and durable state around conversations,
+delivery, scheduling, and memory.
 
-When the installed package stops behaving correctly, these two cleanup steps
-resolve a large share of issues:
+After the gateway is initialized and running, routine operation is meant to
+happen through natural-language conversation with OpenCode rather than through a
+catalog of special commands. The CLI is primarily for bootstrap, diagnostics,
+and process management; day-to-day actions are exposed as conversational tools.
+
+Current feature set, grouped by responsibility:
+
+- Lifecycle and workspace management:
+  `init`, `doctor`, and managed `serve`; immediate plugin warm-up; managed
+  restart through `gateway_restart`; a workspace scaffold with `USER.md`,
+  `RULES.md`, daily notes, workspace-local skills, and the built-in
+  `markdown-agents` guide.
+- Durable execution and routing:
+  SQLite-backed session bindings and runtime journal; durable mailbox queues;
+  per-mailbox serialization; optional reply batching; shared mailbox routes;
+  inflight handling with `ask`, `queue`, and `interrupt`.
+- Telegram delivery runtime:
+  long polling with explicit allowlists; private-chat editable previews;
+  Preview / Tools views with paginated tool history; file sending; compaction
+  reactions; and automatic cleanup for permission/question interactions.
+- Scheduling and automation:
+  recurring cron jobs plus one-shot schedules; persisted job catalog and run
+  history; operational tools for create, inspect, run, cancel, and status
+  checks.
+- Memory and agent operations:
+  workspace-aware memory injection; `memory_search` and `memory_get`; route
+  agent inspection and switching via `agent_status` and `agent_switch`; and
+  fresh channel sessions via `channel_new_session`.
+
+## Operational Note
+
+The gateway is now suitable for regular day-to-day use through the packaged
+CLI. Upgrades can still occasionally leave behind stale state or plugin cache
+artifacts, so keep these cleanup steps in mind when an installed package stops
+behaving correctly:
 
 - remove the gateway state database at `~/.local/share/opencode-gateway/state.db`
 - remove the OpenCode plugin cache at `~/.cache/opencode/node_modules/opencode-gateway`
@@ -245,7 +279,14 @@ bunx opencode-gateway@latest serve
 
 This wraps `opencode serve` and immediately warms the gateway plugin worker, so
 Telegram polling and scheduled jobs start without waiting for a manual
-project-scoped request.
+project-scoped request. In managed gateway sessions, the plugin can also use
+`gateway_restart` to request an OpenCode restart on the user's behalf when new
+skills, agents, or config changes need to take effect.
+
+Once the gateway is running, the intended operator experience is conversational:
+you ask for a restart, inspect schedules, switch agents, search memory, or
+start a fresh session in natural language, and the gateway tools handle the
+mechanics behind the scenes.
 
 If you still prefer to run OpenCode directly, warm the gateway explicitly after
 startup:
