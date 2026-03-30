@@ -233,13 +233,13 @@ pub(crate) fn normalize_connect_host(host: &str) -> String {
 }
 
 fn server_has_busy_sessions(endpoint: &ServerEndpoint) -> Result<bool, Box<dyn Error>> {
-    let response = http_get(&endpoint.connect_host, endpoint.port, "/session/status")?;
+    let response = match http_get(&endpoint.connect_host, endpoint.port, "/session/status") {
+        Ok(response) => response,
+        Err(error) if should_retry_session_status_poll(error.as_ref()) => return Ok(true),
+        Err(error) => return Err(error),
+    };
     if response.status_code != 200 {
-        return Err(format!(
-            "session status request failed with HTTP {}",
-            response.status_code
-        )
-        .into());
+        return Ok(true);
     }
 
     let statuses: serde_json::Map<String, serde_json::Value> =
@@ -252,6 +252,22 @@ fn inspect_listening_endpoint_for_pid(pid: u32) -> Result<Option<ServerEndpoint>
 
     matches.sort_by_key(socket_priority);
     Ok(matches.into_iter().next().map(socket_to_endpoint))
+}
+
+fn should_retry_session_status_poll(error: &(dyn Error + 'static)) -> bool {
+    error.downcast_ref::<std::io::Error>().is_some_and(|error| {
+        matches!(
+            error.kind(),
+            ErrorKind::WouldBlock
+                | ErrorKind::TimedOut
+                | ErrorKind::Interrupted
+                | ErrorKind::ConnectionRefused
+                | ErrorKind::ConnectionReset
+                | ErrorKind::ConnectionAborted
+                | ErrorKind::NotConnected
+                | ErrorKind::UnexpectedEof
+        )
+    })
 }
 
 fn is_busy_session_status(value: &serde_json::Value) -> bool {
@@ -287,9 +303,11 @@ fn socket_to_endpoint(socket: SocketAddr) -> ServerEndpoint {
 mod tests {
     use std::net::SocketAddr;
     use std::path::Path;
+    use std::{error::Error, io, io::ErrorKind};
 
     use super::{
-        ServerEndpoint, normalize_connect_host, resolve_native_opencode_sibling, socket_to_endpoint,
+        ServerEndpoint, normalize_connect_host, resolve_native_opencode_sibling,
+        should_retry_session_status_poll, socket_to_endpoint,
     };
 
     #[test]
@@ -329,5 +347,17 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn retryable_session_status_errors_include_would_block() {
+        let error: Box<dyn Error> = Box::new(io::Error::from(ErrorKind::WouldBlock));
+        assert!(should_retry_session_status_poll(error.as_ref()));
+    }
+
+    #[test]
+    fn retryable_session_status_errors_exclude_invalid_data() {
+        let error: Box<dyn Error> = Box::new(io::Error::from(ErrorKind::InvalidData));
+        assert!(!should_retry_session_status_poll(error.as_ref()));
     }
 }
