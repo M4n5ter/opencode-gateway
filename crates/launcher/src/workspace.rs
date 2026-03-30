@@ -97,45 +97,8 @@ pub(crate) fn write_managed_opencode_config_if_missing(
 pub(crate) fn write_workspace_scaffold_if_missing(
     paths: &GatewayPaths,
 ) -> Result<(), Box<dyn Error>> {
-    write_file_if_missing(
-        &paths.workspace_dir.join("USER.md"),
-        concat!(
-            "# USER\n\n",
-            "Use this file for durable user profile and preference memory.\n\n",
-            "- Update it proactively when you learn a stable preference, workflow habit, review expectation, or recurring constraint.\n",
-            "- Keep it concise and deduplicated.\n",
-            "- Do not store one-off task details or day-specific notes here.\n",
-        ),
-    )?;
-    write_file_if_missing(
-        &paths.workspace_dir.join("RULES.md"),
-        concat!(
-            "# RULES\n\n",
-            "Use this file for durable assistant behavior rules and standing operating constraints.\n\n",
-            "- Update it proactively when a new long-lived rule, boundary, or style expectation becomes clear.\n",
-            "- Keep it explicit, concise, and deduplicated.\n",
-            "- Do not mix day-specific task notes into this file.\n",
-        ),
-    )?;
-    write_file_if_missing(
-        &paths.workspace_dir.join("memory/daily/README.md"),
-        concat!(
-            "# Daily Notes\n\n",
-            "Store day-specific notes here as `YYYY-MM-DD.md` files.\n\n",
-            "Use daily notes for dated progress logs, investigation breadcrumbs, temporary decisions, and other context that should remain searchable without becoming durable user or rules memory.\n\n",
-            "Create or update the current day's file proactively when there is meaningful new day-specific context to preserve.\n",
-        ),
-    )?;
-    write_file_if_missing(
-        &paths.workspace_dir.join(".opencode/skills/README.md"),
-        concat!(
-            "# Workspace Skills\n\n",
-            "Put gateway-local OpenCode skills in this directory.\n\n",
-            "Gateway-managed sessions default to this workspace-local `.opencode/skills` directory when creating, installing, or updating skills.\n\n",
-            "OpenCode may still read globally configured skills, but new or maintained gateway skills should live here unless the user explicitly asks for a global change.\n",
-        ),
-    )?;
-
+    let template_root = resolve_workspace_template_root_path()?;
+    copy_directory_contents_if_missing(&template_root, &paths.workspace_dir)?;
     Ok(())
 }
 
@@ -183,16 +146,57 @@ pub(crate) fn build_binding_if_needed() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn write_file_if_missing(path: &Path, contents: &str) -> Result<(), Box<dyn Error>> {
-    if path.exists() {
+fn resolve_workspace_template_root_path() -> Result<std::path::PathBuf, Box<dyn Error>> {
+    let runtime_root = resolve_runtime_root_path()?;
+    let candidates = [
+        runtime_root.join("templates/workspace"),
+        runtime_root.join("packages/opencode-plugin/templates/workspace"),
+    ];
+
+    for candidate in candidates {
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+
+    Err("failed to resolve workspace template root".into())
+}
+
+fn copy_directory_contents_if_missing(
+    source_dir: &Path,
+    target_dir: &Path,
+) -> Result<(), Box<dyn Error>> {
+    fs::create_dir_all(target_dir)?;
+
+    for entry in fs::read_dir(source_dir)? {
+        let entry = entry?;
+        let source_path = entry.path();
+        let target_path = target_dir.join(entry.file_name());
+        let metadata = entry.metadata()?;
+
+        if metadata.is_dir() {
+            copy_directory_contents_if_missing(&source_path, &target_path)?;
+            continue;
+        }
+
+        if metadata.is_file() {
+            copy_file_if_missing(&source_path, &target_path)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn copy_file_if_missing(source_path: &Path, target_path: &Path) -> Result<(), Box<dyn Error>> {
+    if target_path.exists() {
         return Ok(());
     }
 
-    if let Some(parent) = path.parent() {
+    if let Some(parent) = target_path.parent() {
         fs::create_dir_all(parent)?;
     }
 
-    fs::write(path, contents)?;
+    fs::copy(source_path, target_path)?;
     Ok(())
 }
 

@@ -222,7 +222,7 @@ Memory rules:
 - relative paths are resolved from `opencode-gateway-workspace`
 - absolute paths are still allowed
 - missing files and directories are created automatically on load
-- the default workspace scaffold includes `USER.md`, `RULES.md`, `memory/daily/README.md`, and `.opencode/skills/README.md`
+- the default workspace scaffold includes `USER.md`, `RULES.md`, `memory/daily/README.md`, `.opencode/skills/README.md`, and the built-in `.opencode/skills/markdown-agents/` guide
 - the default template includes `USER.md`, `RULES.md`, and `memory/daily`
 - gateway-managed sessions default to workspace-local skills under `opencode-gateway-workspace/.opencode/skills`
 - globally configured OpenCode skills remain readable, but new or updated gateway skills should default to the workspace-local skills directory unless the user explicitly asks otherwise

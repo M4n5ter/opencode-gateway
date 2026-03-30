@@ -18,6 +18,25 @@ test("ensureGatewayWorkspaceScaffold creates default memory and skill templates"
         expect(await readFile(join(workspaceDir, ".opencode", "skills", "README.md"), "utf8")).toContain(
             "gateway-local OpenCode skills",
         )
+        const markdownAgentsSkill = await readFile(
+            join(workspaceDir, ".opencode", "skills", "markdown-agents", "SKILL.md"),
+            "utf8",
+        )
+        expect(markdownAgentsSkill).toContain("name: markdown-agents")
+        expect(markdownAgentsSkill).toContain("Prefer project-local `.opencode/agents/`")
+        expect(
+            await readFile(
+                join(
+                    workspaceDir,
+                    ".opencode",
+                    "skills",
+                    "markdown-agents",
+                    "references",
+                    "frontmatter-and-options.md",
+                ),
+                "utf8",
+            ),
+        ).toContain("`permission.task`")
     } finally {
         await rm(root, { recursive: true, force: true })
     }
