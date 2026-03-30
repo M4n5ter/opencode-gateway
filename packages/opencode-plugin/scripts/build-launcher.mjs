@@ -8,6 +8,8 @@ const packageRoot = dirname(scriptDir)
 const repoRoot = dirname(dirname(packageRoot))
 const distRoot = join(packageRoot, "dist", "native")
 const launcherName = "opencode-gateway-launcher"
+const zigbuildDockerImage =
+    process.env.OPENCODE_GATEWAY_ZIGBUILD_DOCKER_IMAGE ?? "ghcr.io/rust-cross/cargo-zigbuild:latest"
 
 const targets = [
     { key: "darwin-arm64", rustTarget: "aarch64-apple-darwin", exe: launcherName },
@@ -64,13 +66,20 @@ function hostTarget() {
 }
 
 function buildTarget(target, release) {
-    const command = target.key === hostTarget().key ? "cargo" : "cargo"
-    const args =
-        target.key === hostTarget().key
-            ? ["build", "--bin", launcherName, "--target", target.rustTarget]
-            : ["zigbuild", "--bin", launcherName, "--target", target.rustTarget]
+    const host = hostTarget()
+    const useDocker = shouldUseDockerForTarget(target, host)
+    if (!useDocker && target.key !== host.key) {
+        ensureRustTarget(target.rustTarget)
+    }
 
-    if (release) {
+    const command = useDocker ? "docker" : "cargo"
+    const args = useDocker
+        ? dockerBuildArgs(target, release)
+        : target.key === host.key
+          ? ["build", "--bin", launcherName, "--target", target.rustTarget]
+          : ["zigbuild", "--bin", launcherName, "--target", target.rustTarget]
+
+    if (release && !useDocker) {
         args.push("--release")
     }
 
@@ -87,4 +96,57 @@ function buildTarget(target, release) {
 function launcherOutputPath(target, release) {
     const profile = release ? "release" : "debug"
     return join(repoRoot, "target", target.rustTarget, profile, target.exe)
+}
+
+function ensureRustTarget(rustTarget) {
+    const result = spawnSync("rustup", ["target", "add", rustTarget], {
+        cwd: repoRoot,
+        stdio: "inherit",
+    })
+
+    if (result.status !== 0) {
+        process.exit(result.status ?? 1)
+    }
+}
+
+function shouldUseDockerForTarget(target, host) {
+    return isDarwinTarget(target) && process.platform !== "darwin" && target.key !== host.key
+}
+
+function isDarwinTarget(target) {
+    return target.rustTarget.endsWith("apple-darwin")
+}
+
+function dockerBuildArgs(target, release) {
+    const args = ["run", "--rm", "-v", `${repoRoot}:/io`, "-w", "/io"]
+
+    const uid = typeof process.getuid === "function" ? process.getuid() : null
+    const gid = typeof process.getgid === "function" ? process.getgid() : null
+    if (uid !== null && gid !== null) {
+        args.push("--user", `${uid}:${gid}`)
+    }
+
+    args.push(
+        "-e",
+        "CARGO_TARGET_DIR=/io/target",
+        "-e",
+        "HOME=/io/target/cargo-zigbuild-home",
+        "-e",
+        "CARGO_HOME=/io/target/cargo-zigbuild-home/.cargo",
+        "-e",
+        "RUSTUP_HOME=/io/target/cargo-zigbuild-home/.rustup",
+        zigbuildDockerImage,
+    )
+    args.push("bash", "-c", dockerBuildCommand(target, release))
+
+    return args
+}
+
+function dockerBuildCommand(target, release) {
+    const releaseFlag = release ? " --release" : ""
+    return [
+        'mkdir -p "$HOME"',
+        `rustup target add ${target.rustTarget}`,
+        `cargo zigbuild --bin ${launcherName} --target ${target.rustTarget}${releaseFlag}`,
+    ].join(" && ")
 }

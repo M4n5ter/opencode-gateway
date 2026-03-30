@@ -19,6 +19,7 @@ dist
 coverage
 *.tsbuildinfo
 packages/opencode-plugin/generated/
+.intentionally-*
 
 # Local runtime state
 .opencode/
