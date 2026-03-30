@@ -2,7 +2,7 @@
 
 Gateway plugin for OpenCode.
 
-This repository is the Rust/Bun workspace behind `opencode-gateway`.
+This repository is the workspace behind `opencode-gateway`.
 
 The recommended user path is the packaged CLI. The repository path is for local
 development and debugging.
