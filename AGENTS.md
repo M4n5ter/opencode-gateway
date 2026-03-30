@@ -26,7 +26,9 @@ The current state of the repository is a working local gateway with:
 - private-chat editable stream previews with split Preview / Tools tool-call views
 - Telegram compaction reactions on the current message after `session.compacted`
 - auto-cleaned Telegram permission/question interaction prompts
-- a launcher that bootstraps and warms a managed OpenCode instance
+- workspace-local memory and skills scaffold, including the built-in `markdown-agents` guide
+- managed restart support for reloading skills, agents, and config changes
+- a launcher that bootstraps, supervises, warms, and can restart a managed OpenCode instance
 
 ## Repository Layout
 
@@ -96,8 +98,9 @@ The native Rust CLI for local lifecycle management.
 Its job is deliberately narrow:
 
 - initialize managed config
-- start OpenCode with the plugin wired in
-- warm the current project instance so plugin workers start immediately
+- start and supervise OpenCode with the plugin wired in
+- discover the managed OpenCode server endpoint and warm the current project instance so plugin workers start immediately
+- consume managed restart requests and restart OpenCode after current work goes idle
 - run environment diagnostics
 
 ### `packages/opencode-plugin`
@@ -108,7 +111,7 @@ This package now:
 
 - loads the generated `wasm-bindgen` package
 - parses gateway config and opens the managed SQLite database
-- scaffolds the managed gateway workspace with default `USER.md`, `RULES.md`, `memory/daily`, and `.opencode/skills` files
+- scaffolds the managed gateway workspace with default `USER.md`, `RULES.md`, `memory/daily`, workspace-local skills, and the built-in `markdown-agents` guide
 - persists OpenCode session bindings, Telegram state, cron jobs, and cron runs
 - persists durable mailbox queue entries for gateway-managed ingress
 - runs Telegram long polling with explicit allowlists
@@ -122,7 +125,7 @@ This package now:
 - renders Telegram tool-call details through per-message Preview / Tools view state with paginated tool history
 - bridges OpenCode permission/question interactions into Telegram and cleans them up after successful replies
 - applies mailbox-scoped inflight policy (`ask`, `queue`, or `interrupt`) when new ingress arrives during an active run
-- exposes gateway, cron, and Telegram operational tools
+- exposes gateway, schedule, memory, channel, agent, and Telegram operational tools
 
 ## Runtime Model
 
@@ -182,6 +185,7 @@ opencode-gateway serve
 opencode-gateway init
 opencode-gateway serve
 opencode-gateway doctor
+opencode-gateway warm
 ```
 
 ### OpenCode tools
@@ -189,12 +193,18 @@ opencode-gateway doctor
 - `agent_status`
 - `agent_switch`
 - `channel_new_session`
-- `gateway_status`
-- `gateway_dispatch_cron`
-- `cron_list`
-- `cron_upsert`
-- `cron_remove`
+- `channel_send_file`
 - `cron_run`
+- `cron_upsert`
+- `gateway_dispatch_cron`
+- `gateway_restart`
+- `gateway_status`
+- `memory_get`
+- `memory_search`
+- `schedule_cancel`
+- `schedule_list`
+- `schedule_once`
+- `schedule_status`
 - `telegram_status`
 - `telegram_send_test`
 
@@ -213,7 +223,7 @@ opencode-gateway doctor
 
 Default paths:
 
-- default OpenCode config: `~/.config/opencode/opencode.json`
+- default OpenCode config: `~/.config/opencode/opencode.jsonc` when absent, otherwise existing `opencode.jsonc` or `opencode.json`
 - default gateway config: `~/.config/opencode/opencode-gateway.toml`
 - managed OpenCode config directory: `~/.config/opencode-gateway/opencode/`
 - managed gateway config: `~/.config/opencode-gateway/opencode/opencode-gateway.toml`
@@ -229,6 +239,7 @@ Gateway-managed sessions run against the managed workspace rooted at
 - `RULES.md`
 - `memory/daily/README.md`
 - `.opencode/skills/README.md`
+- `.opencode/skills/markdown-agents/`
 
 The gateway injects stronger maintenance guidance for `USER.md`, `RULES.md`, and
 `memory/daily` only when those specific entries are present in `memory.entries`.
@@ -277,7 +288,7 @@ The repository already contains:
 - a Rust runtime crate with an OpenCode execution driver
 - a sync `wasm-bindgen` bridge crate
 - Rust-owned prepared execution, driver sequencing, and event aggregation state
-- a launcher that can materialize managed config and warm the current project
+- a launcher that can materialize managed config, supervise a managed OpenCode process, warm the current project, and honor managed restart requests
 - a plugin package with Telegram, SQLite, and cron behavior
 - plugin-local host orchestration for mailbox workers and cron dispatch
 - durable mailbox queueing for gateway-managed ingress
@@ -290,6 +301,10 @@ The repository already contains:
 - SQLite-backed cron catalogs and run history
 - Telegram long polling with allowlists
 - Telegram operational tools
+- schedule tools for recurring jobs and one-shot follow-ups
+- gateway restart support for applying skill, agent, and config changes
+- memory search and retrieval tools for configured workspace memory
+- route-aware agent inspection and switching tools
 - private-chat editable stream previews with split Preview / Tools tool-call details
 - paginated tool-call history inside the Telegram `Tools` view
 - compaction reactions that mark the current Telegram message after `session.compacted`
