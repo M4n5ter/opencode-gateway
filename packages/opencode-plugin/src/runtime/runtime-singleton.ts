@@ -1,28 +1,48 @@
 const RUNTIME_CACHE_KEY = Symbol.for("opencode-gateway.runtime-cache")
 
 type RuntimeCache = Map<string, Promise<unknown>>
+type RuntimeReusePredicate<T> = (value: unknown) => value is T
 
-export function getOrCreateRuntimeSingleton<T>(key: string, factory: () => Promise<T>): Promise<T> {
+export async function getOrCreateRuntimeSingleton<T>(
+    key: string,
+    factory: () => Promise<T>,
+    options: {
+        isReusable?: RuntimeReusePredicate<T>
+    } = {},
+): Promise<T> {
     const cache = getRuntimeCache()
-    const existing = cache.get(key)
-    if (existing !== undefined) {
-        return existing as Promise<T>
-    }
+    while (true) {
+        const existing = cache.get(key)
+        if (existing !== undefined) {
+            const value = await existing
+            if (options.isReusable === undefined || options.isReusable(value)) {
+                return value as T
+            }
 
-    const promise = factory().catch((error) => {
-        if (cache.get(key) === promise) {
-            cache.delete(key)
+            if (cache.get(key) === existing) {
+                cache.delete(key)
+            }
+
+            continue
         }
 
-        throw error
-    })
-    cache.set(key, promise)
-    return promise
+        const promise = factory().catch((error) => {
+            if (cache.get(key) === promise) {
+                cache.delete(key)
+            }
+
+            throw error
+        })
+        cache.set(key, promise)
+        return await promise
+    }
 }
 
-export function clearRuntimeSingletonForTests(key: string): void {
+export function clearRuntimeSingleton(key: string): void {
     getRuntimeCache().delete(key)
 }
+
+export const clearRuntimeSingletonForTests = clearRuntimeSingleton
 
 function getRuntimeCache(): RuntimeCache {
     const globalScope = globalThis as typeof globalThis & {

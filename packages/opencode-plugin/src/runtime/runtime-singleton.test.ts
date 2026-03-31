@@ -43,3 +43,31 @@ test("getOrCreateRuntimeSingleton clears a failed initialization so the next att
     expect(factoryCalls).toBe(2)
     expect(runtime).toEqual({ id: "runtime-b" })
 })
+
+test("getOrCreateRuntimeSingleton replaces a cached runtime that fails reuse validation", async () => {
+    const key = "gateway-config-c"
+    clearRuntimeSingletonForTests(key)
+
+    await getOrCreateRuntimeSingleton(key, async () => ({ legacy: true }))
+
+    let factoryCalls = 0
+    const runtime = await getOrCreateRuntimeSingleton(
+        key,
+        async () => {
+            factoryCalls += 1
+            return { id: "runtime-c", ready: true }
+        },
+        {
+            isReusable: (value): value is { id: string; ready: boolean } =>
+                typeof value === "object" &&
+                value !== null &&
+                "ready" in value &&
+                value.ready === true &&
+                "id" in value &&
+                typeof value.id === "string",
+        },
+    )
+
+    expect(factoryCalls).toBe(1)
+    expect(runtime).toEqual({ id: "runtime-c", ready: true })
+})
