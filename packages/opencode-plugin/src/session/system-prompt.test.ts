@@ -55,6 +55,7 @@ test("GatewaySystemPromptBuilder combines gateway target context with memory con
         expect(prompts[0]).toContain("can request that restart for them")
         expect(prompts[1]).toContain("Gateway skills:")
         expect(prompts[1]).toContain("workspace-local skills directory at `.opencode/skills`")
+        expect(prompts[1]).toContain("After completing a complex task")
         expect(prompts[1]).toContain("do not stop at telling them to restart manually")
         expect(prompts[2]).toContain("Gateway memory:")
         expect(prompts[2]).toContain("Configured path: memory/project.md")
@@ -134,6 +135,7 @@ test("GatewaySystemPromptBuilder still injects skills guidance when a gateway se
 
         expect(prompts).toEqual([expect.stringContaining("Gateway skills:")])
         expect(prompts[0]).toContain("gateway_restart")
+        expect(prompts[0]).toContain("proactively distill the reusable high-signal workflow")
     } finally {
         db.close()
     }

@@ -193,11 +193,15 @@ search_only = true
 path = "memory/project.md"
 description = "Project conventions and long-lived context"
 inject_content = true
+header = "<important>"
+footer = "</important>"
 
 [[memory.entries]]
 path = "memory/notes"
 description = "Domain notes and operating docs"
 search_only = true
+header = "<reference>"
+footer = "</reference>"
 
 [[memory.entries]]
 path = "memory/snippets"

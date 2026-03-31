@@ -42,7 +42,18 @@ export class GatewayMemoryPromptProvider {
             lines.push(codeFence(file.infoString, file.text))
         }
 
-        return lines.join("\n")
+        const sectionLines: string[] = []
+        if ((entry.header ?? null) !== null) {
+            sectionLines.push(entry.header ?? "")
+        }
+
+        sectionLines.push(...lines)
+
+        if ((entry.footer ?? null) !== null) {
+            sectionLines.push(entry.footer ?? "")
+        }
+
+        return sectionLines.join("\n")
     }
 }
 

@@ -53,6 +53,8 @@ test("loadGatewayConfig resolves memory paths against the gateway workspace", as
                 path: memoryFilePath,
                 displayPath: "memory/project.md",
                 description: "Project conventions",
+                header: null,
+                footer: null,
                 injectContent: true,
                 searchOnly: false,
             },

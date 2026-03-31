@@ -155,3 +155,41 @@ test("GatewayMemoryPromptProvider skips default maintenance policy when no defau
         await rm(root, { recursive: true, force: true })
     }
 })
+
+test("GatewayMemoryPromptProvider wraps a memory block with configured header and footer", async () => {
+    const root = await mkdtemp(join(tmpdir(), "opencode-gateway-memory-prompt-"))
+    const memoryFile = join(root, "USER.md")
+
+    try {
+        await writeFile(memoryFile, "# User")
+
+        const prompt = await new GatewayMemoryPromptProvider(
+            {
+                entries: [
+                    {
+                        kind: "file",
+                        path: memoryFile,
+                        displayPath: "USER.md",
+                        description: "User profile",
+                        header: "<important>",
+                        footer: "</important>",
+                        injectContent: true,
+                        searchOnly: false,
+                    },
+                ],
+            },
+            { log() {} },
+        ).buildPrompt()
+
+        expect(prompt).not.toBeNull()
+        expect(prompt).toContain("<important>\nConfigured path: USER.md")
+        expect(prompt).toContain("</important>")
+        expect(prompt).toContain("File: USER.md")
+
+        const text = prompt ?? ""
+        expect(text.indexOf("<important>")).toBeLessThan(text.indexOf("Configured path: USER.md"))
+        expect(text.indexOf("</important>")).toBeGreaterThan(text.indexOf("File: USER.md"))
+    } finally {
+        await rm(root, { recursive: true, force: true })
+    }
+})

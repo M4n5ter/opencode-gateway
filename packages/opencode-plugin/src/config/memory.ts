@@ -11,6 +11,8 @@ export type GatewayMemoryEntryConfig =
           path: string
           displayPath: string
           description: string
+          header?: string | null
+          footer?: string | null
           injectContent: boolean
           searchOnly: boolean
       }
@@ -19,6 +21,8 @@ export type GatewayMemoryEntryConfig =
           path: string
           displayPath: string
           description: string
+          header?: string | null
+          footer?: string | null
           globs: string[]
           searchOnly: boolean
       }
@@ -30,6 +34,8 @@ type RawMemoryConfig = {
 type RawMemoryEntryConfig = {
     path?: unknown
     description?: unknown
+    header?: unknown
+    footer?: unknown
     inject_content?: unknown
     inject_markdown_contents?: unknown
     globs?: unknown
@@ -85,6 +91,8 @@ async function readMemoryEntry(
 
     const displayPath = readRequiredString(entry.path, `${field}.path`)
     const description = readRequiredString(entry.description, `${field}.description`)
+    const header = readOptionalString(entry.header, `${field}.header`)
+    const footer = readOptionalString(entry.footer, `${field}.footer`)
     const resolvedPath = resolve(workspaceDirPath, displayPath)
     const metadata = await ensurePathMetadata(resolvedPath, displayPath, entry, `${field}.path`)
     const searchOnly = readBoolean(entry.search_only, `${field}.search_only`, false)
@@ -102,6 +110,8 @@ async function readMemoryEntry(
             path: resolvedPath,
             displayPath,
             description,
+            header,
+            footer,
             injectContent,
             searchOnly,
         }
@@ -119,6 +129,8 @@ async function readMemoryEntry(
             path: resolvedPath,
             displayPath,
             description,
+            header,
+            footer,
             globs,
             searchOnly,
         }
@@ -226,4 +238,12 @@ function readRequiredString(value: unknown, field: string): string {
     }
 
     return trimmed
+}
+
+function readOptionalString(value: unknown, field: string): string | null {
+    if (value === undefined) {
+        return null
+    }
+
+    return readRequiredString(value, field)
 }

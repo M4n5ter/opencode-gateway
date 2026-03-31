@@ -34,6 +34,8 @@ test("parseMemoryConfig resolves relative file entries against the gateway works
                     path: filePath,
                     displayPath: "memory/project.md",
                     description: "Project conventions",
+                    header: null,
+                    footer: null,
                     injectContent: true,
                     searchOnly: false,
                 },
@@ -72,6 +74,8 @@ test("parseMemoryConfig parses directory entries and keeps glob patterns", async
                     path: directoryPath,
                     displayPath: "notes",
                     description: "Long-lived notes",
+                    header: null,
+                    footer: null,
                     globs: ["**/*.md", "ops/**/*.yaml"],
                     searchOnly: false,
                 },
@@ -241,6 +245,8 @@ test("parseMemoryConfig creates a missing file entry when the path looks like a 
             path: filePath,
             displayPath: "missing.md",
             description: "Missing",
+            header: null,
+            footer: null,
             injectContent: false,
             searchOnly: false,
         })
@@ -274,6 +280,8 @@ test("parseMemoryConfig creates a missing directory entry when glob injection is
             path: directoryPath,
             displayPath: "memory/daily",
             description: "Daily notes",
+            header: null,
+            footer: null,
             globs: ["**/*.md"],
             searchOnly: false,
         })
@@ -310,6 +318,8 @@ test("parseMemoryConfig keeps absolute paths untouched", async () => {
             path: filePath,
             displayPath: filePath,
             description: "External memory",
+            header: null,
+            footer: null,
             injectContent: false,
             searchOnly: true,
         })
@@ -344,8 +354,53 @@ test("parseMemoryConfig resolves parent traversals from the workspace root", asy
             path: filePath,
             displayPath: "../shared/project.md",
             description: "Shared memory",
+            header: null,
+            footer: null,
             injectContent: false,
             searchOnly: false,
+        })
+    } finally {
+        await rm(root, { recursive: true, force: true })
+    }
+})
+
+test("parseMemoryConfig keeps optional memory block headers and footers", async () => {
+    const root = await mkdtemp(join(tmpdir(), "opencode-gateway-memory-config-"))
+    const workspaceDirPath = join(root, "opencode-gateway-workspace")
+    const filePath = join(workspaceDirPath, "USER.md")
+
+    try {
+        await mkdir(workspaceDirPath, { recursive: true })
+        await writeFile(filePath, "# User")
+
+        const config = await parseMemoryConfig(
+            {
+                entries: [
+                    {
+                        path: "USER.md",
+                        description: "User profile",
+                        header: "<important>",
+                        footer: "</important>",
+                        inject_content: true,
+                    },
+                ],
+            },
+            workspaceDirPath,
+        )
+
+        expect(config).toEqual({
+            entries: [
+                {
+                    kind: "file",
+                    path: filePath,
+                    displayPath: "USER.md",
+                    description: "User profile",
+                    header: "<important>",
+                    footer: "</important>",
+                    injectContent: true,
+                    searchOnly: false,
+                },
+            ],
         })
     } finally {
         await rm(root, { recursive: true, force: true })

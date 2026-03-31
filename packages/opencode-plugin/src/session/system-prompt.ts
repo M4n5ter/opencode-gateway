@@ -36,6 +36,7 @@ function buildGatewaySkillsPrompt(): string {
         "- This gateway session uses a managed workspace-local skills directory at `.opencode/skills`.",
         "- You may read any skills already visible to OpenCode, including user-configured global skills.",
         "- When creating, installing, or updating a skill, default to `.opencode/skills` in the current gateway workspace unless the user explicitly asks for a global change.",
+        "- **After completing a complex task, proactively distill the reusable high-signal workflow, patterns, and caveats into a workspace-local skill unless the user explicitly wants to keep it one-off. MUST load `skill-creator` skill and follow the instructions in `SKILL.md`.**",
         "- If a user says new skills, agents, or config changes need a reload or restart to take effect, do not stop at telling them to restart manually. In this managed gateway, tell them you can request the restart for them and use gateway_restart unless they explicitly want to handle it themselves.",
     ].join("\n")
 }
