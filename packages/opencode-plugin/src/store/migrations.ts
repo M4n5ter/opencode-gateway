@@ -1,6 +1,6 @@
 import type { SqliteDatabaseLike } from "./database"
 
-const LATEST_SCHEMA_VERSION = 20
+const LATEST_SCHEMA_VERSION = 21
 
 export function migrateGatewayDatabase(db: SqliteDatabaseLike): void {
     db.exec("PRAGMA journal_mode = WAL;")
@@ -108,6 +108,11 @@ export function migrateGatewayDatabase(db: SqliteDatabaseLike): void {
 
     if (currentVersion === 19) {
         migrateToV20(db)
+        currentVersion = 20
+    }
+
+    if (currentVersion === 20) {
+        migrateToV21(db)
     }
 }
 
@@ -843,6 +848,14 @@ function migrateToV20(db: SqliteDatabaseLike): void {
     db.exec(`
         ALTER TABLE mailbox_entries
         ADD COLUMN reply_context_json TEXT;
+    `)
+    db.exec("PRAGMA user_version = 20;")
+}
+
+function migrateToV21(db: SqliteDatabaseLike): void {
+    db.exec(`
+        CREATE INDEX session_bindings_session_id_updated_at_ms_idx
+            ON session_bindings (session_id, updated_at_ms DESC);
     `)
     db.exec(`PRAGMA user_version = ${LATEST_SCHEMA_VERSION};`)
 }

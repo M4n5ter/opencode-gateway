@@ -17,6 +17,9 @@ import { createScheduleCancelTool } from "./tools/schedule-cancel"
 import { createScheduleListTool } from "./tools/schedule-list"
 import { createScheduleOnceTool } from "./tools/schedule-once"
 import { createScheduleStatusTool } from "./tools/schedule-status"
+import { createSessionListTool } from "./tools/session-list"
+import { createSessionSearchTool } from "./tools/session-search"
+import { createSessionViewTool } from "./tools/session-view"
 import { createTelegramSendTestTool } from "./tools/telegram-send-test"
 import { createTelegramStatusTool } from "./tools/telegram-status"
 
@@ -39,6 +42,9 @@ export const OpencodeGatewayPlugin: Plugin = async (input) => {
         schedule_list: createScheduleListTool(runtime.cron),
         schedule_once: createScheduleOnceTool(runtime.cron, runtime.sessionContext),
         schedule_status: createScheduleStatusTool(runtime.cron),
+        session_list: createSessionListTool(runtime.sessionSearch),
+        session_search: createSessionSearchTool(runtime.sessionSearch),
+        session_view: createSessionViewTool(runtime.sessionSearch),
     }
 
     if (runtime.memory.hasEntries()) {

@@ -31,6 +31,121 @@ test("OpencodeSdkAdapter reports missing sessions through lookupSession without 
     })
 })
 
+test("OpencodeSdkAdapter lists sessions with normalized metadata", async () => {
+    const seenQueries: unknown[] = []
+    const adapter = new OpencodeSdkAdapter(
+        {
+            session: {
+                async list(input: { query?: unknown }) {
+                    seenQueries.push(input.query ?? null)
+                    return {
+                        data: [
+                            {
+                                id: "ses_1",
+                                title: "Gateway telegram:42",
+                                parentID: "ses_root",
+                                time: {
+                                    created: 10,
+                                    updated: 20,
+                                },
+                            },
+                        ],
+                    }
+                },
+            },
+        } as never,
+        "/workspace",
+    )
+
+    expect(await adapter.listSessions()).toEqual([
+        {
+            id: "ses_1",
+            title: "Gateway telegram:42",
+            parentId: "ses_root",
+            createdAtMs: 10,
+            updatedAtMs: 20,
+        },
+    ])
+    expect(seenQueries).toEqual([
+        {
+            directory: "/workspace",
+        },
+    ])
+})
+
+test("OpencodeSdkAdapter lists session messages while preserving raw parts", async () => {
+    const seenQueries: unknown[] = []
+    const seenPaths: unknown[] = []
+    const adapter = new OpencodeSdkAdapter(
+        {
+            session: {
+                async messages(input: { query?: unknown; path: unknown }) {
+                    seenQueries.push(input.query ?? null)
+                    seenPaths.push(input.path)
+                    return {
+                        data: [
+                            {
+                                info: {
+                                    id: "msg_1",
+                                    role: "assistant",
+                                    parentID: "msg_0",
+                                    finish: "stop",
+                                    time: {
+                                        created: 30,
+                                        completed: 40,
+                                    },
+                                },
+                                parts: [
+                                    {
+                                        id: "tool_1",
+                                        type: "tool",
+                                        tool: "bash",
+                                        state: {
+                                            status: "completed",
+                                            output: "ok",
+                                        },
+                                    },
+                                ],
+                            },
+                        ],
+                    }
+                },
+            },
+        } as never,
+        "/workspace",
+    )
+
+    expect(await adapter.listSessionMessages("ses_1", 25)).toEqual([
+        {
+            messageId: "msg_1",
+            role: "assistant",
+            parentId: "msg_0",
+            createdAtMs: 30,
+            completedAtMs: 40,
+            finish: "stop",
+            errorMessage: null,
+            parts: [
+                {
+                    id: "tool_1",
+                    type: "tool",
+                    tool: "bash",
+                    state: {
+                        status: "completed",
+                        output: "ok",
+                    },
+                },
+            ],
+        },
+    ])
+    expect(seenPaths).toEqual([{ id: "ses_1" }])
+    expect(seenQueries).toEqual([
+        {
+            directory: "/workspace",
+            limit: 25,
+        },
+    ])
+})
+
 test("OpencodeSdkAdapter maps sendPromptAsync to session.promptAsync", async () => {
     const seenMessageIds: string[] = []
     const seenParts: unknown[] = []

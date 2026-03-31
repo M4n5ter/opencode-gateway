@@ -852,6 +852,58 @@ test("sqlite store persists session reply targets and pending interactions", () 
     }
 })
 
+test("sqlite store lists current and historical gateway sessions without duplication", () => {
+    const db = createMemoryDatabase()
+
+    try {
+        migrateGatewayDatabase(db)
+        const store = new SqliteStore(db)
+
+        store.putSessionBinding("telegram:42", "session-current", 20)
+        store.replaceSessionReplyTargets({
+            sessionId: "session-current",
+            conversationKey: "telegram:42",
+            targets: [
+                {
+                    channel: "telegram",
+                    target: "42",
+                    topic: null,
+                },
+            ],
+            recordedAtMs: 20,
+        })
+        store.replaceSessionReplyTargets({
+            sessionId: "session-old",
+            conversationKey: "telegram:42",
+            targets: [
+                {
+                    channel: "telegram",
+                    target: "42",
+                    topic: null,
+                },
+            ],
+            recordedAtMs: 10,
+        })
+
+        expect(store.listGatewaySessions()).toEqual([
+            {
+                sessionId: "session-current",
+                conversationKey: "telegram:42",
+                lastTrackedAtMs: 20,
+                isCurrentBinding: true,
+            },
+            {
+                sessionId: "session-old",
+                conversationKey: "telegram:42",
+                lastTrackedAtMs: 10,
+                isCurrentBinding: false,
+            },
+        ])
+    } finally {
+        db.close()
+    }
+})
+
 test("sqlite migration upgrades pending questions to pending interactions", () => {
     const db = createMemoryDatabase()
 

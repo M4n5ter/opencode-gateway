@@ -21,8 +21,18 @@ type OpencodeClient = PluginInput["client"]
 
 type MaybeWrapped<T> = T | { data: T }
 
-type SessionRecord = {
+type CreatedSessionRecord = {
     id: string
+}
+
+type RawSessionRecord = {
+    id: string
+    title?: string
+    parentID?: string
+    time?: {
+        created?: number
+        updated?: number
+    }
 }
 
 type AgentRecord = {
@@ -31,7 +41,7 @@ type AgentRecord = {
     hidden?: boolean
 }
 
-type SessionPromptPart = {
+type SessionPromptPart = Record<string, unknown> & {
     id?: string
     messageID?: string
     type: string
@@ -40,6 +50,25 @@ type SessionPromptPart = {
     url?: string
     filename?: string
     ignored?: boolean
+}
+
+export type OpencodeSessionRecord = {
+    id: string
+    title: string
+    parentId: string | null
+    createdAtMs: number
+    updatedAtMs: number
+}
+
+export type OpencodeSessionMessageRecord = {
+    messageId: string
+    role: string
+    parentId: string | null
+    createdAtMs: number | null
+    completedAtMs: number | null
+    finish: string | null
+    errorMessage: string | null
+    parts: Array<Record<string, unknown>>
 }
 
 type PromptInputPart =
@@ -63,6 +92,10 @@ type MessageResponse = {
         parentID?: string
         finish?: string
         error?: unknown
+        time?: {
+            created?: number
+            completed?: number
+        }
     }
     parts: SessionPromptPart[]
 }
@@ -89,7 +122,7 @@ export class OpencodeSdkAdapter {
             signal: AbortSignal.timeout(DEFAULT_SDK_REQUEST_TIMEOUT_MS),
         })
 
-        return unwrapData<SessionRecord>(session).id
+        return unwrapData<CreatedSessionRecord>(session).id
     }
 
     async listAgents(): Promise<AgentRecord[]> {
@@ -103,6 +136,51 @@ export class OpencodeSdkAdapter {
         })
 
         return unwrapData<AgentRecord[]>(agents)
+    }
+
+    async listSessions(): Promise<OpencodeSessionRecord[]> {
+        const sessions = await this.client.session.list({
+            query: this.requestContext(),
+            responseStyle: "data",
+            throwOnError: true,
+            signal: AbortSignal.timeout(DEFAULT_SDK_REQUEST_TIMEOUT_MS),
+        })
+
+        return unwrapData<RawSessionRecord[]>(sessions).flatMap(toSessionRecord)
+    }
+
+    async getSession(sessionId: string): Promise<OpencodeSessionRecord | null> {
+        try {
+            const session = await this.client.session.get({
+                path: { id: sessionId },
+                query: this.requestContext(),
+                responseStyle: "data",
+                throwOnError: true,
+                signal: AbortSignal.timeout(DEFAULT_SDK_REQUEST_TIMEOUT_MS),
+            })
+
+            const normalized = toSessionRecord(unwrapData<RawSessionRecord>(session))
+            return normalized[0] ?? null
+        } catch (error) {
+            if (isMissingSessionError(error)) {
+                return null
+            }
+
+            throw error
+        }
+    }
+
+    async listSessionMessages(sessionId: string, limit?: number): Promise<OpencodeSessionMessageRecord[]> {
+        const normalizedLimit = normalizeOptionalLimit(limit, "limit")
+        const messages = await this.client.session.messages({
+            path: { id: sessionId },
+            query: normalizedLimit === null ? this.requestContext() : { ...this.requestContext(), limit: normalizedLimit },
+            responseStyle: "data",
+            throwOnError: true,
+            signal: AbortSignal.timeout(DEFAULT_SDK_REQUEST_TIMEOUT_MS),
+        })
+
+        return unwrapData<MessageResponse[]>(messages).flatMap(toSessionMessageRecord)
     }
 
     async isSessionBusy(sessionId: string): Promise<boolean> {
@@ -547,6 +625,48 @@ function toBindingMessage(message: MessageResponse): BindingOpencodeMessage[] {
     ]
 }
 
+function toSessionRecord(record: RawSessionRecord): OpencodeSessionRecord[] {
+    const title = typeof record.title === "string" && record.title.trim().length > 0 ? record.title : record.id
+    const createdAtMs = readOptionalNumber(record.time, "created")
+    const updatedAtMs = readOptionalNumber(record.time, "updated")
+    if (createdAtMs === null || updatedAtMs === null) {
+        return []
+    }
+
+    return [
+        {
+            id: record.id,
+            title,
+            parentId: typeof record.parentID === "string" ? record.parentID : null,
+            createdAtMs,
+            updatedAtMs,
+        },
+    ]
+}
+
+function toSessionMessageRecord(message: MessageResponse): OpencodeSessionMessageRecord[] {
+    if (
+        typeof message.info?.id !== "string" ||
+        typeof message.info.role !== "string" ||
+        message.info.role.length === 0
+    ) {
+        return []
+    }
+
+    return [
+        {
+            messageId: message.info.id,
+            role: message.info.role,
+            parentId: typeof message.info.parentID === "string" ? message.info.parentID : null,
+            createdAtMs: readOptionalNumber(message.info.time, "created"),
+            completedAtMs: readOptionalNumber(message.info.time, "completed"),
+            finish: typeof message.info.finish === "string" ? message.info.finish : null,
+            errorMessage: extractDataMessage(message.info.error) ?? null,
+            parts: message.parts,
+        },
+    ]
+}
+
 function toErrorResult(command: BindingOpencodeCommand, error: unknown): BindingOpencodeCommandResult {
     return {
         kind: "error",
@@ -567,6 +687,18 @@ class OpencodeTimeoutError extends Error {
 function normalizeTimeoutMs(value: number | null | undefined, fallback: number, field: string): number {
     if (value === undefined || value === null) {
         return fallback
+    }
+
+    if (!Number.isInteger(value) || value <= 0) {
+        throw new Error(`${field} must be a positive integer`)
+    }
+
+    return value
+}
+
+function normalizeOptionalLimit(value: number | null | undefined, field: string): number | null {
+    if (value === undefined || value === null) {
+        return null
     }
 
     if (!Number.isInteger(value) || value <= 0) {
@@ -622,6 +754,20 @@ function extractDataMessage(value: unknown): string | null {
 
     const message = (value as { message?: unknown }).message
     return typeof message === "string" ? message : null
+}
+
+function readOptionalNumber(
+    value: {
+        [key: string]: unknown
+    } | null | undefined,
+    field: string,
+): number | null {
+    if (value === null || value === undefined) {
+        return null
+    }
+
+    const raw = value[field]
+    return typeof raw === "number" && Number.isFinite(raw) ? raw : null
 }
 
 function extractErrorMessage(error: unknown): string {

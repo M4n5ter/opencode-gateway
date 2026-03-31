@@ -27,6 +27,7 @@ import { GatewayToolActivityRuntime } from "./runtime/tool-activity"
 import { GatewaySessionAgentRuntime } from "./session/agent"
 import { GatewaySessionContext } from "./session/context"
 import { resolveConversationKeyForTarget } from "./session/conversation-key"
+import { GatewaySessionSearchRuntime } from "./session/search"
 import { ChannelSessionSwitcher } from "./session/switcher"
 import { GatewaySystemPromptBuilder } from "./session/system-prompt"
 import { openSqliteStore } from "./store/sqlite"
@@ -69,6 +70,7 @@ export class GatewayPluginRuntime {
         readonly files: ChannelFileSender,
         readonly channelSessions: ChannelSessionSwitcher,
         readonly sessionAgents: GatewaySessionAgentRuntime,
+        readonly sessionSearch: GatewaySessionSearchRuntime,
         readonly sessionContext: GatewaySessionContext,
         readonly restart: GatewayRestartRuntime,
         readonly systemPrompts: GatewaySystemPromptBuilder,
@@ -133,6 +135,7 @@ export async function createGatewayRuntime(
         const activeExecutions = new ActiveExecutionRegistry()
         const opencode = new OpencodeSdkAdapter(input.client, config.workspaceDirPath)
         const sessionAgents = new GatewaySessionAgentRuntime(opencode, sessionContext, store)
+        const sessionSearch = new GatewaySessionSearchRuntime(store, opencode)
         const interactionClient = createInteractionClient(input.client, input.serverUrl, config.workspaceDirPath)
         const compactionReactions = new GatewayTelegramCompactionRuntime(
             telegramClient,
@@ -279,6 +282,7 @@ export async function createGatewayRuntime(
             files,
             channelSessions,
             sessionAgents,
+            sessionSearch,
             sessionContext,
             restart,
             systemPrompts,

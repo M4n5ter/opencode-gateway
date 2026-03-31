@@ -186,6 +186,13 @@ export type TelegramSessionSurfaceRecord = {
     updatedAtMs: number
 }
 
+export type GatewaySessionCatalogRecord = {
+    sessionId: string
+    conversationKey: string
+    lastTrackedAtMs: number
+    isCurrentBinding: boolean
+}
+
 export type CompleteMailboxJobExecutionInput = {
     jobId: number
     sessionId: string
@@ -457,6 +464,45 @@ export class SqliteStore {
             .get(sessionId)
 
         return replyTarget?.present === 1
+    }
+
+    listGatewaySessions(): GatewaySessionCatalogRecord[] {
+        const rows = this.db
+            .query<GatewaySessionCatalogRow, []>(
+                `
+                    SELECT
+                        session_id,
+                        COALESCE(
+                            MAX(CASE
+                                WHEN is_current_binding = 1 THEN conversation_key
+                                ELSE NULL
+                            END),
+                            MIN(conversation_key)
+                        ) AS conversation_key,
+                        MAX(last_tracked_at_ms) AS last_tracked_at_ms,
+                        MAX(is_current_binding) AS is_current_binding
+                    FROM (
+                        SELECT
+                            session_id,
+                            conversation_key,
+                            updated_at_ms AS last_tracked_at_ms,
+                            1 AS is_current_binding
+                        FROM session_bindings
+                        UNION ALL
+                        SELECT
+                            session_id,
+                            conversation_key,
+                            updated_at_ms AS last_tracked_at_ms,
+                            0 AS is_current_binding
+                        FROM session_reply_targets
+                    ) AS gateway_sessions
+                    GROUP BY session_id
+                    ORDER BY last_tracked_at_ms DESC, session_id ASC;
+                `,
+            )
+            .all()
+
+        return rows.map(mapGatewaySessionCatalogRow)
     }
 
     getConversationAgentOverride(conversationKey: string): string | null {
@@ -2530,6 +2576,13 @@ type SessionReplyTargetRow = {
     updated_at_ms: number
 }
 
+type GatewaySessionCatalogRow = {
+    session_id: string
+    conversation_key: string
+    last_tracked_at_ms: number
+    is_current_binding: number
+}
+
 type PendingInteractionRow = {
     id: number
     request_id: string
@@ -3188,6 +3241,15 @@ function mapSessionReplyTargetRow(row: SessionReplyTargetRow): BindingDeliveryTa
         channel: row.delivery_channel,
         target: row.delivery_target,
         topic: normalizeStoredKeyField(row.delivery_topic),
+    }
+}
+
+function mapGatewaySessionCatalogRow(row: GatewaySessionCatalogRow): GatewaySessionCatalogRecord {
+    return {
+        sessionId: row.session_id,
+        conversationKey: row.conversation_key,
+        lastTrackedAtMs: row.last_tracked_at_ms,
+        isCurrentBinding: row.is_current_binding === 1,
     }
 }
 
