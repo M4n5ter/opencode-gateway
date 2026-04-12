@@ -38,6 +38,7 @@ import { TelegramInboundMediaStore } from "./telegram/media"
 import { TelegramPollingService } from "./telegram/poller"
 import { GatewayTelegramRuntime } from "./telegram/runtime"
 import { TelegramToolToggleRuntime } from "./telegram/tool-toggle"
+import { formatError } from "./utils/error"
 import { ensureGatewayWorkspaceScaffold } from "./workspace/scaffold"
 
 export type GatewayPluginStatus = {
@@ -128,6 +129,18 @@ export async function createGatewayRuntime(
             const memoryPrompts = new GatewayMemoryPromptProvider(config.memory, logger)
             const systemPrompts = new GatewaySystemPromptBuilder(sessionContext, memoryPrompts)
             const telegramClient = config.telegram.enabled ? new TelegramBotClient(config.telegram.botToken) : null
+            let telegramBotIdentity: { id: string; username: string | null } | null = null
+            if (config.telegram.enabled && telegramClient !== null) {
+                try {
+                    const bot = await telegramClient.getMe()
+                    telegramBotIdentity = {
+                        id: String(bot.id),
+                        username: bot.username ?? null,
+                    }
+                } catch (error) {
+                    logger.log("warn", `telegram bot identity lookup failed during startup: ${formatError(error)}`)
+                }
+            }
             const telegramMediaStore =
                 config.telegram.enabled && telegramClient !== null
                     ? new TelegramInboundMediaStore(telegramClient, config.mediaRootPath)
@@ -251,6 +264,7 @@ export async function createGatewayRuntime(
                           store,
                           logger,
                           config.telegram,
+                          telegramBotIdentity,
                           mailboxRouter,
                           telegramMediaStore,
                           [toolToggle, interactions],

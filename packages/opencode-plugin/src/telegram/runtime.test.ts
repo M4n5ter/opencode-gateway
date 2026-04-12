@@ -61,6 +61,7 @@ test("telegram status performs a live getMe probe and persists bot metadata", as
                 pollTimeoutSeconds: 25,
                 allowedChats: ["-100123"],
                 allowedUsers: ["7"],
+                allowedBotUsers: [],
             },
             null,
             createEventStream(),
@@ -143,6 +144,7 @@ test("telegram sendTest uses explicit targets and records send health", async ()
                 pollTimeoutSeconds: 25,
                 allowedChats: ["-100123"],
                 allowedUsers: [],
+                allowedBotUsers: [],
             },
             null,
             createEventStream(),
@@ -218,6 +220,7 @@ test("telegram status reports stalled polling when the current poll exceeds the 
                 pollTimeoutSeconds: 15,
                 allowedChats: ["-100123"],
                 allowedUsers: ["7"],
+                allowedBotUsers: [],
             },
             {
                 isRunning() {

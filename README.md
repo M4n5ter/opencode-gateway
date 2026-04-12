@@ -149,8 +149,12 @@ bot_token_env = "TELEGRAM_BOT_TOKEN"
 poll_timeout_seconds = 25
 # Configure at least one allowlist when Telegram is enabled.
 # Ask @userinfobot for your numeric Telegram user id for private-chat allowlists.
+# Group and supergroup messages are only processed when they mention the bot.
+# Group messages also require the chat id plus the matching sender allowlist:
+# `allowed_users` for humans and `allowed_bot_users` for bots.
 allowed_chats = []
 allowed_users = []
+allowed_bot_users = []
 
 [channels.telegram.ux]
 # Control Telegram tool-call previews: "toggle", "inline", or "off".

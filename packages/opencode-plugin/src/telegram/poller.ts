@@ -6,7 +6,12 @@ import type { SqliteStore } from "../store/sqlite"
 import { formatError } from "../utils/error"
 import { TelegramApiError, type TelegramPollingClientLike } from "./client"
 import type { TelegramInboundMediaStore } from "./media"
-import { buildTelegramAllowlist, normalizeTelegramUpdate, type TelegramNormalizedCallbackQuery } from "./normalize"
+import {
+    buildTelegramAllowlist,
+    normalizeTelegramUpdate,
+    type TelegramBotIdentity,
+    type TelegramNormalizedCallbackQuery,
+} from "./normalize"
 import {
     recordTelegramChatType,
     recordTelegramPollCompleted,
@@ -19,6 +24,10 @@ import {
 const POLL_TIMEOUT_FLOOR_MS = 15_000
 const POLL_TIMEOUT_GRACE_MS = 10_000
 const POLL_STALL_GRACE_MS = 5_000
+const UNKNOWN_BOT_IDENTITY: TelegramBotIdentity = {
+    id: "",
+    username: null,
+}
 
 type PollerTiming = {
     timeoutFloorMs: number
@@ -29,6 +38,7 @@ type PollerTiming = {
 export class TelegramPollingService {
     private readonly allowlist
     private readonly timing: PollerTiming
+    private botIdentity: TelegramBotIdentity | null
     private running = false
     private inFlightStartedAtMs: number | null = null
     private consecutiveFailures = 0
@@ -40,12 +50,14 @@ export class TelegramPollingService {
         private readonly store: SqliteStore,
         private readonly logger: BindingLoggerHost,
         private readonly config: Extract<TelegramConfig, { enabled: true }>,
+        botIdentity: TelegramBotIdentity | null,
         private readonly mailboxRouter: MailboxRouterLike,
         private readonly mediaStore: TelegramInboundMediaStoreLike,
         private readonly callbackHandlers: TelegramCallbackRuntimeLike[],
         timing?: Partial<PollerTiming>,
     ) {
         this.allowlist = buildTelegramAllowlist(config)
+        this.botIdentity = botIdentity
         this.timing = {
             timeoutFloorMs: timing?.timeoutFloorMs ?? POLL_TIMEOUT_FLOOR_MS,
             timeoutGraceMs: timing?.timeoutGraceMs ?? POLL_TIMEOUT_GRACE_MS,
@@ -95,6 +107,7 @@ export class TelegramPollingService {
             this.inFlightStartedAtMs = pollStartedAtMs
 
             try {
+                await this.ensureBotIdentity()
                 const updates = await this.client.getUpdates(offset, this.config.pollTimeoutSeconds, controller.signal)
                 const recordedAtMs = Date.now()
                 recordTelegramPollCompleted(this.store, recordedAtMs)
@@ -110,10 +123,16 @@ export class TelegramPollingService {
 
                 for (const update of updates) {
                     const nextOffset = update.update_id + 1
-                    const normalized = normalizeTelegramUpdate(update, this.allowlist, this.mailboxRouter)
+                    const normalized = normalizeTelegramUpdate(
+                        update,
+                        this.allowlist,
+                        this.botIdentity ?? UNKNOWN_BOT_IDENTITY,
+                        this.mailboxRouter,
+                    )
 
                     if (normalized.kind === "ignore") {
                         this.logger.log("debug", `ignoring telegram update ${update.update_id}: ${normalized.reason}`)
+                        this.logger.log("debug", formatIgnoredTelegramUpdateDetails(update))
                         offset = this.advanceOffset(nextOffset)
                         continue
                     }
@@ -186,6 +205,18 @@ export class TelegramPollingService {
         this.store.putTelegramUpdateOffset(offset, recordedAtMs)
         return offset
     }
+
+    private async ensureBotIdentity(): Promise<void> {
+        if (this.botIdentity !== null) {
+            return
+        }
+
+        const bot = await this.client.getMe()
+        this.botIdentity = {
+            id: String(bot.id),
+            username: bot.username ?? null,
+        }
+    }
 }
 
 type GatewayMailboxRuntimeLike = Pick<GatewayMailboxRuntime, "enqueueInboundMessage">
@@ -236,4 +267,50 @@ function sleep(durationMs: number): Promise<void> {
     return new Promise((resolve) => {
         setTimeout(resolve, durationMs)
     })
+}
+
+function formatIgnoredTelegramUpdateDetails(update: {
+    update_id: number
+    message?: {
+        from?: { id: number; is_bot?: boolean }
+        chat: { id: number; type: string }
+        text?: string
+        caption?: string
+        entities?: Array<{ type: string; offset: number; length: number }>
+        caption_entities?: Array<{ type: string; offset: number; length: number }>
+    }
+}): string {
+    const message = update.message
+    if (!message) {
+        return `telegram update ${update.update_id} details: no message payload`
+    }
+
+    const entitySummary = summarizeTelegramEntities(message.entities ?? message.caption_entities)
+    const text = message.text ?? message.caption ?? null
+
+    return [
+        `telegram update ${update.update_id} details:`,
+        `chat_id=${message.chat.id}`,
+        `chat_type=${message.chat.type}`,
+        `from_id=${message.from?.id ?? "none"}`,
+        `from_is_bot=${message.from?.is_bot === true}`,
+        `text=${JSON.stringify(text)}`,
+        `entities=${entitySummary}`,
+    ].join(" ")
+}
+
+function summarizeTelegramEntities(
+    entities: Array<{ type: string; offset: number; length: number }> | undefined,
+): string {
+    if (!entities || entities.length === 0) {
+        return "[]"
+    }
+
+    return JSON.stringify(
+        entities.map((entity) => ({
+            type: entity.type,
+            offset: entity.offset,
+            length: entity.length,
+        })),
+    )
 }

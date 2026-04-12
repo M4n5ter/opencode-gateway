@@ -3,7 +3,7 @@ use std::fs;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-use crate::paths::{GatewayPaths, resolve_runtime_root_path};
+use crate::paths::{resolve_runtime_root_path, GatewayPaths};
 
 pub(crate) fn ensure_layout(paths: &GatewayPaths) -> Result<(), Box<dyn Error>> {
     fs::create_dir_all(&paths.config_root)?;
@@ -46,7 +46,8 @@ pub(crate) fn write_gateway_config_if_missing(paths: &GatewayPaths) -> Result<()
                 "poll_timeout_seconds = 25\n",
                 "# Ask @userinfobot for your numeric Telegram user id for private-chat allowlists.\n",
                 "allowed_chats = []\n",
-                "allowed_users = []\n\n",
+                "allowed_users = []\n",
+                "allowed_bot_users = []\n\n",
                 "# Optional long-lived memory sources injected into gateway-managed sessions.\n",
                 "# Relative paths are resolved from opencode-gateway-workspace.\n",
                 "# Missing files and directories are created automatically.\n",

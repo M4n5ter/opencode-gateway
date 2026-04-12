@@ -153,6 +153,7 @@ function createTelegramConfig() {
         pollTimeoutSeconds: 25,
         allowedChats: ["42"],
         allowedUsers: [],
+        allowedBotUsers: [],
         ux: {
             toolCallView: "toggle" as const,
             compactionReaction: true,
