@@ -3,7 +3,7 @@ use std::fs;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-use crate::paths::{resolve_runtime_root_path, GatewayPaths};
+use crate::paths::{GatewayPaths, resolve_runtime_root_path};
 
 pub(crate) fn ensure_layout(paths: &GatewayPaths) -> Result<(), Box<dyn Error>> {
     fs::create_dir_all(&paths.config_root)?;
