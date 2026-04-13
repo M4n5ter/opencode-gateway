@@ -1,7 +1,11 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { access, mkdtemp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
+import { spawnSync } from "node:child_process"
+
+import { stageLocalSmokePackages } from "../packages/opencode-plugin/scripts/npm-package-staging.mjs"
+import { NATIVE_TARGETS, hostNativeTarget, optionalPlatformPackageName } from "../packages/opencode-plugin/scripts/native-targets.mjs"
 
 const EXPECTED_TOOL_IDS = [
     "agent_status",
@@ -21,17 +25,21 @@ const EXPECTED_TOOL_IDS = [
 ]
 
 const REPO_ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
+const PACKAGE_ROOT = join(REPO_ROOT, "packages/opencode-plugin")
 const userHome =
     process.env.HOME ??
     (() => {
         throw new Error("HOME must be set")
     })()
 const tempRoot = await mkdtemp(join(tmpdir(), "opencode-gateway-smoke-"))
+const installRoot = join(tempRoot, "npm-install")
+const bunInstallRoot = join(tempRoot, "bun-install")
 const configHome = join(tempRoot, ".config")
 const dataHome = join(tempRoot, ".local", "share")
 const gatewayRoot = join(configHome, "opencode-gateway")
 const opencodeRoot = join(gatewayRoot, "opencode")
 const configuredPort = await choosePort()
+const hostTarget = hostNativeTarget()
 
 const baseEnv = {
     ...process.env,
@@ -49,18 +57,45 @@ let stdoutPump = Promise.resolve("")
 let stderrPump = Promise.resolve("")
 
 try {
-    await runCommand(["cargo", "run", "-p", "opencode-gateway-launcher", "--", "init"], baseEnv)
+    await ensureBuildArtifacts()
+
+    const stagingRoot = join(tempRoot, "staging")
+    const tarballRoot = join(tempRoot, "packed")
+    await mkdir(stagingRoot, { recursive: true })
+    await mkdir(tarballRoot, { recursive: true })
+
+    const staged = await stageLocalSmokePackages({
+        stageRoot: stagingRoot,
+        nativeDistRoot: join(PACKAGE_ROOT, "dist", "native"),
+        packPackage,
+    })
+    const mainTarball = await packPackage(staged.mainDirectory, tarballRoot)
+
+    console.log("[smoke:opencode] npm install staged tarballs")
+    await installFromTarball("npm", installRoot, mainTarball, staged.platformPackages)
+    await verifyInstalledPlatformPackages(installRoot)
+
+    console.log("[smoke:opencode] bun install staged tarballs")
+    await installFromTarball("bun", bunInstallRoot, mainTarball, staged.platformPackages)
+    await verifyInstalledPlatformPackages(bunInstallRoot, { allowExtraPackages: true })
+    console.log("[smoke:opencode] bun launcher init")
+    await runCommand([gatewayCliPath(bunInstallRoot), "init", "--managed"], {
+        ...baseEnv,
+        HOME: join(tempRoot, "bun-home"),
+        XDG_CONFIG_HOME: join(tempRoot, "bun-home", ".config"),
+        XDG_DATA_HOME: join(tempRoot, "bun-home", ".local", "share"),
+    }, bunInstallRoot)
+
+    console.log("[smoke:opencode] npm launcher init")
+    await runCommand([gatewayCliPath(installRoot), "init", "--managed"], baseEnv, installRoot)
     const opencodeConfigPath = await resolveManagedOpencodeConfigPath(opencodeRoot)
     await rewriteManagedOpencodeConfig(opencodeConfigPath, configuredPort)
 
-    child = Bun.spawn(["opencode", "serve"], {
-        cwd: REPO_ROOT,
+    console.log("[smoke:opencode] npm launcher serve")
+    child = Bun.spawn([gatewayCliPath(installRoot), "serve", "--managed"], {
+        cwd: installRoot,
         detached: true,
-        env: {
-            ...baseEnv,
-            OPENCODE_CONFIG: opencodeConfigPath,
-            OPENCODE_CONFIG_DIR: opencodeRoot,
-        },
+        env: baseEnv,
         stdout: "pipe",
         stderr: "pipe",
     })
@@ -99,12 +134,77 @@ try {
     await rm(tempRoot, { recursive: true, force: true })
 }
 
+async function ensureBuildArtifacts() {
+    runStep("build:binding", "bun", ["run", "build:binding"], REPO_ROOT)
+    runStep("build:plugin", "bun", ["run", "--cwd", "packages/opencode-plugin", "build"], REPO_ROOT)
+}
+
+async function installFromTarball(packageManager, destinationRoot, tarballPath, platformPackages) {
+    await mkdir(destinationRoot, { recursive: true })
+    await writeFile(
+        join(destinationRoot, "package.json"),
+        `${JSON.stringify(
+            {
+                name: "opencode-gateway-smoke",
+                private: true,
+                dependencies: {
+                    "opencode-gateway": `file:${tarballPath}`,
+                },
+                optionalDependencies: Object.fromEntries(
+                    platformPackages.map((platformPackage) => [
+                        platformPackage.aliasName,
+                        `file:${platformPackage.tarballPath}`,
+                    ]),
+                ),
+            },
+            null,
+            2,
+        )}\n`,
+    )
+
+    if (packageManager === "npm") {
+        await runCommand(["npm", "install", "--ignore-scripts"], baseEnv, destinationRoot)
+        return
+    }
+
+    await runCommand(["bun", "install"], baseEnv, destinationRoot)
+}
+
+async function verifyInstalledPlatformPackages(destinationRoot, { allowExtraPackages = false } = {}) {
+    const installedHostPackage = join(
+        destinationRoot,
+        "node_modules",
+        optionalPlatformPackageName(hostTarget),
+        "package.json",
+    )
+    await access(installedHostPackage)
+
+    for (const target of NATIVE_TARGETS) {
+        if (target.key === hostTarget.key) {
+            continue
+        }
+
+        const packagePath = join(destinationRoot, "node_modules", optionalPlatformPackageName(target), "package.json")
+        if (!allowExtraPackages && (await pathExists(packagePath))) {
+            throw new Error(`unexpected non-host platform package installed: ${optionalPlatformPackageName(target)}`)
+        }
+    }
+}
+
+function gatewayCliPath(destinationRoot) {
+    return join(
+        destinationRoot,
+        "node_modules",
+        ".bin",
+        process.platform === "win32" ? "opencode-gateway.cmd" : "opencode-gateway",
+    )
+}
+
 async function resolveManagedOpencodeConfigPath(configDir) {
     const jsoncPath = join(configDir, "opencode.jsonc")
-    try {
-        await readFile(jsoncPath, "utf8")
+    if (await pathExists(jsoncPath)) {
         return jsoncPath
-    } catch {}
+    }
 
     return join(configDir, "opencode.json")
 }
@@ -140,7 +240,7 @@ async function pollToolIds(port, logState) {
             lastError = error instanceof Error ? error.message : String(error)
         }
 
-        if (child?.exited) {
+        if (child && child.exitCode !== null) {
             throw new Error(`opencode serve exited early: ${formatLogState(logState)}`)
         }
 
@@ -181,9 +281,9 @@ async function readStream(stream, onChunk) {
     return chunks.join("")
 }
 
-async function runCommand(argv, env) {
+async function runCommand(argv, env, cwd) {
     const command = Bun.spawn(argv, {
-        cwd: REPO_ROOT,
+        cwd,
         env,
         stdout: "pipe",
         stderr: "pipe",
@@ -261,5 +361,45 @@ async function withTimeout(promise, timeoutMs, message) {
         if (timeoutId !== null) {
             clearTimeout(timeoutId)
         }
+    }
+}
+
+async function pathExists(path) {
+    try {
+        await access(path)
+        return true
+    } catch {
+        return false
+    }
+}
+
+async function packPackage(packageDirectory, destinationDirectory) {
+    const result = spawnSync("npm", ["pack", "--json"], {
+        cwd: packageDirectory,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "inherit"],
+    })
+
+    if (result.status !== 0) {
+        process.exit(result.status ?? 1)
+    }
+
+    const [{ filename }] = JSON.parse(result.stdout)
+    const source = join(packageDirectory, filename)
+    const destination = join(destinationDirectory, filename)
+    await rename(source, destination)
+    return destination
+}
+
+function runStep(label, command, args, cwd) {
+    console.log(`[smoke:opencode] ${label}`)
+    const result = spawnSync(command, args, {
+        cwd,
+        stdio: "inherit",
+        env: process.env,
+    })
+
+    if (result.status !== 0) {
+        process.exit(result.status ?? 1)
     }
 }

@@ -3,24 +3,17 @@ import { cp, mkdir, rm } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 
+import targets from "../src/cli/native-targets.json" with { type: "json" }
+
 const scriptDir = dirname(fileURLToPath(import.meta.url))
 const packageRoot = dirname(scriptDir)
 const repoRoot = dirname(dirname(packageRoot))
-const distRoot = join(packageRoot, "dist", "native")
 const launcherName = "opencode-gateway-launcher"
 const zigbuildDockerImage =
     process.env.OPENCODE_GATEWAY_ZIGBUILD_DOCKER_IMAGE ?? "ghcr.io/rust-cross/cargo-zigbuild:latest"
 
-const targets = [
-    { key: "darwin-arm64", rustTarget: "aarch64-apple-darwin", exe: launcherName },
-    { key: "darwin-x64", rustTarget: "x86_64-apple-darwin", exe: launcherName },
-    { key: "linux-arm64", rustTarget: "aarch64-unknown-linux-gnu", exe: launcherName },
-    { key: "linux-x64", rustTarget: "x86_64-unknown-linux-gnu", exe: launcherName },
-    { key: "win32-arm64", rustTarget: "aarch64-pc-windows-gnullvm", exe: `${launcherName}.exe` },
-    { key: "win32-x64", rustTarget: "x86_64-pc-windows-gnu", exe: `${launcherName}.exe` },
-]
-
 const options = parseArgs(process.argv.slice(2))
+const distRoot = options.outDir ?? join(packageRoot, "dist", "native")
 
 await rm(distRoot, { recursive: true, force: true })
 await mkdir(distRoot, { recursive: true })
@@ -37,8 +30,11 @@ for (const target of selectedTargets) {
 function parseArgs(argv) {
     let all = false
     let release = true
+    let outDir = null
 
-    for (const argument of argv) {
+    for (let index = 0; index < argv.length; index += 1) {
+        const argument = argv[index]
+
         if (argument === "--all") {
             all = true
             continue
@@ -49,10 +45,19 @@ function parseArgs(argv) {
             continue
         }
 
+        if (argument === "--out-dir") {
+            outDir = argv[index + 1] ?? null
+            if (outDir === null) {
+                throw new Error("--out-dir requires a value")
+            }
+            index += 1
+            continue
+        }
+
         throw new Error(`unknown argument: ${argument}`)
     }
 
-    return { all, release }
+    return { all, release, outDir }
 }
 
 function hostTarget() {

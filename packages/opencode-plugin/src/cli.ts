@@ -1,13 +1,16 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process"
+import { createRequire } from "node:module"
 import { access } from "node:fs/promises"
-import { dirname, join, resolve } from "node:path"
+import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
 import { formatCliHelp, parseCliCommand } from "./cli/args"
+import { resolveNativeLauncher } from "./cli/native-launcher"
 
-const launcherName = process.platform === "win32" ? "opencode-gateway-launcher.exe" : "opencode-gateway-launcher"
+const require = createRequire(import.meta.url)
+const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)))
 
 async function main(): Promise<void> {
     const command = parseCliCommand(process.argv.slice(2))
@@ -16,14 +19,14 @@ async function main(): Promise<void> {
         return
     }
 
-    const binaryPath = resolveNativeLauncherPath()
-    await ensurePathExists(binaryPath)
+    const launcher = resolveNativeLauncherPath()
+    await ensurePathExists(launcher)
 
-    const child = spawn(binaryPath, [command.kind], {
+    const child = spawn(launcher.path, [command.kind], {
         stdio: "inherit",
         env: {
             ...process.env,
-            OPENCODE_GATEWAY_PACKAGE_ROOT: dirname(dirname(fileURLToPath(import.meta.url))),
+            OPENCODE_GATEWAY_PACKAGE_ROOT: packageRoot,
             ...launcherEnv(command),
         },
     })
@@ -41,9 +44,16 @@ async function main(): Promise<void> {
     })
 }
 
-function resolveNativeLauncherPath(): string {
-    const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)))
-    return join(packageRoot, "dist", "native", `${process.platform}-${process.arch}`, launcherName)
+function resolveNativeLauncherPath() {
+    return resolveNativeLauncher(packageRoot, process.platform, process.arch, (packageName) => {
+        try {
+            return require.resolve(`${packageName}/package.json`, {
+                paths: [packageRoot],
+            })
+        } catch {
+            return null
+        }
+    })
 }
 
 function launcherEnv(command: Exclude<ReturnType<typeof parseCliCommand>, { kind: "help" }>): Record<string, string> {
@@ -68,13 +78,13 @@ function launcherEnv(command: Exclude<ReturnType<typeof parseCliCommand>, { kind
     return env
 }
 
-async function ensurePathExists(path: string): Promise<void> {
+async function ensurePathExists(launcher: ReturnType<typeof resolveNativeLauncherPath>): Promise<void> {
     try {
-        await access(path)
+        await access(launcher.path)
     } catch {
-        throw new Error(
-            `native launcher is missing for ${process.platform}-${process.arch}: ${path}. Rebuild the package or run the launcher build step before invoking the CLI`,
-        )
+        const reinstallHint =
+            "Reinstall opencode-gateway to fetch the matching native package. If you are running from a source checkout, build the local launcher first."
+        throw new Error(`native launcher is missing for ${launcher.target.key}: ${launcher.path}. ${reinstallHint}`)
     }
 }
 
