@@ -1,4 +1,5 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { rmSync } from "node:fs"
+import { mkdtemp, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -10,6 +11,9 @@ export async function runPluginSmoke(moduleExports) {
     const tempRoot = await mkdtemp(join(tmpdir(), "opencode-gateway-smoke-"))
     const configPath = join(tempRoot, "opencode-gateway.toml")
     const stateDbPath = join(tempRoot, "state.db")
+    process.once("exit", () => {
+        rmSync(tempRoot, { recursive: true, force: true })
+    })
 
     try {
         await writeFile(
@@ -50,6 +54,5 @@ export async function runPluginSmoke(moduleExports) {
         })
     } finally {
         delete process.env.OPENCODE_GATEWAY_CONFIG
-        await rm(tempRoot, { recursive: true, force: true })
     }
 }

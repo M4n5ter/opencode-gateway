@@ -4,14 +4,20 @@ import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 
 const EXPECTED_TOOL_IDS = [
-    "cron_list",
-    "cron_remove",
+    "agent_status",
+    "agent_switch",
     "cron_run",
     "cron_upsert",
     "gateway_dispatch_cron",
+    "gateway_restart",
     "gateway_status",
-    "telegram_send_test",
-    "telegram_status",
+    "schedule_cancel",
+    "schedule_list",
+    "schedule_once",
+    "schedule_status",
+    "session_list",
+    "session_search",
+    "session_view",
 ]
 
 const REPO_ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
@@ -25,7 +31,6 @@ const configHome = join(tempRoot, ".config")
 const dataHome = join(tempRoot, ".local", "share")
 const gatewayRoot = join(configHome, "opencode-gateway")
 const opencodeRoot = join(gatewayRoot, "opencode")
-const opencodeConfigPath = join(opencodeRoot, "opencode.json")
 const configuredPort = await choosePort()
 
 const baseEnv = {
@@ -33,6 +38,7 @@ const baseEnv = {
     HOME: tempRoot,
     XDG_CONFIG_HOME: configHome,
     XDG_DATA_HOME: dataHome,
+    OPENCODE_GATEWAY_LAUNCHER_MANAGED: "1",
     CARGO_HOME: process.env.CARGO_HOME ?? join(userHome, ".cargo"),
     RUSTUP_HOME: process.env.RUSTUP_HOME ?? join(userHome, ".rustup"),
     BUN_INSTALL: process.env.BUN_INSTALL ?? join(userHome, ".bun"),
@@ -44,6 +50,7 @@ let stderrPump = Promise.resolve("")
 
 try {
     await runCommand(["cargo", "run", "-p", "opencode-gateway-launcher", "--", "init"], baseEnv)
+    const opencodeConfigPath = await resolveManagedOpencodeConfigPath(opencodeRoot)
     await rewriteManagedOpencodeConfig(opencodeConfigPath, configuredPort)
 
     child = Bun.spawn(["opencode", "serve"], {
@@ -90,6 +97,16 @@ try {
 
     await Promise.allSettled([stdoutPump, stderrPump])
     await rm(tempRoot, { recursive: true, force: true })
+}
+
+async function resolveManagedOpencodeConfigPath(configDir) {
+    const jsoncPath = join(configDir, "opencode.jsonc")
+    try {
+        await readFile(jsoncPath, "utf8")
+        return jsoncPath
+    } catch {}
+
+    return join(configDir, "opencode.json")
 }
 
 async function rewriteManagedOpencodeConfig(configPath, port) {
