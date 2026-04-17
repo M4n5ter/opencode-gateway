@@ -20,11 +20,19 @@ export type TelegramMessage = {
     message_thread_id?: number
     text?: string
     caption?: string
+    entities?: TelegramMessageEntity[]
+    caption_entities?: TelegramMessageEntity[]
     photo?: TelegramPhotoSize[]
     document?: TelegramDocument
     from?: TelegramUser
     chat: TelegramChat
     reply_to_message?: TelegramReplyMessage
+}
+
+export type TelegramMessageEntity = {
+    type: string
+    offset: number
+    length: number
 }
 
 export type TelegramReplyMessage = {

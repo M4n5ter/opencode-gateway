@@ -33,6 +33,7 @@ test("GatewayToolActivityRuntime updates tool sections in call order without dup
                 pollTimeoutSeconds: 25,
                 allowedChats: ["42"],
                 allowedUsers: [],
+                allowedBotUsers: [],
                 ux: {
                     toolCallView: "toggle",
                 },
@@ -123,6 +124,7 @@ test("GatewayToolActivityRuntime resolves descendant sessions back to the tracke
                 pollTimeoutSeconds: 25,
                 allowedChats: ["42"],
                 allowedUsers: [],
+                allowedBotUsers: [],
                 ux: {
                     toolCallView: "toggle",
                 },
@@ -201,6 +203,7 @@ test("GatewayToolActivityRuntime exposes pending tool raw input before completio
                 pollTimeoutSeconds: 25,
                 allowedChats: ["42"],
                 allowedUsers: [],
+                allowedBotUsers: [],
                 ux: {
                     toolCallView: "toggle",
                 },

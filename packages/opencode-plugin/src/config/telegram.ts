@@ -7,6 +7,7 @@ type RawTelegramConfig = {
     poll_timeout_seconds?: unknown
     allowed_chats?: unknown
     allowed_users?: unknown
+    allowed_bot_users?: unknown
     ux?: unknown
 }
 
@@ -36,6 +37,7 @@ export type TelegramConfig =
           pollTimeoutSeconds: number
           allowedChats: string[]
           allowedUsers: string[]
+          allowedBotUsers: string[]
           ux: TelegramUxConfig
       }
 
@@ -59,6 +61,7 @@ export function parseTelegramConfig(value: unknown, env: EnvSource): TelegramCon
     const pollTimeoutSeconds = readPollTimeoutSeconds(table.poll_timeout_seconds)
     const allowedChats = readIdentifierList(table.allowed_chats, "channels.telegram.allowed_chats")
     const allowedUsers = readIdentifierList(table.allowed_users, "channels.telegram.allowed_users")
+    const allowedBotUsers = readIdentifierList(table.allowed_bot_users, "channels.telegram.allowed_bot_users")
     const botToken = configuredBotToken ?? (botTokenEnv === null ? null : (env[botTokenEnv]?.trim() ?? null))
 
     if (!botToken) {
@@ -76,6 +79,7 @@ export function parseTelegramConfig(value: unknown, env: EnvSource): TelegramCon
         pollTimeoutSeconds,
         allowedChats,
         allowedUsers,
+        allowedBotUsers,
         ux: parseTelegramUxConfig(table.ux),
     }
 }

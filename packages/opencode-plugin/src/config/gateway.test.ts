@@ -363,6 +363,7 @@ test("loadGatewayConfig accepts a direct Telegram bot token from config", async 
             pollTimeoutSeconds: 25,
             allowedChats: [],
             allowedUsers: ["42"],
+            allowedBotUsers: [],
             ux: {
                 toolCallView: "toggle",
                 compactionReaction: true,
@@ -461,6 +462,7 @@ test("loadGatewayConfig normalizes Telegram allowlist identifiers", async () => 
                 'bot_token_env = "TELEGRAM_BOT_TOKEN"',
                 'allowed_chats = [-100123456, "-100999888"]',
                 'allowed_users = [42, "77"]',
+                'allowed_bot_users = [700, "701"]',
             ].join("\n"),
         )
 
@@ -476,6 +478,7 @@ test("loadGatewayConfig normalizes Telegram allowlist identifiers", async () => 
             pollTimeoutSeconds: 25,
             allowedChats: ["-100123456", "-100999888"],
             allowedUsers: ["42", "77"],
+            allowedBotUsers: ["700", "701"],
             ux: {
                 toolCallView: "toggle",
                 compactionReaction: true,

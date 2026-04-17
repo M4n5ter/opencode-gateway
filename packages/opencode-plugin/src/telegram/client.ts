@@ -265,7 +265,7 @@ export class TelegramBotClient {
     }
 }
 
-export type TelegramPollingClientLike = Pick<TelegramBotClient, "getUpdates">
+export type TelegramPollingClientLike = Pick<TelegramBotClient, "getUpdates" | "getMe">
 export type TelegramSendClientLike = Pick<TelegramBotClient, "sendMessage">
 export type TelegramMediaClientLike = Pick<TelegramBotClient, "getFile" | "downloadFile">
 export type TelegramFileSendClientLike = Pick<TelegramBotClient, "sendPhoto" | "sendDocument">

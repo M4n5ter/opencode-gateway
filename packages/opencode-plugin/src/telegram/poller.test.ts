@@ -8,7 +8,7 @@ import { createMemoryDatabase } from "../test/sqlite"
 import { TelegramApiError } from "./client"
 import type { TelegramNormalizedInboundMessage } from "./normalize"
 import { TelegramPollingService } from "./poller"
-import type { TelegramUpdate } from "./types"
+import type { TelegramBotProfile, TelegramUpdate } from "./types"
 
 test("telegram poller aborts stalled getUpdates calls and records a timeout", async () => {
     const db = createMemoryDatabase()
@@ -19,6 +19,9 @@ test("telegram poller aborts stalled getUpdates calls and records a timeout", as
         const logger = new MemoryLogger()
         let calls = 0
         const client = {
+            async getMe(): Promise<TelegramBotProfile> {
+                return { id: 500, is_bot: true, username: "gateway_bot" }
+            },
             async getUpdates(
                 _offset: number | null,
                 _timeoutSeconds: number,
@@ -50,7 +53,14 @@ test("telegram poller aborts stalled getUpdates calls and records a timeout", as
                 pollTimeoutSeconds: 1,
                 allowedChats: [],
                 allowedUsers: ["6212645712"],
+                allowedBotUsers: [],
+                ux: {
+                    toolCallView: "toggle",
+                    compactionReaction: true,
+                    compactionReactionEmoji: "🗜️",
+                },
             },
+            { id: "500", username: "gateway_bot" },
             new GatewayMailboxRouter([]),
             new NoopMediaStore(),
             [new NoopQuestions()],
@@ -81,6 +91,9 @@ test("telegram poller logs recovery after a timeout", async () => {
         const logger = new MemoryLogger()
         let calls = 0
         const client = {
+            async getMe(): Promise<TelegramBotProfile> {
+                return { id: 500, is_bot: true, username: "gateway_bot" }
+            },
             async getUpdates(
                 _offset: number | null,
                 _timeoutSeconds: number,
@@ -116,7 +129,14 @@ test("telegram poller logs recovery after a timeout", async () => {
                 pollTimeoutSeconds: 1,
                 allowedChats: [],
                 allowedUsers: ["6212645712"],
+                allowedBotUsers: [],
+                ux: {
+                    toolCallView: "toggle",
+                    compactionReaction: true,
+                    compactionReactionEmoji: "🗜️",
+                },
             },
+            { id: "500", username: "gateway_bot" },
             new GatewayMailboxRouter([]),
             new NoopMediaStore(),
             [new NoopQuestions()],
@@ -148,6 +168,9 @@ test("telegram poller logs ignored updates at debug level", async () => {
         const logger = new MemoryLogger()
         let calls = 0
         const client = {
+            async getMe(): Promise<TelegramBotProfile> {
+                return { id: 500, is_bot: true, username: "gateway_bot" }
+            },
             async getUpdates(): Promise<TelegramUpdate[]> {
                 calls += 1
 
@@ -171,7 +194,14 @@ test("telegram poller logs ignored updates at debug level", async () => {
                 pollTimeoutSeconds: 1,
                 allowedChats: [],
                 allowedUsers: ["6212645712"],
+                allowedBotUsers: [],
+                ux: {
+                    toolCallView: "toggle",
+                    compactionReaction: true,
+                    compactionReactionEmoji: "🗜️",
+                },
             },
+            { id: "500", username: "gateway_bot" },
             new GatewayMailboxRouter([]),
             new NoopMediaStore(),
             [new NoopQuestions()],

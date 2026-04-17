@@ -4,6 +4,8 @@ import type {
     TelegramCallbackQuery,
     TelegramChatType,
     TelegramDocument,
+    TelegramMessage,
+    TelegramMessageEntity,
     TelegramPhotoSize,
     TelegramReplyMessage,
     TelegramUpdate,
@@ -54,6 +56,12 @@ export type TelegramNormalizedCallbackQuery = {
 type TelegramAllowlist = {
     allowedChats: ReadonlySet<string>
     allowedUsers: ReadonlySet<string>
+    allowedBotUsers: ReadonlySet<string>
+}
+
+export type TelegramBotIdentity = {
+    id: string
+    username: string | null
 }
 
 type MailboxRouterLike = {
@@ -64,12 +72,14 @@ export function buildTelegramAllowlist(config: Extract<TelegramConfig, { enabled
     return {
         allowedChats: new Set(config.allowedChats),
         allowedUsers: new Set(config.allowedUsers),
+        allowedBotUsers: new Set(config.allowedBotUsers),
     }
 }
 
 export function normalizeTelegramUpdate(
     update: TelegramUpdate,
     allowlist: TelegramAllowlist,
+    botIdentity: TelegramBotIdentity,
     mailboxRouter?: MailboxRouterLike,
 ): TelegramNormalizedUpdate {
     if (update.callback_query) {
@@ -85,13 +95,20 @@ export function normalizeTelegramUpdate(
         return ignored("message sender is missing")
     }
 
-    if (message.from.is_bot === true) {
-        return ignored("message sender is a bot")
-    }
-
     const chatId = String(message.chat.id)
     const userId = String(message.from.id)
-    if (!isAllowed(chatId, userId, allowlist)) {
+    const senderIsBot = message.from.is_bot === true
+    const chatType = message.chat.type
+
+    if (chatType === "group" || chatType === "supergroup") {
+        if (!isAllowedGroup(chatId, userId, senderIsBot, allowlist)) {
+            return ignored("message is not allowlisted")
+        }
+
+        if (!targetsCurrentBot(message, botIdentity)) {
+            return ignored("group message does not mention bot")
+        }
+    } else if (!isAllowedPrivate(chatId, userId, allowlist)) {
         return ignored("message is not allowlisted")
     }
 
@@ -133,7 +150,14 @@ function normalizeTelegramCallbackQuery(
 
     const chatId = String(message.chat.id)
     const userId = String(callbackQuery.from.id)
-    if (!isAllowed(chatId, userId, allowlist)) {
+    const chatType = message.chat.type
+    const senderIsBot = callbackQuery.from.is_bot === true
+    const allowed =
+        chatType === "group" || chatType === "supergroup"
+            ? isAllowedGroup(chatId, userId, senderIsBot, allowlist)
+            : isAllowedPrivate(chatId, userId, allowlist)
+
+    if (!allowed) {
         return ignored("callback query is not allowlisted")
     }
 
@@ -237,6 +261,76 @@ function selectLargestPhoto(photo: TelegramPhotoSize[] | undefined): TelegramPen
 
 function isAllowed(chatId: string, userId: string, allowlist: TelegramAllowlist): boolean {
     return allowlist.allowedChats.has(chatId) || allowlist.allowedUsers.has(userId)
+}
+
+function isAllowedPrivate(chatId: string, userId: string, allowlist: TelegramAllowlist): boolean {
+    return isAllowed(chatId, userId, allowlist)
+}
+
+function isAllowedGroup(chatId: string, userId: string, senderIsBot: boolean, allowlist: TelegramAllowlist): boolean {
+    if (!allowlist.allowedChats.has(chatId)) {
+        return false
+    }
+
+    return senderIsBot ? allowlist.allowedBotUsers.has(userId) : allowlist.allowedUsers.has(userId)
+}
+
+function mentionsCurrentBot(message: TelegramMessage, botUsername: string | null): boolean {
+    if (botUsername === null) {
+        return false
+    }
+
+    const expectedMention = `@${botUsername}`
+
+    return (
+        hasMentionEntity(message.text, message.entities, expectedMention) ||
+        hasMentionEntity(message.caption, message.caption_entities, expectedMention)
+    )
+}
+
+function hasMentionEntity(
+    text: string | undefined,
+    entities: TelegramMessageEntity[] | undefined,
+    expectedMention: string,
+): boolean {
+    if (text === undefined || entities === undefined) {
+        return false
+    }
+
+    for (const entity of entities) {
+        if (entity.type !== "mention") {
+            continue
+        }
+
+        const mention = text.slice(entity.offset, entity.offset + entity.length)
+        if (mention === expectedMention) {
+            return true
+        }
+    }
+
+    return false
+}
+
+function repliesToCurrentBot(reply: TelegramReplyMessage | undefined, botIdentity: TelegramBotIdentity): boolean {
+    if (!reply?.from) {
+        return false
+    }
+
+    if (botIdentity.id.length > 0 && String(reply.from.id) === botIdentity.id) {
+        return true
+    }
+
+    if (botIdentity.username === null) {
+        return false
+    }
+
+    return reply.from.username === botIdentity.username
+}
+
+function targetsCurrentBot(message: TelegramMessage, botIdentity: TelegramBotIdentity): boolean {
+    return (
+        mentionsCurrentBot(message, botIdentity.username) || repliesToCurrentBot(message.reply_to_message, botIdentity)
+    )
 }
 
 function ignored(reason: string): TelegramNormalizedUpdate {
