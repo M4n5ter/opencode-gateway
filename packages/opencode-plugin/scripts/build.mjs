@@ -27,6 +27,8 @@ run("bun", [
     "better-sqlite3",
     "--external",
     "@ff-labs/fff-node",
+    "--external",
+    "undici",
 ])
 run("bun", ["build", "./src/cli.ts", "--outfile", cliOutputPath, "--target", "node", "--format", "esm"])
 

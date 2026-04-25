@@ -11,7 +11,7 @@
     },
     "packages/opencode-plugin": {
       "name": "opencode-gateway",
-      "version": "0.8.1",
+      "version": "0.8.2",
       "bin": {
         "opencode-gateway": "./dist/cli.js",
       },
@@ -24,6 +24,7 @@
         "marked": "^18.0.2",
         "mime-types": "^3.0.2",
         "smol-toml": "^1.6.1",
+        "undici": "^8.1.0",
       },
       "devDependencies": {
         "@types/better-sqlite3": "^7.6.13",
@@ -250,6 +251,8 @@
     "tunnel-agent": ["tunnel-agent@0.6.0", "https://registry.npmmirror.com/tunnel-agent/-/tunnel-agent-0.6.0.tgz", { "dependencies": { "safe-buffer": "^5.0.1" } }, "sha512-McnNiV1l8RYeY8tBgEpuodCC1mLUdbSN+CYBL7kJsJNInOP8UjDDEwdk6Mw60vdLLrr5NHKZhMAOSrR2NZuQ+w=="],
 
     "typescript": ["typescript@6.0.3", "https://registry.npmmirror.com/typescript/-/typescript-6.0.3.tgz", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw=="],
+
+    "undici": ["undici@8.1.0", "https://registry.npmmirror.com/undici/-/undici-8.1.0.tgz", {}, "sha512-E9MkTS4xXLnRPYqxH2e6Hr2/49e7WFDKczKcCaFH4VaZs2iNvHMqeIkyUAD9vM8kujy9TjVrRlQ5KkdEJxB2pw=="],
 
     "undici-types": ["undici-types@7.19.2", "https://registry.npmmirror.com/undici-types/-/undici-types-7.19.2.tgz", {}, "sha512-qYVnV5OEm2AW8cJMCpdV20CDyaN3g0AjDlOGf1OW4iaDEx8MwdtChUp4zu4H0VP3nDRF/8RKWH+IPp9uW0YGZg=="],
 

@@ -9,6 +9,7 @@ import { GatewayTextDelivery } from "./delivery/text"
 import { ChannelFileSender } from "./host/file-sender"
 import { ConsoleLoggerHost } from "./host/logger"
 import { GatewayTransportHost } from "./host/transport"
+import { createGatewayFetch } from "./http/proxy"
 import { createInteractionClient } from "./interactions/client"
 import { GatewayInteractionRuntime } from "./interactions/runtime"
 import { GatewayMailboxRouter } from "./mailbox/router"
@@ -127,7 +128,12 @@ export async function createGatewayRuntime(
             const memory = new GatewayMemoryRuntime(config.memory, logger)
             const memoryPrompts = new GatewayMemoryPromptProvider(config.memory, logger)
             const systemPrompts = new GatewaySystemPromptBuilder(sessionContext, memoryPrompts)
-            const telegramClient = config.telegram.enabled ? new TelegramBotClient(config.telegram.botToken) : null
+            const telegramClient = config.telegram.enabled
+                ? new TelegramBotClient(
+                      config.telegram.botToken,
+                      await createGatewayFetch(config.httpProxy, process.env, logger),
+                  )
+                : null
             const telegramMediaStore =
                 config.telegram.enabled && telegramClient !== null
                     ? new TelegramInboundMediaStore(telegramClient, config.mediaRootPath)

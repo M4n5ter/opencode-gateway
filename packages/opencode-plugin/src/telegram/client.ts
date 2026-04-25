@@ -1,5 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises"
 
+import type { GatewayFetch } from "../http/proxy"
 import { formatError } from "../utils/error"
 import type {
     TelegramApiResponse,
@@ -29,7 +30,10 @@ export class TelegramApiError extends Error {
 }
 
 export class TelegramBotClient {
-    constructor(private readonly botToken: string) {}
+    constructor(
+        private readonly botToken: string,
+        private readonly gatewayFetch: GatewayFetch = fetch,
+    ) {}
 
     async getUpdates(offset: number | null, timeoutSeconds: number, signal?: AbortSignal): Promise<TelegramUpdate[]> {
         return this.call(
@@ -63,7 +67,7 @@ export class TelegramBotClient {
         let response: Response
 
         try {
-            response = await fetch(`https://api.telegram.org/file/bot${this.botToken}/${remotePath}`)
+            response = await this.gatewayFetch(`https://api.telegram.org/file/bot${this.botToken}/${remotePath}`)
         } catch (error) {
             throw new TelegramApiError(`Telegram file download failed: ${formatError(error)}`, true)
         }
@@ -212,7 +216,7 @@ export class TelegramBotClient {
         let response: Response
 
         try {
-            response = await fetch(`https://api.telegram.org/bot${this.botToken}/${method}`, {
+            response = await this.gatewayFetch(`https://api.telegram.org/bot${this.botToken}/${method}`, {
                 method: "POST",
                 headers: {
                     "content-type": "application/json",
@@ -242,7 +246,7 @@ export class TelegramBotClient {
         let response: Response
 
         try {
-            response = await fetch(`https://api.telegram.org/bot${this.botToken}/${method}`, {
+            response = await this.gatewayFetch(`https://api.telegram.org/bot${this.botToken}/${method}`, {
                 method: "POST",
                 body,
             })

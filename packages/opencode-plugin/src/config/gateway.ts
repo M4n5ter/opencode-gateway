@@ -14,6 +14,7 @@ type RawGatewayConfig = {
     gateway?: {
         state_db?: unknown
         log_level?: unknown
+        http_proxy?: unknown
         mailbox?: unknown
         inflight_messages?: unknown
         execution?: unknown
@@ -49,6 +50,10 @@ type RawInflightMessagesConfig = {
     default_policy?: unknown
 }
 
+type RawHttpProxyConfig = {
+    enabled?: unknown
+}
+
 export type GatewayMailboxRouteConfig = {
     channel: string
     target: string
@@ -75,6 +80,10 @@ export type GatewayInflightMessagesConfig = {
     defaultPolicy: GatewayInflightMessagesPolicy
 }
 
+export type GatewayHttpProxyConfig = {
+    enabled: boolean
+}
+
 export type GatewayConfig = {
     configPath: string
     stateDbPath: string
@@ -83,6 +92,7 @@ export type GatewayConfig = {
     logLevel: GatewayLogLevel
     hasLegacyGatewayTimezone: boolean
     legacyGatewayTimezone: string | null
+    httpProxy: GatewayHttpProxyConfig
     mailbox: GatewayMailboxConfig
     inflightMessages: GatewayInflightMessagesConfig
     execution: GatewayExecutionConfig
@@ -113,12 +123,21 @@ export async function loadGatewayConfig(env: EnvSource = process.env): Promise<G
         logLevel: parseGatewayLogLevel(rawConfig?.gateway?.log_level, "gateway.log_level"),
         hasLegacyGatewayTimezone: rawConfig?.gateway?.timezone !== undefined,
         legacyGatewayTimezone: readLegacyGatewayTimezone(rawConfig?.gateway?.timezone),
+        httpProxy: parseHttpProxyConfig(rawConfig?.gateway?.http_proxy),
         mailbox: parseMailboxConfig(rawConfig?.gateway?.mailbox),
         inflightMessages: parseInflightMessagesConfig(rawConfig?.gateway?.inflight_messages),
         execution: parseExecutionConfig(rawConfig?.gateway?.execution),
         memory: await parseMemoryConfig(rawConfig?.memory, workspaceDirPath),
         cron: parseCronConfig(rawConfig?.cron),
         telegram: parseTelegramConfig(rawConfig?.channels?.telegram, env),
+    }
+}
+
+function parseHttpProxyConfig(value: unknown): GatewayHttpProxyConfig {
+    const table = readHttpProxyTable(value)
+
+    return {
+        enabled: readBoolean(table.enabled, "gateway.http_proxy.enabled", true),
     }
 }
 
@@ -190,40 +209,32 @@ function resolveStateDbPath(stateDb: string | undefined, configPath: string, env
     return resolve(dirname(configPath), stateDb)
 }
 
+function readHttpProxyTable(value: unknown): RawHttpProxyConfig {
+    return readOptionalTable(value, "gateway.http_proxy")
+}
+
 function readMailboxTable(value: unknown): RawMailboxConfig {
-    if (value === undefined) {
-        return {}
-    }
-
-    if (value === null || typeof value !== "object" || Array.isArray(value)) {
-        throw new Error("gateway.mailbox must be a table when present")
-    }
-
-    return value as RawMailboxConfig
+    return readOptionalTable(value, "gateway.mailbox")
 }
 
 function readExecutionTable(value: unknown): RawExecutionConfig {
-    if (value === undefined) {
-        return {}
-    }
-
-    if (value === null || typeof value !== "object" || Array.isArray(value)) {
-        throw new Error("gateway.execution must be a table when present")
-    }
-
-    return value as RawExecutionConfig
+    return readOptionalTable(value, "gateway.execution")
 }
 
 function readInflightMessagesTable(value: unknown): RawInflightMessagesConfig {
+    return readOptionalTable(value, "gateway.inflight_messages")
+}
+
+function readOptionalTable<T>(value: unknown, field: string): T {
     if (value === undefined) {
-        return {}
+        return {} as T
     }
 
     if (value === null || typeof value !== "object" || Array.isArray(value)) {
-        throw new Error("gateway.inflight_messages must be a table when present")
+        throw new Error(`${field} must be a table when present`)
     }
 
-    return value as RawInflightMessagesConfig
+    return value as T
 }
 
 function readBoolean(value: unknown, field: string, fallback: boolean): boolean {

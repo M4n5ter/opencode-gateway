@@ -125,6 +125,12 @@ bunx opencode-gateway@latest serve --managed
 [gateway]
 state_db = "/home/you/.local/share/opencode-gateway/state.db"
 # log_level = "warn"
+#
+# Gateway-owned external HTTP requests use HTTP_PROXY, HTTPS_PROXY, and
+# NO_PROXY by default. Disable this if your environment proxy should not affect
+# Telegram polling, delivery, and file downloads.
+# [gateway.http_proxy]
+# enabled = true
 
 # Optional mailbox batching and route overrides.
 # [gateway.mailbox]
@@ -223,6 +229,13 @@ disabled, and `abort_settle_timeout_ms` defaults to 5 seconds.
   that run finishes
 - `interrupt` aborts the current run immediately and starts the held messages in
   the next run
+
+`[gateway.http_proxy]` is optional and defaults to `enabled = true`. When enabled,
+gateway-owned external HTTP requests read `http_proxy` / `HTTP_PROXY`,
+`https_proxy` / `HTTPS_PROXY`, and `no_proxy` / `NO_PROXY`. Proxy URLs should stay
+in environment variables rather than the gateway config so credentials are not
+persisted in TOML. Local OpenCode warm-up and control requests continue to connect
+directly to the loopback OpenCode server.
 
 Telegram UX defaults:
 

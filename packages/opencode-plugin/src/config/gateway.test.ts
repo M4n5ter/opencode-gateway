@@ -124,12 +124,51 @@ test("loadGatewayConfig defaults mailbox batching to off", async () => {
         expect(config.inflightMessages).toEqual({
             defaultPolicy: "ask",
         })
+        expect(config.httpProxy).toEqual({
+            enabled: true,
+        })
         expect(config.execution).toEqual({
             sessionWaitTimeoutMs: 30 * 60_000,
             promptProgressTimeoutMs: 30 * 60_000,
             hardTimeoutMs: null,
             abortSettleTimeoutMs: 5_000,
         })
+    } finally {
+        await rm(root, { recursive: true, force: true })
+    }
+})
+
+test("loadGatewayConfig parses HTTP proxy settings", async () => {
+    const root = await mkdtemp(join(tmpdir(), "opencode-gateway-config-"))
+    const configPath = join(root, "config.toml")
+
+    try {
+        await writeFile(configPath, ["[gateway.http_proxy]", "enabled = false"].join("\n"))
+
+        const config = await loadGatewayConfig({
+            OPENCODE_GATEWAY_CONFIG: configPath,
+        })
+
+        expect(config.httpProxy).toEqual({
+            enabled: false,
+        })
+    } finally {
+        await rm(root, { recursive: true, force: true })
+    }
+})
+
+test("loadGatewayConfig rejects invalid HTTP proxy settings", async () => {
+    const root = await mkdtemp(join(tmpdir(), "opencode-gateway-config-"))
+    const configPath = join(root, "config.toml")
+
+    try {
+        await writeFile(configPath, ["[gateway.http_proxy]", 'enabled = "yes"'].join("\n"))
+
+        await expect(
+            loadGatewayConfig({
+                OPENCODE_GATEWAY_CONFIG: configPath,
+            }),
+        ).rejects.toThrow("gateway.http_proxy.enabled must be a boolean when present")
     } finally {
         await rm(root, { recursive: true, force: true })
     }
