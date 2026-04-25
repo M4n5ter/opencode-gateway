@@ -1,6 +1,11 @@
 import { dirname, join } from "node:path"
 
-import { findNativeTarget, formatNativeTargetKey, optionalPlatformPackageName, type NativeTarget } from "./native-targets"
+import {
+    findNativeTarget,
+    formatNativeTargetKey,
+    type NativeTarget,
+    optionalPlatformPackageName,
+} from "./native-targets"
 
 export interface NativeLauncherResolution {
     target: NativeTarget

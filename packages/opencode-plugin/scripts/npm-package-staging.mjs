@@ -2,11 +2,7 @@ import { chmod, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 
-import {
-    NATIVE_TARGETS,
-    optionalPlatformPackageName,
-    platformPackageVersion,
-} from "./native-targets.mjs"
+import { NATIVE_TARGETS, optionalPlatformPackageName, platformPackageVersion } from "./native-targets.mjs"
 
 const scriptDir = dirname(fileURLToPath(import.meta.url))
 const packageRoot = dirname(scriptDir)

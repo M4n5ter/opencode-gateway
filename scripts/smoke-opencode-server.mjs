@@ -1,11 +1,14 @@
-import { access, mkdtemp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises"
+import { spawnSync } from "node:child_process"
+import { access, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { spawnSync } from "node:child_process"
-
+import {
+    hostNativeTarget,
+    NATIVE_TARGETS,
+    optionalPlatformPackageName,
+} from "../packages/opencode-plugin/scripts/native-targets.mjs"
 import { stageLocalSmokePackages } from "../packages/opencode-plugin/scripts/npm-package-staging.mjs"
-import { NATIVE_TARGETS, hostNativeTarget, optionalPlatformPackageName } from "../packages/opencode-plugin/scripts/native-targets.mjs"
 
 const EXPECTED_TOOL_IDS = [
     "agent_status",
@@ -79,12 +82,16 @@ try {
     await installFromTarball("bun", bunInstallRoot, mainTarball, staged.platformPackages)
     await verifyInstalledPlatformPackages(bunInstallRoot, { allowExtraPackages: true })
     console.log("[smoke:opencode] bun launcher init")
-    await runCommand([gatewayCliPath(bunInstallRoot), "init", "--managed"], {
-        ...baseEnv,
-        HOME: join(tempRoot, "bun-home"),
-        XDG_CONFIG_HOME: join(tempRoot, "bun-home", ".config"),
-        XDG_DATA_HOME: join(tempRoot, "bun-home", ".local", "share"),
-    }, bunInstallRoot)
+    await runCommand(
+        [gatewayCliPath(bunInstallRoot), "init", "--managed"],
+        {
+            ...baseEnv,
+            HOME: join(tempRoot, "bun-home"),
+            XDG_CONFIG_HOME: join(tempRoot, "bun-home", ".config"),
+            XDG_DATA_HOME: join(tempRoot, "bun-home", ".local", "share"),
+        },
+        bunInstallRoot,
+    )
 
     console.log("[smoke:opencode] npm launcher init")
     await runCommand([gatewayCliPath(installRoot), "init", "--managed"], baseEnv, installRoot)

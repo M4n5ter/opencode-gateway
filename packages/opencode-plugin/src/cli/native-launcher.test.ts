@@ -4,7 +4,9 @@ import { resolveNativeLauncher } from "./native-launcher"
 
 test("resolveNativeLauncher prefers the installed platform package", () => {
     const resolved = resolveNativeLauncher("/repo/packages/opencode-plugin", "linux", "x64", (packageName) =>
-        packageName === "opencode-gateway-linux-x64" ? "/tmp/node_modules/opencode-gateway-linux-x64/package.json" : null,
+        packageName === "opencode-gateway-linux-x64"
+            ? "/tmp/node_modules/opencode-gateway-linux-x64/package.json"
+            : null,
     )
 
     expect(resolved).toEqual({

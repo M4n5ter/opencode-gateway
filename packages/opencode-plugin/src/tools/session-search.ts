@@ -39,17 +39,10 @@ function formatSessionSearchResult(result: GatewaySessionSearchResult): string {
         return [...sections, "no session matches"].join("\n")
     }
 
-    return [
-        ...sections,
-        "",
-        ...result.hits.flatMap((hit, index) => formatSessionSearchHit(hit, index + 1)),
-    ].join("\n")
+    return [...sections, "", ...result.hits.flatMap((hit, index) => formatSessionSearchHit(hit, index + 1))].join("\n")
 }
 
-function formatSessionSearchHit(
-    hit: GatewaySessionSearchResult["hits"][number],
-    ordinal: number,
-): string[] {
+function formatSessionSearchHit(hit: GatewaySessionSearchResult["hits"][number], ordinal: number): string[] {
     return [
         `result[${ordinal}].session_id=${hit.sessionId}`,
         `result[${ordinal}].conversation_key=${hit.conversationKey}`,

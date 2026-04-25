@@ -40,7 +40,8 @@ async function copyFileIfMissing(sourcePath: string, targetPath: string): Promis
 
 async function resolveWorkspaceTemplateRootPath(): Promise<string> {
     workspaceTemplateRootPathPromise ??= (async () => {
-        const packageRoot = process.env.OPENCODE_GATEWAY_PACKAGE_ROOT ?? (await resolvePackageRoot(fileURLToPath(import.meta.url)))
+        const packageRoot =
+            process.env.OPENCODE_GATEWAY_PACKAGE_ROOT ?? (await resolvePackageRoot(fileURLToPath(import.meta.url)))
         const templateRootPath = join(packageRoot, "templates", "workspace")
 
         if (!(await pathExists(templateRootPath))) {

@@ -71,10 +71,7 @@ function formatSessionViewResult(result: GatewaySessionViewResult): string {
     ].join("\n")
 }
 
-function formatSessionViewMessage(
-    message: GatewaySessionViewResult["messages"][number],
-    ordinal: number,
-): string[] {
+function formatSessionViewMessage(message: GatewaySessionViewResult["messages"][number], ordinal: number): string[] {
     const lines = [
         `message[${ordinal}].message_id=${message.messageId}`,
         `message[${ordinal}].role=${message.role}`,
@@ -88,11 +85,7 @@ function formatSessionViewMessage(
         return [...lines, `message[${ordinal}].visible_parts=none_after_filters`, ""]
     }
 
-    return [
-        ...lines,
-        ...message.parts.flatMap((part, index) => formatSessionViewPart(part, ordinal, index + 1)),
-        "",
-    ]
+    return [...lines, ...message.parts.flatMap((part, index) => formatSessionViewPart(part, ordinal, index + 1)), ""]
 }
 
 function formatSessionViewPart(
@@ -109,11 +102,7 @@ function formatSessionViewPart(
         return lines
     }
 
-    return [
-        ...lines,
-        `message[${messageOrdinal}].part[${partOrdinal}].body:`,
-        codeFence("text", part.body),
-    ]
+    return [...lines, `message[${messageOrdinal}].part[${partOrdinal}].body:`, codeFence("text", part.body)]
 }
 
 function formatStringList(values: string[]): string {

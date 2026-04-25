@@ -1,4 +1,4 @@
-import { dirname } from "node:path"
+import { dirname, join } from "node:path"
 import { FileFinder } from "@ff-labs/fff-node"
 
 import type { BindingLoggerHost } from "../binding"
@@ -62,11 +62,12 @@ export class GatewayMemoryRuntime {
             }
 
             for (const match of grep.value.items) {
-                if (entry.kind === "file" && match.path !== entry.path) {
+                const matchPath = absolutePathForMatch(entry, match.relativePath)
+                if (entry.kind === "file" && matchPath !== entry.path) {
                     continue
                 }
 
-                const searchableFile = searchableFilesByPath.get(match.path)
+                const searchableFile = searchableFilesByPath.get(matchPath)
                 if (searchableFile === undefined) {
                     continue
                 }
@@ -171,6 +172,10 @@ function displayPathForMatch(entry: GatewayMemoryEntryConfig, relativePath: stri
 
     const normalizedRelativePath = relativePath.replaceAll("\\", "/")
     return normalizedRelativePath.length === 0 ? entry.displayPath : `${entry.displayPath}/${normalizedRelativePath}`
+}
+
+function absolutePathForMatch(entry: GatewayMemoryEntryConfig, relativePath: string): string {
+    return join(searchRootForEntry(entry), relativePath)
 }
 
 function splitLines(text: string): string[] {

@@ -1,7 +1,4 @@
-import type {
-    OpencodeSdkAdapter,
-    OpencodeSessionMessageRecord,
-} from "../opencode/adapter"
+import type { OpencodeSdkAdapter, OpencodeSessionMessageRecord } from "../opencode/adapter"
 import type { GatewaySessionCatalogRecord, SqliteStore } from "../store/sqlite"
 
 const DEFAULT_SEARCH_LIMIT = 10
@@ -160,7 +157,10 @@ type SearchField = {
 
 export class GatewaySessionSearchRuntime {
     constructor(
-        private readonly store: Pick<SqliteStore, "listGatewaySessions" | "hasGatewaySession" | "getConversationKeyForSession">,
+        private readonly store: Pick<
+            SqliteStore,
+            "listGatewaySessions" | "hasGatewaySession" | "getConversationKeyForSession"
+        >,
         private readonly opencode: Pick<OpencodeSdkAdapter, "listSessions" | "getSession" | "listSessionMessages">,
     ) {}
 
@@ -233,16 +233,17 @@ export class GatewaySessionSearchRuntime {
         )
         const requestedSessionId = normalizeOptionalSessionId(options.sessionId)
         const trackedCatalog =
-            requestedSessionId === null ? this.store.listGatewaySessions() : this.filterCatalogForSession(requestedSessionId)
-        const {
-            activeSessions: catalog,
-            skippedDeletedSessionIds,
-        } = await this.resolveSessionInventory(trackedCatalog)
+            requestedSessionId === null
+                ? this.store.listGatewaySessions()
+                : this.filterCatalogForSession(requestedSessionId)
+        const { activeSessions: catalog, skippedDeletedSessionIds } = await this.resolveSessionInventory(trackedCatalog)
         const hits: GatewaySessionSearchHit[] = []
         const maybeTruncatedSessionIds: string[] = []
 
         for (const session of catalog) {
-            const messages = sortSessionMessages(await this.opencode.listSessionMessages(session.sessionId, normalizedMessageLimit))
+            const messages = sortSessionMessages(
+                await this.opencode.listSessionMessages(session.sessionId, normalizedMessageLimit),
+            )
             if (messages.length >= normalizedMessageLimit) {
                 maybeTruncatedSessionIds.push(session.sessionId)
             }
@@ -444,7 +445,10 @@ function isIgnoredTextPart(part: UnknownRecord): boolean {
     return readBoolean(part, "ignored") === true
 }
 
-function renderToolViewPart(part: UnknownRecord, options: NormalizedGatewaySessionViewOptions): GatewaySessionViewPart[] {
+function renderToolViewPart(
+    part: UnknownRecord,
+    options: NormalizedGatewaySessionViewOptions,
+): GatewaySessionViewPart[] {
     const state = asRecord(part.state)
     const toolName = readString(part, "tool") ?? "unknown"
     const status = readString(state, "status") ?? "unknown"
@@ -890,11 +894,7 @@ function normalizePositiveInteger(
     return Math.min(value, max)
 }
 
-function normalizeNonNegativeInteger(
-    value: number | null | undefined,
-    fallback: number,
-    field: string,
-): number {
+function normalizeNonNegativeInteger(value: number | null | undefined, fallback: number, field: string): number {
     if (value === undefined || value === null) {
         return fallback
     }

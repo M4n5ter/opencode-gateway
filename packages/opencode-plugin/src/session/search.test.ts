@@ -1,10 +1,6 @@
 import { expect, test } from "bun:test"
 
-import type {
-    OpencodeSdkAdapter,
-    OpencodeSessionMessageRecord,
-    OpencodeSessionRecord,
-} from "../opencode/adapter"
+import type { OpencodeSdkAdapter, OpencodeSessionMessageRecord, OpencodeSessionRecord } from "../opencode/adapter"
 import { migrateGatewayDatabase } from "../store/migrations"
 import { SqliteStore } from "../store/sqlite"
 import { createMemoryDatabase } from "../test/sqlite"
@@ -189,10 +185,7 @@ test("GatewaySessionSearchRuntime lists gateway sessions with pagination and del
         const runtime = new GatewaySessionSearchRuntime(
             store,
             createMockOpencode(
-                [
-                    createSession("session-current", "Current", 1, 100),
-                    createSession("session-old", "Old", 2, 90),
-                ],
+                [createSession("session-current", "Current", 1, 100), createSession("session-old", "Old", 2, 90)],
                 {},
             ),
         )

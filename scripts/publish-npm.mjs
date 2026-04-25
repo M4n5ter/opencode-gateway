@@ -1,11 +1,10 @@
+import { spawnSync } from "node:child_process"
 import { mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { spawnSync } from "node:child_process"
-
-import { stageRegistryPackages } from "../packages/opencode-plugin/scripts/npm-package-staging.mjs"
 import { platformDistTag } from "../packages/opencode-plugin/scripts/native-targets.mjs"
+import { stageRegistryPackages } from "../packages/opencode-plugin/scripts/npm-package-staging.mjs"
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)))
 const packageRoot = join(repoRoot, "packages/opencode-plugin")
@@ -106,7 +105,9 @@ function publishArgs(tag, otp) {
 function verifyMainPackage(packResult) {
     const nativeFiles = packResult.files.filter((entry) => entry.path.startsWith("dist/native/"))
     if (nativeFiles.length > 0) {
-        throw new Error(`main package unexpectedly includes native payloads: ${nativeFiles.map((entry) => entry.path).join(", ")}`)
+        throw new Error(
+            `main package unexpectedly includes native payloads: ${nativeFiles.map((entry) => entry.path).join(", ")}`,
+        )
     }
 }
 

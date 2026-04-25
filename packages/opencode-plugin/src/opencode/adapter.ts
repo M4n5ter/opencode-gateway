@@ -174,7 +174,8 @@ export class OpencodeSdkAdapter {
         const normalizedLimit = normalizeOptionalLimit(limit, "limit")
         const messages = await this.client.session.messages({
             path: { id: sessionId },
-            query: normalizedLimit === null ? this.requestContext() : { ...this.requestContext(), limit: normalizedLimit },
+            query:
+                normalizedLimit === null ? this.requestContext() : { ...this.requestContext(), limit: normalizedLimit },
             responseStyle: "data",
             throwOnError: true,
             signal: AbortSignal.timeout(DEFAULT_SDK_REQUEST_TIMEOUT_MS),
@@ -757,9 +758,12 @@ function extractDataMessage(value: unknown): string | null {
 }
 
 function readOptionalNumber(
-    value: {
-        [key: string]: unknown
-    } | null | undefined,
+    value:
+        | {
+              [key: string]: unknown
+          }
+        | null
+        | undefined,
     field: string,
 ): number | null {
     if (value === null || value === undefined) {
